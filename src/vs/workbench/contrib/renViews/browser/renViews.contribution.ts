@@ -17,6 +17,7 @@ import { EditorGroupView } from '../../../browser/parts/editor/editorGroupView.j
 import { RenMainWindowOverlay } from './renMainWindowOverlay.js';
 import { registerAction2, Action2 } from '../../../../platform/actions/common/actions.js';
 import { Categories } from '../../../../platform/action/common/actionCommonCategories.js';
+import './styles/renViews.css';
 
 export class RenViewsContribution implements IWorkbenchContribution {
 	static readonly ID = 'ren.views.contribution';

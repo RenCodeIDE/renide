@@ -1,0 +1,123 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+/* Main overlay styles */
+.ren-overlay {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background-color: var(--vscode-editor-background);
+	color: var(--vscode-editor-foreground);
+	z-index: 1000;
+	display: none;
+	flex-direction: column;
+}
+
+.ren-content-area {
+	flex: 1;
+	padding: 20px;
+	overflow: auto;
+}
+
+/* Toolbar styles */
+.ren-toolbar {
+	display: flex;
+	padding: 4px 8px;
+	background-color: var(--vscode-panel-background);
+	border-radius: 4px;
+	gap: 4px;
+	margin-left: auto;
+}
+
+.ren-toolbar-fallback {
+	position: absolute;
+	top: 0;
+	right: 0;
+	display: flex;
+	padding: 8px;
+	background-color: var(--vscode-panel-background);
+	border-bottom: 1px solid var(--vscode-panel-border);
+	border-radius: 0 0 0 4px;
+	gap: 8px;
+	z-index: 10;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+	pointer-events: auto;
+}
+
+/* View button styles */
+.ren-view-button {
+	padding: 4px 8px;
+	background-color: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	border: 1px solid var(--vscode-button-border);
+	border-radius: 3px;
+	cursor: pointer;
+	font-size: 12px;
+	min-width: 50px;
+}
+
+.ren-view-button:hover {
+	background-color: var(--vscode-button-hoverBackground);
+}
+
+.ren-view-button.active {
+	background-color: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+}
+
+/* Preview view styles */
+.ren-preview-container {
+	text-align: center;
+	padding: 50px;
+}
+
+.ren-preview-title {
+	margin-bottom: 20px;
+	color: var(--vscode-editor-foreground);
+}
+
+.ren-preview-description {
+	color: var(--vscode-descriptionForeground);
+}
+
+/* Graph view styles */
+.ren-graph-container {
+	width: 100%;
+	height: 100%;
+}
+
+.ren-graph-title {
+	margin-bottom: 20px;
+	color: var(--vscode-editor-foreground);
+}
+
+.ren-grid-container {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr);
+	grid-template-rows: repeat(4, 1fr);
+	gap: 10px;
+	width: 100%;
+	height: calc(100% - 60px);
+	min-height: 300px;
+}
+
+.ren-grid-cell {
+	background-color: var(--vscode-panel-background);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 4px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 14px;
+	color: var(--vscode-panelTitle-activeForeground);
+	cursor: pointer;
+	transition: background-color 0.2s ease;
+}
+
+.ren-grid-cell:hover {
+	background-color: var(--vscode-list-hoverBackground);
+}
