@@ -45,6 +45,8 @@ module.exports.unicodeFilter = [
 	'!**/*.test.ts',
 	'!**/*.{d.ts,json,md}',
 	'!**/*.mp3',
+	'!bun.lockb',
+	'!*.lockb',
 
 	'!build/win32/**',
 	'!extensions/markdown-language-features/notebook-out/*.js',
@@ -113,6 +115,8 @@ module.exports.indentationFilter = [
 	// except multiple specific files
 	'!**/package.json',
 	'!**/package-lock.json',
+	'!bun.lockb',
+	'!*.lockb',
 
 	// except multiple specific folders
 	'!**/codicon/**',
@@ -172,6 +176,8 @@ module.exports.copyrightFilter = [
 	'!**/*.code-workspace',
 	'!**/*.js.map',
 	'!**/*.wasm',
+	'!bun.lockb',
+	'!*.lockb',
 	'!build/**/*.init',
 	'!build/linux/libcxx-fetcher.*',
 	'!resources/linux/snap/snapcraft.yaml',

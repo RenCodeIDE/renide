@@ -31,11 +31,23 @@ gulp.task(transpileClientTask);
 const compileClientTask = task.define('compile-client', task.series(util.rimraf('out'), compileApiProposalNamesTask, compileTask('src', 'out', false)));
 gulp.task(compileClientTask);
 
+// Ultra-fast compile for Bun - only essential files
+const compileClientBunTask = task.define('compile-client-bun', task.series(
+	util.rimraf('out'),
+	compileApiProposalNamesTask,
+	compileTask('src', 'out', true) // transpileOnly = true for faster compilation
+));
+gulp.task(compileClientBunTask);
+
 const watchClientTask = task.define('watch-client', task.series(util.rimraf('out'), task.parallel(watchTask('out', false), watchApiProposalNamesTask)));
 gulp.task(watchClientTask);
 
-// All
-const _compileTask = task.define('compile', task.parallel(monacoTypecheckTask, compileClientTask, compileExtensionsTask, compileExtensionMediaTask));
+// Ultra-fast watch for Bun - transpile only
+const watchClientBunTask = task.define('watch-client-bun', task.series(util.rimraf('out'), task.parallel(watchTask('out', true), watchApiProposalNamesTask)));
+gulp.task(watchClientBunTask);
+
+// All - optimized for macOS development (disabled heavy tasks)
+const _compileTask = task.define('compile', task.parallel(/* monacoTypecheckTask, */ compileClientTask, compileExtensionsTask, /* compileExtensionMediaTask */));
 gulp.task(_compileTask);
 
 gulp.task(task.define('watch', task.parallel(/* monacoTypecheckWatchTask, */ watchClientTask, watchExtensionsTask)));

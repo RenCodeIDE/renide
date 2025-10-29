@@ -18,8 +18,11 @@
     "preinstall": "node build/npm/preinstall.js",
     "postinstall": "node build/npm/postinstall.js",
     "compile": "node ./node_modules/gulp/bin/gulp.js compile",
+    "compile-macos": "bun run gulp compile-client-bun",
     "compile-check-ts-native": "tsgo --project ./src/tsconfig.json --noEmit --skipLibCheck",
     "watch": "npm-run-all -lp watch-client watch-extensions",
+    "watch-macos": "bun run gulp watch-client",
+    "dev-macos": "./scripts/dev-macos.sh",
     "watchd": "deemon npm run watch",
     "watch-webd": "deemon npm run watch-web",
     "kill-watchd": "deemon --kill npm run watch",
@@ -221,7 +224,8 @@
     "webpack-stream": "^7.0.0",
     "xml2js": "^0.5.0",
     "yaserver": "^0.4.0",
-    "zx": "^8.7.0"
+    "zx": "^8.7.0",
+    "@types/bun": "latest"
   },
   "overrides": {
     "node-gyp-build": "4.8.1",

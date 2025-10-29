@@ -39,3 +39,8 @@
 **/typings/**
 **/.build/**
 !.vscode
+# Binary files
+bun.lockb
+*.lockb
+package-lock.json
+yarn.lock
