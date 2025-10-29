@@ -105,6 +105,38 @@ type GettingStartedWalkthroughContent = BuiltinGettingStartedCategory[];
 type GettingStartedStartEntryContent = BuiltinGettingStartedStartEntry[];
 
 export const startEntries: GettingStartedStartEntryContent = [
+	// Custom colored slides for Ren IDE
+	{
+		id: 'ren.blackSlide',
+		title: localize('gettingStarted.blackSlide.title', "Black Theme"),
+		description: localize('gettingStarted.blackSlide.description', "Switch to black theme for coding"),
+		icon: Codicon.code,
+		content: {
+			type: 'startEntry',
+			command: 'command:workbench.action.selectTheme',
+		}
+	},
+	{
+		id: 'ren.blueSlide',
+		title: localize('gettingStarted.blueSlide.title', "Blue Theme"),
+		description: localize('gettingStarted.blueSlide.description', "Switch to blue theme for coding"),
+		icon: Codicon.code,
+		content: {
+			type: 'startEntry',
+			command: 'command:workbench.action.selectTheme',
+		}
+	},
+	{
+		id: 'ren.redSlide',
+		title: localize('gettingStarted.redSlide.title', "Red Theme"),
+		description: localize('gettingStarted.redSlide.description', "Switch to red theme for coding"),
+		icon: Codicon.code,
+		content: {
+			type: 'startEntry',
+			command: 'command:workbench.action.selectTheme',
+		}
+	},
+	// Original entries
 	{
 		id: 'welcome.showNewFileEntries',
 		title: localize('gettingStarted.newFile.title', "New File..."),

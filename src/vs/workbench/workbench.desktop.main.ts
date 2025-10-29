@@ -167,6 +167,9 @@ import './contrib/mergeEditor/electron-browser/mergeEditor.contribution.js';
 // Multi Diff Editor
 import './contrib/multiDiffEditor/browser/multiDiffEditor.contribution.js';
 
+// Ren Views
+import './contrib/renViews/browser/renViews.contribution.js';
+
 // Remote Tunnel
 import './contrib/remoteTunnel/electron-browser/remoteTunnel.contribution.js';
 
