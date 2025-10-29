@@ -71,15 +71,16 @@ export class RenMainWindowOverlay {
 			this._toolbarElement.style.cssText = `
 				position: absolute;
 				top: 0;
-				left: 0;
 				right: 0;
 				display: flex;
 				padding: 8px;
 				background-color: var(--vscode-panel-background);
 				border-bottom: 1px solid var(--vscode-panel-border);
+				border-radius: 0 0 0 4px;
 				gap: 8px;
-				z-index: 10001;
+				z-index: 10;
 				box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+				pointer-events: auto;
 			`;
 		} else {
 			// Insert toolbar into the editor group title area
@@ -183,6 +184,26 @@ export class RenMainWindowOverlay {
 	private showCodeView(): void {
 		// Hide overlay completely to show normal editor
 		this._overlayElement.style.display = 'none';
+
+		// Ensure toolbar doesn't interfere with editor operations
+		if (this._toolbarElement) {
+			this._toolbarElement.style.pointerEvents = 'auto';
+			this._toolbarElement.style.zIndex = '1'; // Lower z-index so it doesn't block editor
+
+			// Make sure toolbar is positioned to not block editor content
+			const toolbarRect = this._toolbarElement.getBoundingClientRect();
+			if (toolbarRect.width > 0) {
+				// Only position toolbar if it's visible and not in editor group title
+				const isInTitle = this._toolbarElement.parentElement?.classList.contains('editor-group-title');
+				if (!isInTitle) {
+					this._toolbarElement.style.position = 'absolute';
+					this._toolbarElement.style.top = '0';
+					this._toolbarElement.style.right = '0';
+					this._toolbarElement.style.left = 'auto';
+					this._toolbarElement.style.width = 'auto';
+				}
+			}
+		}
 	}
 
 	private showPreviewView(contentArea: HTMLElement): void {
