@@ -50,7 +50,7 @@ export class RenViewsContribution implements IWorkbenchContribution {
 					const scopedInstaService = instantiationService.createChild(new ServiceCollection());
 					const container = group.element;
 
-					const overlay = scopedInstaService.createInstance(RenMainWindowOverlay, container, group);
+					const overlay = scopedInstaService.createInstance(RenMainWindowOverlay, container);
 					overlayWidgets.set(group, combinedDisposable(overlay, scopedInstaService));
 				}
 			}

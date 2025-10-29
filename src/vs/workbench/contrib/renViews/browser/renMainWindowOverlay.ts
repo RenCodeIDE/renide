@@ -4,7 +4,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
-import { IEditorGroup } from '../../../services/editor/common/editorGroupsService.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IContextKeyService, IContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 
@@ -13,11 +12,11 @@ export type RenViewMode = 'code' | 'preview' | 'graph';
 export class RenMainWindowOverlay {
 	private readonly _store = new DisposableStore();
 	private readonly _overlayElement = document.createElement('div');
+	private readonly _toolbarElement = document.createElement('div');
 	private readonly _currentMode: IContextKey<RenViewMode>;
 
 	constructor(
 		private readonly container: HTMLElement,
-		group: IEditorGroup,
 		@ICommandService private readonly commandService: ICommandService,
 		@IContextKeyService private readonly contextKeyService: IContextKeyService
 	) {
@@ -28,6 +27,10 @@ export class RenMainWindowOverlay {
 	}
 
 	private setupOverlay(): void {
+		// Setup floating toolbar (always visible)
+		this.setupFloatingToolbar();
+
+		// Setup overlay for content (hidden in code view)
 		this._overlayElement.style.cssText = `
 			position: absolute;
 			top: 0;
@@ -42,26 +45,6 @@ export class RenMainWindowOverlay {
 			font-family: var(--vscode-editor-font-family);
 			font-size: var(--vscode-editor-font-size);
 		`;
-
-		// Add view switcher toolbar
-		const toolbar = document.createElement('div');
-		toolbar.style.cssText = `
-			display: flex;
-			padding: 10px;
-			background-color: var(--vscode-panel-background);
-			border-bottom: 1px solid var(--vscode-panel-border);
-			gap: 10px;
-		`;
-
-		const codeButton = this.createViewButton('Code View', 'code');
-		const previewButton = this.createViewButton('Preview View', 'preview');
-		const graphButton = this.createViewButton('Graph View', 'graph');
-
-		toolbar.appendChild(codeButton);
-		toolbar.appendChild(previewButton);
-		toolbar.appendChild(graphButton);
-
-		this._overlayElement.appendChild(toolbar);
 
 		// Add content area
 		const contentArea = document.createElement('div');
@@ -78,6 +61,34 @@ export class RenMainWindowOverlay {
 
 		// Initially show code view (normal editor)
 		this.showCodeView();
+	}
+
+	private setupFloatingToolbar(): void {
+		this._toolbarElement.style.cssText = `
+			position: fixed;
+			top: 10px;
+			right: 10px;
+			display: flex;
+			padding: 8px;
+			background-color: var(--vscode-panel-background);
+			border: 1px solid var(--vscode-panel-border);
+			border-radius: 6px;
+			gap: 8px;
+			z-index: 10000;
+			box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+		`;
+
+		const codeButton = this.createViewButton('Code View', 'code');
+		const previewButton = this.createViewButton('Preview View', 'preview');
+		const graphButton = this.createViewButton('Graph View', 'graph');
+
+		this._toolbarElement.appendChild(codeButton);
+		this._toolbarElement.appendChild(previewButton);
+		this._toolbarElement.appendChild(graphButton);
+
+		// Add to container so it's always visible
+		this.container.appendChild(this._toolbarElement);
+		this._store.add(toDisposable(() => this._toolbarElement.remove()));
 	}
 
 	private createViewButton(title: string, mode: RenViewMode): HTMLElement {
@@ -113,6 +124,9 @@ export class RenMainWindowOverlay {
 
 		const contentArea = this._overlayElement.querySelector('#ren-content-area') as HTMLElement;
 
+		// Update button states
+		this.updateButtonStates();
+
 		switch (mode) {
 			case 'code':
 				this.showCodeView();
@@ -126,13 +140,28 @@ export class RenMainWindowOverlay {
 		}
 	}
 
+	private updateButtonStates(): void {
+		const currentMode = this._currentMode.get();
+		const buttons = this._toolbarElement.querySelectorAll('button[data-mode]');
+
+		buttons.forEach(button => {
+			const htmlButton = button as HTMLElement;
+			const mode = htmlButton.getAttribute('data-mode') as RenViewMode;
+			if (mode === currentMode) {
+				// Active button
+				htmlButton.style.backgroundColor = 'var(--vscode-button-secondaryBackground)';
+				htmlButton.style.color = 'var(--vscode-button-secondaryForeground)';
+			} else {
+				// Inactive button
+				htmlButton.style.backgroundColor = 'var(--vscode-button-background)';
+				htmlButton.style.color = 'var(--vscode-button-foreground)';
+			}
+		});
+	}
+
 	private showCodeView(): void {
-		// Show overlay but hide content, keep toolbar visible
-		this._overlayElement.style.display = 'flex';
-		const contentArea = this._overlayElement.querySelector('#ren-content-area') as HTMLElement;
-		if (contentArea) {
-			contentArea.style.display = 'none';
-		}
+		// Hide overlay completely to show normal editor
+		this._overlayElement.style.display = 'none';
 	}
 
 	private showPreviewView(contentArea: HTMLElement): void {
