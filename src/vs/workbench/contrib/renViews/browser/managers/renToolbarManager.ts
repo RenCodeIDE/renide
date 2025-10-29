@@ -18,27 +18,23 @@ export class RenToolbarManager extends Disposable {
 	}
 
 	private setupToolbar(): void {
-		// Find the editor group's toolbar area
-		const toolbarArea = this.container.querySelector('.editor-group-container .editor-group-title') as HTMLElement;
+		// Always integrate with the editor group title area for proper VS Code integration
+		const toolbarArea = this.container.querySelector('.editor-group-container .title') as HTMLElement;
 
-		if (!toolbarArea) {
+		if (toolbarArea) {
+			// Insert toolbar into the editor group title area
+			this._toolbarElement.className = 'ren-toolbar-integrated';
+			toolbarArea.appendChild(this._toolbarElement);
+		} else {
 			// Fallback: create toolbar at top of container
 			this._toolbarElement.className = 'ren-toolbar-fallback';
-		} else {
-			// Insert toolbar into the editor group title area
-			this._toolbarElement.className = 'ren-toolbar';
-			toolbarArea.appendChild(this._toolbarElement);
+			this.container.appendChild(this._toolbarElement);
 		}
 
 		// Create view buttons
 		this.createViewButton('Code', 'code');
 		this.createViewButton('Preview', 'preview');
 		this.createViewButton('Graph', 'graph');
-
-		// If we couldn't find the toolbar area, add to container
-		if (!toolbarArea) {
-			this.container.appendChild(this._toolbarElement);
-		}
 
 		this._register(toDisposable(() => this._toolbarElement.remove()));
 	}
@@ -89,23 +85,19 @@ export class RenToolbarManager extends Disposable {
 	}
 
 	updateToolbarForCodeView(): void {
-		// Ensure toolbar doesn't interfere with editor operations
+		// Ensure toolbar is always visible and properly integrated
 		if (this._toolbarElement) {
 			this._toolbarElement.style.pointerEvents = 'auto';
-			this._toolbarElement.style.zIndex = '1'; // Lower z-index so it doesn't block editor
+			this._toolbarElement.style.display = 'flex'; // Always show the toolbar
 
-			// Make sure toolbar is positioned to not block editor content
-			const toolbarRect = this._toolbarElement.getBoundingClientRect();
-			if (toolbarRect.width > 0) {
-				// Only position toolbar if it's visible and not in editor group title
-				const isInTitle = this._toolbarElement.parentElement?.classList.contains('editor-group-title');
-				if (!isInTitle) {
-					this._toolbarElement.style.position = 'absolute';
-					this._toolbarElement.style.top = '0';
-					this._toolbarElement.style.right = '0';
-					this._toolbarElement.style.left = 'auto';
-					this._toolbarElement.style.width = 'auto';
-				}
+			// If toolbar is in fallback mode, position it properly
+			if (this._toolbarElement.classList.contains('ren-toolbar-fallback')) {
+				this._toolbarElement.style.position = 'absolute';
+				this._toolbarElement.style.top = '0';
+				this._toolbarElement.style.right = '0';
+				this._toolbarElement.style.left = 'auto';
+				this._toolbarElement.style.width = 'auto';
+				this._toolbarElement.style.zIndex = '10';
 			}
 		}
 	}

@@ -8,7 +8,7 @@ import { IWorkbenchContribution, IWorkbenchContributionsRegistry, Extensions as 
 import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
-import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+import { IInstantiationService, ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { ServiceCollection } from '../../../../platform/instantiation/common/serviceCollection.js';
 import { DisposableStore, DisposableMap, combinedDisposable } from '../../../../base/common/lifecycle.js';
 import { Event } from '../../../../base/common/event.js';
@@ -17,6 +17,13 @@ import { EditorGroupView } from '../../../browser/parts/editor/editorGroupView.j
 import { RenMainWindowOverlay } from './renMainWindowOverlay.js';
 import { registerAction2, Action2 } from '../../../../platform/actions/common/actions.js';
 import { Categories } from '../../../../platform/action/common/actionCommonCategories.js';
+import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { IViewsService } from '../../../services/views/common/viewsService.js';
+import { ChatViewId } from '../../chat/browser/chat.js';
+import { ChatViewPane } from '../../chat/browser/chatViewPane.js';
+import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor.js';
+import { Schemas } from '../../../../base/common/network.js';
+import { KeyMod, KeyCode } from '../../../../base/common/keyCodes.js';
 import './styles/renViews.css';
 
 export class RenViewsContribution implements IWorkbenchContribution {
@@ -111,5 +118,62 @@ registerAction2(class extends Action2 {
 	}
 	run() {
 		// Command will be handled by the overlay
+	}
+});
+
+// Register Cmd+L command to add selected text to chat or open chat
+registerAction2(class extends Action2 {
+	constructor() {
+		super({
+			id: 'ren.addSelectionToChat',
+			title: { value: localize('ren.addSelectionToChat', 'Add Selection to Chat'), original: 'Add Selection to Chat' },
+			category: Categories.View,
+			f1: true,
+			keybinding: {
+				primary: KeyMod.CtrlCmd | KeyCode.KeyL,
+				when: undefined,
+				weight: 100
+			}
+		});
+	}
+
+	async run(accessor: ServicesAccessor): Promise<void> {
+		const editorService = accessor.get(IEditorService);
+		const viewsService = accessor.get(IViewsService);
+
+		// Get the active editor
+		const activeEditor = editorService.activeTextEditorControl;
+		const activeUri = EditorResourceAccessor.getCanonicalUri(editorService.activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY });
+
+		// Open chat view
+		const chatViewPane = await viewsService.openView<ChatViewPane>(ChatViewId);
+		if (!chatViewPane) {
+			return;
+		}
+
+		// Get the chat widget
+		const chatWidget = chatViewPane.widget;
+		if (!chatWidget) {
+			return;
+		}
+
+		// Focus the chat input
+		chatWidget.focusInput();
+
+		// If there's an active editor with selected text, add it to chat
+		if (activeEditor && activeUri && [Schemas.file, Schemas.vscodeRemote, Schemas.untitled].includes(activeUri.scheme)) {
+			const selection = activeEditor.getSelection();
+			if (selection && !selection.isEmpty()) {
+				// Get the selected text
+				const model = activeEditor.getModel();
+				if (model) {
+					const selectedText = model.getValueInRange(selection);
+					if (selectedText) {
+						// Add the selected text to chat input
+						chatWidget.setInput(selectedText);
+					}
+				}
+			}
+		}
 	}
 });

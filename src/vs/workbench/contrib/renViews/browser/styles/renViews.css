@@ -24,6 +24,17 @@
 }
 
 /* Toolbar styles */
+.ren-toolbar-integrated {
+	display: flex;
+	padding: 4px 8px;
+	background-color: var(--vscode-panel-background);
+	border-radius: 4px;
+	gap: 4px;
+	margin-left: auto;
+	position: relative;
+	z-index: 1;
+}
+
 .ren-toolbar {
 	display: flex;
 	padding: 4px 8px;
@@ -46,6 +57,14 @@
 	z-index: 10;
 	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 	pointer-events: auto;
+}
+
+/* Ensure toolbar is always visible */
+.ren-toolbar-integrated,
+.ren-toolbar,
+.ren-toolbar-fallback {
+	display: flex !important;
+	visibility: visible !important;
 }
 
 /* View button styles */
@@ -90,6 +109,44 @@
 	height: 100%;
 }
 
+/* Integration with VS Code editor title area */
+.monaco-workbench
+	.part.editor
+	> .content
+	.editor-group-container
+	> .title
+	.ren-toolbar-integrated {
+	/* Ensure proper integration with editor title */
+	margin-left: auto;
+	margin-right: 8px;
+	align-self: center;
+}
+
+/* Ensure toolbar doesn't interfere with editor actions */
+.monaco-workbench
+	.part.editor
+	> .content
+	.editor-group-container
+	> .title
+	.ren-toolbar-integrated {
+	order: 1; /* Place after other title elements */
+}
+
+/* Responsive behavior */
+@media (max-width: 600px) {
+	.ren-toolbar-integrated,
+	.ren-toolbar-fallback {
+		flex-wrap: wrap;
+		gap: 2px;
+	}
+
+	.ren-view-button {
+		min-width: 40px;
+		font-size: 11px;
+		padding: 2px 6px;
+	}
+}
+
 .ren-graph-title {
 	margin-bottom: 20px;
 	color: var(--vscode-editor-foreground);
@@ -120,4 +177,132 @@
 
 .ren-grid-cell:hover {
 	background-color: var(--vscode-list-hoverBackground);
+}
+
+/* React Project Detection Styles */
+.ren-react-info {
+	background-color: var(--vscode-panel-background);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 8px;
+	padding: 20px;
+	margin: 20px 0;
+	text-align: left;
+	max-width: 600px;
+	margin-left: auto;
+	margin-right: auto;
+}
+
+.ren-react-status {
+	font-size: 16px;
+	font-weight: 600;
+	color: var(--vscode-terminal-ansiGreen);
+	margin-bottom: 10px;
+}
+
+.ren-package-manager {
+	font-size: 14px;
+	color: var(--vscode-descriptionForeground);
+	margin-bottom: 20px;
+}
+
+.ren-scripts-info {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	align-items: stretch;
+}
+
+.ren-run-button,
+.ren-build-button,
+.ren-preview-button {
+	padding: 12px 20px;
+	border: none;
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 14px;
+	font-weight: 500;
+	transition: all 0.2s ease;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+}
+
+.ren-run-button {
+	background-color: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+}
+
+.ren-run-button:hover {
+	background-color: var(--vscode-button-hoverBackground);
+	transform: translateY(-1px);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.ren-build-button {
+	background-color: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+}
+
+.ren-build-button:hover {
+	background-color: var(--vscode-button-secondaryHoverBackground);
+	transform: translateY(-1px);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.ren-preview-button {
+	background-color: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+	border: 1px solid var(--vscode-button-border);
+}
+
+.ren-preview-button:hover {
+	background-color: var(--vscode-button-secondaryHoverBackground);
+	transform: translateY(-1px);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.ren-not-react {
+	background-color: var(--vscode-panel-background);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 8px;
+	padding: 20px;
+	margin: 20px 0;
+	text-align: left;
+	max-width: 600px;
+	margin-left: auto;
+	margin-right: auto;
+}
+
+.ren-not-react-status {
+	font-size: 16px;
+	font-weight: 600;
+	color: var(--vscode-terminal-ansiRed);
+	margin-bottom: 10px;
+}
+
+.ren-help-text {
+	font-size: 14px;
+	color: var(--vscode-descriptionForeground);
+	line-height: 1.5;
+}
+
+/* Responsive adjustments for React project UI */
+@media (max-width: 600px) {
+	.ren-react-info,
+	.ren-not-react {
+		margin: 10px;
+		padding: 15px;
+	}
+
+	.ren-scripts-info {
+		gap: 8px;
+	}
+
+	.ren-run-button,
+	.ren-build-button,
+	.ren-preview-button {
+		padding: 10px 16px;
+		font-size: 13px;
+	}
 }

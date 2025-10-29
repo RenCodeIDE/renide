@@ -8,6 +8,7 @@ import { ICommandService } from '../../../../platform/commands/common/commands.j
 import { IContextKeyService, IContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { RenViewManager, RenViewMode } from './managers/renViewManager.js';
 import { RenToolbarManager } from './managers/renToolbarManager.js';
+import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import './styles/renViews.css';
 
 export class RenMainWindowOverlay {
@@ -20,13 +21,14 @@ export class RenMainWindowOverlay {
 	constructor(
 		private readonly container: HTMLElement,
 		@ICommandService private readonly commandService: ICommandService,
-		@IContextKeyService private readonly contextKeyService: IContextKeyService
+		@IContextKeyService private readonly contextKeyService: IContextKeyService,
+		@IInstantiationService private readonly instantiationService: IInstantiationService
 	) {
 		// tracks the current mode we are in
 		this._currentMode = this.contextKeyService.createKey('ren.currentViewMode', 'code');
 
 		// Initialize managers
-		this._viewManager = new RenViewManager();
+		this._viewManager = this.instantiationService.createInstance(RenViewManager);
 		this._toolbarManager = new RenToolbarManager(container);
 		this._store.add(this._viewManager);
 		this._store.add(this._toolbarManager);
@@ -82,12 +84,15 @@ export class RenMainWindowOverlay {
 	private showCodeView(): void {
 		// Hide overlay completely to show normal editor
 		this._overlayElement.style.display = 'none';
+		// Ensure toolbar is always visible even in code view
 		this._toolbarManager.updateToolbarForCodeView();
 	}
 
 	private showOverlayView(): void {
 		// Show overlay for preview and graph views
 		this._overlayElement.style.display = 'flex';
+		// Ensure toolbar remains visible in overlay views
+		this._toolbarManager.updateToolbarForCodeView();
 	}
 
 	private setupCommands(): void {

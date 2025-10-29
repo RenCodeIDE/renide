@@ -8,6 +8,7 @@ import { IRenView } from '../views/renView.interface.js';
 import { CodeView } from '../views/codeView.js';
 import { PreviewView } from '../views/previewView.js';
 import { GraphView } from '../views/graphView.js';
+import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
 
 export type RenViewMode = 'code' | 'preview' | 'graph';
 
@@ -16,14 +17,16 @@ export class RenViewManager extends Disposable {
 	private _currentView: RenViewMode = 'code';
 	private _contentArea: HTMLElement | null = null;
 
-	constructor() {
+	constructor(
+		@IInstantiationService private readonly instantiationService: IInstantiationService
+	) {
 		super();
 		this.initializeViews();
 	}
 
 	private initializeViews(): void {
 		this._views.set('code', this._register(new CodeView()));
-		this._views.set('preview', this._register(new PreviewView()));
+		this._views.set('preview', this._register(this.instantiationService.createInstance(PreviewView)));
 		this._views.set('graph', this._register(new GraphView()));
 	}
 
