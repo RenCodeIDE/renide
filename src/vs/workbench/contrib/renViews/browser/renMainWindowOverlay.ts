@@ -127,41 +127,72 @@ export class RenMainWindowOverlay {
 	}
 
 	private showCodeView(): void {
-		// Hide overlay to show normal editor
-		this._overlayElement.style.display = 'none';
+		// Show overlay but hide content, keep toolbar visible
+		this._overlayElement.style.display = 'flex';
+		const contentArea = this._overlayElement.querySelector('#ren-content-area') as HTMLElement;
+		if (contentArea) {
+			contentArea.style.display = 'none';
+		}
 	}
 
 	private showPreviewView(contentArea: HTMLElement): void {
 		this._overlayElement.style.display = 'flex';
+		contentArea.style.display = 'block';
 
-		contentArea.innerHTML = `
-			<div style="text-align: center; padding: 50px;">
-				<h2 style="margin-bottom: 20px; color: var(--vscode-editor-foreground);">Preview View</h2>
-				<p style="color: var(--vscode-descriptionForeground);">This preview view is currently empty. You can add content here later.</p>
-			</div>
-		`;
+		// Clear existing content safely
+		contentArea.textContent = '';
+
+		// Create elements instead of using innerHTML
+		const container = document.createElement('div');
+		container.style.cssText = 'text-align: center; padding: 50px;';
+
+		const title = document.createElement('h2');
+		title.textContent = 'Preview View';
+		title.style.cssText = 'margin-bottom: 20px; color: var(--vscode-editor-foreground);';
+
+		const description = document.createElement('p');
+		description.textContent = 'This preview view is currently empty. You can add content here later.';
+		description.style.cssText = 'color: var(--vscode-descriptionForeground);';
+
+		container.appendChild(title);
+		container.appendChild(description);
+		contentArea.appendChild(container);
 	}
 
 	private showGraphView(contentArea: HTMLElement): void {
 		this._overlayElement.style.display = 'flex';
+		contentArea.style.display = 'block';
 
-		contentArea.innerHTML = `
-			<div style="width: 100%; height: 100%;">
-				<h2 style="margin-bottom: 20px; color: var(--vscode-editor-foreground);">Graph View</h2>
-				<div id="ren-grid-container" style="
-					display: grid;
-					grid-template-columns: repeat(4, 1fr);
-					grid-template-rows: repeat(4, 1fr);
-					gap: 10px;
-					width: 100%;
-					height: calc(100% - 60px);
-					min-height: 300px;
-				"></div>
-			</div>
+		// Clear existing content safely
+		contentArea.textContent = '';
+
+		// Create main container
+		const mainContainer = document.createElement('div');
+		mainContainer.style.cssText = 'width: 100%; height: 100%;';
+
+		// Create title
+		const title = document.createElement('h2');
+		title.textContent = 'Graph View';
+		title.style.cssText = 'margin-bottom: 20px; color: var(--vscode-editor-foreground);';
+
+		// Create grid container
+		const gridContainer = document.createElement('div');
+		gridContainer.id = 'ren-grid-container';
+		gridContainer.style.cssText = `
+			display: grid;
+			grid-template-columns: repeat(4, 1fr);
+			grid-template-rows: repeat(4, 1fr);
+			gap: 10px;
+			width: 100%;
+			height: calc(100% - 60px);
+			min-height: 300px;
 		`;
 
+		mainContainer.appendChild(title);
+		mainContainer.appendChild(gridContainer);
+		contentArea.appendChild(mainContainer);
+
 		// Create grid cells
-		const gridContainer = contentArea.querySelector('#ren-grid-container') as HTMLElement;
 		for (let i = 0; i < 16; i++) {
 			const cell = document.createElement('div');
 			cell.style.cssText = `
