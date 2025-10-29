@@ -127,8 +127,9 @@ export class PreviewView extends Disposable implements IRenView {
 			const packageJson = JSON.parse(packageJsonContent.value.toString());
 
 			// Check for React dependencies
-			const dependencies = { ...packageJson.dependencies, ...packageJson.devDependencies };
-			const hasReact = dependencies.react || dependencies['react-dom'];
+			const dependencies = packageJson.dependencies || {};
+			const devDependencies = packageJson.devDependencies || {};
+			const hasReact = dependencies.react || dependencies['react-dom'] || devDependencies.react || devDependencies['react-dom'];
 
 			if (!hasReact) {
 				return { isReactProject: false, packageManager: 'unknown' };
@@ -137,11 +138,24 @@ export class PreviewView extends Disposable implements IRenView {
 			// Detect package manager
 			const packageManager = await this.detectPackageManager(rootFolder);
 
-			// Extract scripts
+			// Check if React is in devDependencies (prefer dev scripts)
+			const isReactInDevDeps = devDependencies.react || devDependencies['react-dom'];
+
+			// Extract scripts based on dependency type
 			const scripts = packageJson.scripts || {};
-			const devScript = scripts.dev || scripts.start;
-			const startScript = scripts.start;
-			const buildScript = scripts.build;
+			let devScript, startScript, buildScript;
+
+			if (isReactInDevDeps) {
+				// If React is in devDependencies, prefer dev scripts
+				devScript = scripts.dev || scripts.start;
+				startScript = scripts.start;
+				buildScript = scripts.build;
+			} else {
+				// If React is in regular dependencies, use start scripts
+				devScript = scripts.start || scripts.dev;
+				startScript = scripts.start;
+				buildScript = scripts.build;
+			}
 
 			return {
 				isReactProject: true,
