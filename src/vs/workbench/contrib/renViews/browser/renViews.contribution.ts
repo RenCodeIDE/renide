@@ -24,7 +24,6 @@ import { ChatViewPane } from '../../chat/browser/chatViewPane.js';
 import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { KeyMod, KeyCode } from '../../../../base/common/keyCodes.js';
-import { ITextModel } from '../../../../editor/common/model.js';
 import './styles/renViews.css';
 
 export class RenViewsContribution implements IWorkbenchContribution {
