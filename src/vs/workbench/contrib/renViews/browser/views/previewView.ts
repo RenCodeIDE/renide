@@ -13,9 +13,11 @@ import { URI } from '../../../../../base/common/uri.js';
 interface ReactProjectInfo {
 	isReactProject: boolean;
 	packageManager: string;
-	devScript?: string;
-	startScript?: string;
-	buildScript?: string;
+	devScriptPresent: boolean;
+	startScriptPresent: boolean;
+	buildScriptPresent: boolean;
+	devCommandRaw?: string; // the actual command string for dev (e.g., "vite", "next dev")
+	preferredPort?: number; // inferred dev server port
 	packageJsonPath?: string;
 }
 
@@ -60,7 +62,13 @@ export class PreviewView extends Disposable implements IRenView {
 			const scriptsInfo = document.createElement('div');
 			scriptsInfo.className = 'ren-scripts-info';
 
-			if (reactInfo.devScript || reactInfo.startScript) {
+			// Show detected preview URL
+			const previewUrl = `http://localhost:${reactInfo.preferredPort ?? 3000}`;
+			const urlText = document.createElement('p');
+			urlText.className = 'ren-help-text';
+			urlText.textContent = `Preview URL: ${previewUrl}`;
+
+			if (reactInfo.devScriptPresent || reactInfo.startScriptPresent) {
 				const runButton = document.createElement('button');
 				runButton.textContent = '> Run Development Server';
 				runButton.className = 'ren-run-button';
@@ -69,7 +77,7 @@ export class PreviewView extends Disposable implements IRenView {
 				scriptsInfo.appendChild(runButton);
 			}
 
-			if (reactInfo.buildScript) {
+			if (reactInfo.buildScriptPresent) {
 				const buildButton = document.createElement('button');
 				buildButton.textContent = 'Build Project';
 				buildButton.className = 'ren-build-button';
@@ -81,9 +89,10 @@ export class PreviewView extends Disposable implements IRenView {
 			const previewButton = document.createElement('button');
 			previewButton.textContent = 'Open Browser Preview';
 			previewButton.className = 'ren-preview-button';
-			previewButton.onclick = () => this.openBrowserPreview();
+			previewButton.onclick = () => this.openBrowserPreview(reactInfo);
 
 			scriptsInfo.appendChild(previewButton);
+			scriptsInfo.appendChild(urlText);
 
 			reactInfoDiv.appendChild(statusText);
 			reactInfoDiv.appendChild(packageManagerText);
@@ -116,7 +125,13 @@ export class PreviewView extends Disposable implements IRenView {
 	private async detectReactProject(): Promise<ReactProjectInfo> {
 		const workspaceFolders = this.workspaceService.getWorkspace().folders;
 		if (workspaceFolders.length === 0) {
-			return { isReactProject: false, packageManager: 'unknown' };
+			return {
+				isReactProject: false,
+				packageManager: 'unknown',
+				devScriptPresent: false,
+				startScriptPresent: false,
+				buildScriptPresent: false
+			};
 		}
 
 		const rootFolder = workspaceFolders[0].uri;
@@ -132,41 +147,44 @@ export class PreviewView extends Disposable implements IRenView {
 			const hasReact = dependencies.react || dependencies['react-dom'] || devDependencies.react || devDependencies['react-dom'];
 
 			if (!hasReact) {
-				return { isReactProject: false, packageManager: 'unknown' };
+				return {
+					isReactProject: false,
+					packageManager: 'unknown',
+					devScriptPresent: false,
+					startScriptPresent: false,
+					buildScriptPresent: false
+				};
 			}
 
 			// Detect package manager
 			const packageManager = await this.detectPackageManager(rootFolder);
 
-			// Check if React is in devDependencies (prefer dev scripts)
-			const isReactInDevDeps = devDependencies.react || devDependencies['react-dom'];
-
-			// Extract scripts based on dependency type
-			const scripts = packageJson.scripts || {};
-			let devScript, startScript, buildScript;
-
-			if (isReactInDevDeps) {
-				// If React is in devDependencies, prefer dev scripts
-				devScript = scripts.dev || scripts.start;
-				startScript = scripts.start;
-				buildScript = scripts.build;
-			} else {
-				// If React is in regular dependencies, use start scripts
-				devScript = scripts.start || scripts.dev;
-				startScript = scripts.start;
-				buildScript = scripts.build;
-			}
+			// Extract scripts and infer dev server details
+			const scriptsAny = packageJson.scripts ?? {};
+			const devScriptPresent = typeof scriptsAny.dev === 'string';
+			const startScriptPresent = typeof scriptsAny.start === 'string';
+			const buildScriptPresent = typeof scriptsAny.build === 'string';
+			const devCommandRaw = typeof scriptsAny.dev === 'string' ? scriptsAny.dev : undefined;
+			const preferredPort = this.inferDevServerPort(devCommandRaw);
 
 			return {
 				isReactProject: true,
 				packageManager,
-				devScript,
-				startScript,
-				buildScript,
+				devScriptPresent,
+				startScriptPresent,
+				buildScriptPresent,
+				devCommandRaw,
+				preferredPort,
 				packageJsonPath: packageJsonUri.fsPath
 			};
 		} catch (error) {
-			return { isReactProject: false, packageManager: 'unknown' };
+			return {
+				isReactProject: false,
+				packageManager: 'unknown',
+				devScriptPresent: false,
+				startScriptPresent: false,
+				buildScriptPresent: false
+			};
 		}
 	}
 
@@ -202,51 +220,111 @@ export class PreviewView extends Disposable implements IRenView {
 	}
 
 	private async runDevelopmentServer(reactInfo: ReactProjectInfo): Promise<void> {
-		const scriptToRun = reactInfo.devScript || reactInfo.startScript;
-		if (!scriptToRun) {
+		const scriptName = reactInfo.devScriptPresent ? 'dev' : (reactInfo.startScriptPresent ? 'start' : undefined);
+		if (!scriptName) {
 			return;
 		}
 
-		const command = `${reactInfo.packageManager} run ${scriptToRun}`;
+		const command = `${reactInfo.packageManager} run ${scriptName}`;
+		const folders = this.workspaceService.getWorkspace().folders;
+		const cwd = folders.length > 0 ? folders[0].uri.fsPath : undefined;
 
-		// Execute the command in terminal
 		try {
 			await this.commandService.executeCommand('workbench.action.terminal.new');
+			if (cwd) {
+				await this.commandService.executeCommand('workbench.action.terminal.sendSequence', { text: `cd "${cwd}"\r` });
+			}
 			await this.commandService.executeCommand('workbench.action.terminal.sendSequence', { text: command + '\r' });
+
+			// Open the preview immediately; avoid CSP-blocked polling from workbench context
+			this.openBrowserPreview(reactInfo);
 		} catch (error) {
 			console.error('Failed to run development server:', error);
 		}
 	}
 
 	private async runBuildScript(reactInfo: ReactProjectInfo): Promise<void> {
-		if (!reactInfo.buildScript) {
+		if (!reactInfo.buildScriptPresent) {
 			return;
 		}
 
-		const command = `${reactInfo.packageManager} run ${reactInfo.buildScript}`;
+		const command = `${reactInfo.packageManager} run build`;
+		const folders = this.workspaceService.getWorkspace().folders;
+		const cwd = folders.length > 0 ? folders[0].uri.fsPath : undefined;
 
 		try {
 			await this.commandService.executeCommand('workbench.action.terminal.new');
+			if (cwd) {
+				await this.commandService.executeCommand('workbench.action.terminal.sendSequence', { text: `cd "${cwd}"\r` });
+			}
 			await this.commandService.executeCommand('workbench.action.terminal.sendSequence', { text: command + '\r' });
 		} catch (error) {
 			console.error('Failed to run build script:', error);
 		}
 	}
 
-	private async openBrowserPreview(): Promise<void> {
-		// Create a webview panel for browser preview
+	private async openBrowserPreview(reactInfo: ReactProjectInfo): Promise<void> {
+		const port = reactInfo.preferredPort ?? 3000;
+		const url = `http://localhost:${port}`;
 		try {
-			// Use the simple browser extension's command
-			await this.commandService.executeCommand('simpleBrowser.show', 'http://localhost:3000');
-		} catch (error) {
-			// Fallback: try to open external browser
+			// Try to focus an existing right group (split). If none exists, this is a no-op.
+			await this.commandService.executeCommand('workbench.action.focusSecondEditorGroup');
+			// Open Simple Browser in the second column if available
+			await this.commandService.executeCommand('simpleBrowser.show', url, { viewColumn: 2, preserveFocus: false });
+			return;
+		} catch {
+			// If focusing the group or opening failed, try creating a right split and open again
 			try {
-				await this.commandService.executeCommand('vscode.open', URI.parse('http://localhost:3000'));
-			} catch (fallbackError) {
-				console.error('Failed to open browser preview:', error, fallbackError);
+				await this.commandService.executeCommand('workbench.action.newGroupRight');
+				await this.commandService.executeCommand('simpleBrowser.show', url, { viewColumn: 2, preserveFocus: false });
+				return;
+			} catch {
+				// continue to fallbacks below
 			}
 		}
+		try {
+			await this.commandService.executeCommand('workbench.action.openExternal', url);
+			return;
+		} catch {
+			// continue to next fallback
+		}
+		try {
+			await this.commandService.executeCommand('vscode.open', URI.parse(url));
+		} catch (finalError) {
+			console.error('Failed to open browser preview:', finalError);
+		}
 	}
+
+	private inferDevServerPort(devCommandRaw: string | undefined): number | undefined {
+		if (!devCommandRaw) {
+			return undefined;
+		}
+		const cmd = devCommandRaw.toLowerCase();
+		if (cmd.includes('vite')) {
+			return 5173;
+		}
+		if (cmd.includes('next')) {
+			return 3000;
+		}
+		if (cmd.includes('react-scripts')) {
+			return 3000;
+		}
+		if (cmd.includes('webpack-dev-server')) {
+			return 8080;
+		}
+		if (cmd.includes('astro')) {
+			return 4321;
+		}
+		if (cmd.includes('svelte')) {
+			return 5173;
+		}
+		if (cmd.includes('vue-cli-service')) {
+			return 8080;
+		}
+		return undefined;
+	}
+
+	// Note: Avoid polling localhost from workbench due to CSP; simpleBrowser handles loading state
 
 	hide(): void {
 		if (this._container) {

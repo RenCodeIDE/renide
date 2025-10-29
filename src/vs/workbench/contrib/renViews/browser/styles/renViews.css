@@ -287,6 +287,73 @@
 	line-height: 1.5;
 }
 
+/* .env overlay */
+.ren-env-overlay {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background: var(--vscode-editor-background);
+	border-top: 1px solid var(--vscode-panel-border);
+	padding: 12px;
+	z-index: 1; /* keep below title/tabs */
+	overflow: auto;
+}
+.ren-env-overlay-header {
+	font-weight: 600;
+	margin-bottom: 8px;
+}
+.ren-env-overlay-table {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+.ren-env-overlay-row {
+	display: grid;
+	grid-template-columns: 1fr 2fr;
+	gap: 8px;
+	align-items: center;
+	padding: 6px 8px;
+	border-radius: 4px;
+	background: var(--vscode-editorWidget-background);
+}
+.ren-env-overlay-head {
+	background: var(--vscode-sideBar-background);
+	border: 1px solid var(--vscode-panel-border);
+}
+.ren-env-overlay-cell {
+	font-size: 12px;
+	color: var(--vscode-editor-foreground);
+	word-break: break-word;
+}
+.ren-env-overlay-key {
+	font-weight: 600;
+}
+
+.ren-env-overlay-actions {
+	margin-top: 10px;
+}
+.ren-env-overlay-addbtn {
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	border: none;
+	border-radius: 4px;
+	padding: 6px 10px;
+	cursor: pointer;
+}
+.ren-env-overlay-addbtn:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+.ren-env-overlay-input {
+	width: 100%;
+	background: var(--vscode-input-background);
+	color: var(--vscode-input-foreground);
+	border: 1px solid var(--vscode-input-border);
+	border-radius: 4px;
+	padding: 6px 8px;
+}
+
 /* Responsive adjustments for React project UI */
 @media (max-width: 600px) {
 	.ren-react-info,

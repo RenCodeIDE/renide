@@ -25,6 +25,7 @@ import { EditorResourceAccessor, SideBySideEditor } from '../../../common/editor
 import { Schemas } from '../../../../base/common/network.js';
 import { KeyMod, KeyCode } from '../../../../base/common/keyCodes.js';
 import './styles/renViews.css';
+import { EnvOverlay } from './envOverlay.js';
 
 export class RenViewsContribution implements IWorkbenchContribution {
 	static readonly ID = 'ren.views.contribution';
@@ -59,7 +60,11 @@ export class RenViewsContribution implements IWorkbenchContribution {
 					const container = group.element;
 
 					const overlay = scopedInstaService.createInstance(RenMainWindowOverlay, container);
-					overlayWidgets.set(group, combinedDisposable(overlay, scopedInstaService));
+					// Try to scope the .env overlay to the editor content, not the whole group
+					const editorContent = container.querySelector('.editor-container') as HTMLElement | null;
+					const getGroupResource = () => EditorResourceAccessor.getOriginalUri(group.activeEditor, { supportSideBySide: SideBySideEditor.PRIMARY });
+					const envOverlay = scopedInstaService.createInstance(EnvOverlay, editorContent ?? container, getGroupResource);
+					overlayWidgets.set(group, combinedDisposable(overlay, envOverlay, scopedInstaService));
 				}
 			}
 
