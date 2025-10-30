@@ -291,7 +291,10 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 						source: edge.source,
 						target: edge.target,
 						label: edge.label,
-						specifier: edge.specifier
+						specifier: edge.specifier,
+						sourcePath: edge.sourcePath,
+						targetPath: edge.targetPath,
+						symbols: edge.symbols
 					},
 					classes: edge.kind
 				}));

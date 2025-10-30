@@ -18,13 +18,17 @@ import { IWorkspaceContextService } from '../../../../../../platform/workspace/c
 import { IUriIdentityService } from '../../../../../../platform/uriIdentity/common/uriIdentity.js';
 import { IQuickInputService, IQuickPickItem } from '../../../../../../platform/quickinput/common/quickInput.js';
 import { ISearchService } from '../../../../../services/search/common/search.js';
+import { IEditorService, SIDE_GROUP } from '../../../../../services/editor/common/editorService.js';
+import { IResourceEditorInput, ITextEditorOptions, TextEditorSelectionRevealType } from '../../../../../../platform/editor/common/editor.js';
+import { Range } from '../../../../../../editor/common/core/range.js';
+import { escapeRegExpCharacters } from '../../../../../../base/common/strings.js';
 import { URI } from '../../../../../../base/common/uri.js';
 
 import { buildGraphWebviewHTML } from '../../templates/graphWebviewTemplate.js';
 import { GraphWorkspaceContext } from './graphContext.js';
 import { GraphDataBuilder } from './graphDataBuilder.js';
 import { GraphPickers } from './graphPickers.js';
-import { GraphMode, GraphStatusLevel, GraphWebviewPayload } from './graphTypes.js';
+import { GraphEdgePayload, GraphMode, GraphNodePayload, GraphStatusLevel, GraphWebviewPayload } from './graphTypes.js';
 
 export class GraphView extends Disposable implements IRenView {
 	private _mainContainer: HTMLElement | null = null;
@@ -39,6 +43,13 @@ export class GraphView extends Disposable implements IRenView {
 	private _mode: GraphMode = 'file';
 	private _selectedFile: URI | undefined;
 	private _selectedFolder: URI | undefined;
+	private _currentGraph:
+		| {
+			payload: GraphWebviewPayload;
+			nodeById: Map<string, GraphNodePayload>;
+			edgeById: Map<string, GraphEdgePayload>;
+		}
+		| undefined;
 
 	private readonly context: GraphWorkspaceContext;
 	private readonly dataBuilder: GraphDataBuilder;
@@ -47,16 +58,17 @@ export class GraphView extends Disposable implements IRenView {
 	constructor(
 		@ILogService private readonly logService: ILogService,
 		@IWebviewService private readonly webviewService: IWebviewService,
-		@IFileService fileService: IFileService,
+		@IFileService private readonly fileService: IFileService,
 		@IWorkspaceContextService workspaceService: IWorkspaceContextService,
 		@IUriIdentityService uriIdentityService: IUriIdentityService,
 		@IQuickInputService private readonly quickInputService: IQuickInputService,
-		@ISearchService searchService: ISearchService
+		@ISearchService searchService: ISearchService,
+		@IEditorService private readonly editorService: IEditorService
 	) {
 		super();
 		this.context = new GraphWorkspaceContext(workspaceService, uriIdentityService);
-		this.dataBuilder = new GraphDataBuilder(this.logService, fileService, searchService, this.context);
-		this.pickers = new GraphPickers(this.quickInputService, searchService, fileService, this.logService, this.context);
+		this.dataBuilder = new GraphDataBuilder(this.logService, this.fileService, searchService, this.context);
+		this.pickers = new GraphPickers(this.quickInputService, searchService, this.fileService, this.logService, this.context);
 	}
 
 	show(contentArea: HTMLElement): void {
@@ -156,6 +168,7 @@ export class GraphView extends Disposable implements IRenView {
 					break;
 				case 'REN_GRAPH_EVT':
 					this.logService.info('[GraphView] graph evt', data?.payload ?? '');
+					this.handleGraphEvent(data?.payload);
 					break;
 				case 'REN_ZOOM':
 					this.logService.info('[GraphView] zoom button', data?.payload ?? '');
@@ -184,6 +197,7 @@ export class GraphView extends Disposable implements IRenView {
 		}
 		this._graphReady = false;
 		this._promptInFlight = false;
+		this._currentGraph = undefined;
 	}
 
 	private ensureToolbar(): HTMLElement {
@@ -344,6 +358,7 @@ export class GraphView extends Disposable implements IRenView {
 			if (requestId !== this._renderRequestId) {
 				return;
 			}
+			this.storeGraphPayload(graphPayload);
 			await this._webview?.postMessage({ type: 'REN_GRAPH_DATA', payload: graphPayload });
 			const edgeCount = this.getEdgeCount(graphPayload);
 			await this.sendStatus(
@@ -369,6 +384,7 @@ export class GraphView extends Disposable implements IRenView {
 			if (requestId !== this._renderRequestId) {
 				return;
 			}
+			this.storeGraphPayload(graphPayload);
 			await this._webview?.postMessage({ type: 'REN_GRAPH_DATA', payload: graphPayload });
 			if (this.getNodeCount(graphPayload) === 0) {
 				await this.sendStatus('No matching source files found in the selected folder.', 'warning', 4000);
@@ -398,6 +414,7 @@ export class GraphView extends Disposable implements IRenView {
 			if (effectiveRequestId !== this._renderRequestId) {
 				return;
 			}
+			this.storeGraphPayload(graphPayload);
 			await this._webview?.postMessage({ type: 'REN_GRAPH_DATA', payload: graphPayload });
 			if (this.getNodeCount(graphPayload) === 0) {
 				await this.sendStatus('No source files found in the workspace to visualize.', 'warning', 4000);
@@ -413,6 +430,273 @@ export class GraphView extends Disposable implements IRenView {
 			if (requestId === undefined && effectiveRequestId === this._renderRequestId) {
 				this._promptInFlight = false;
 			}
+		}
+	}
+
+	private storeGraphPayload(payload: GraphWebviewPayload): void {
+		const nodeById = new Map<string, GraphNodePayload>();
+		for (const node of payload.nodes ?? []) {
+			nodeById.set(node.id, node);
+		}
+		const edgeById = new Map<string, GraphEdgePayload>();
+		for (const edge of payload.edges ?? []) {
+			edgeById.set(edge.id, edge);
+		}
+		this._currentGraph = { payload, nodeById, edgeById };
+	}
+
+	private handleGraphEvent(event: unknown): void {
+		if (!event || typeof event !== 'object') {
+			return;
+		}
+		const { type, data } = event as { type?: string; data?: unknown };
+		switch (type) {
+			case 'node-tap':
+				void this.onNodeTap(data);
+				break;
+			case 'edge-tap':
+				void this.onEdgeTap(data);
+				break;
+			default:
+				break;
+		}
+	}
+
+	private async onNodeTap(rawNode: unknown): Promise<void> {
+		if (!rawNode || typeof rawNode !== 'object') {
+			return;
+		}
+		const node = rawNode as { path?: unknown; kind?: unknown };
+		if (node.kind === 'external') {
+			return;
+		}
+		const resource = this.safeParseUri(node.path);
+		if (!resource) {
+			return;
+		}
+		await this.openResourceInSideGroup(resource);
+	}
+
+	private async onEdgeTap(rawEdge: unknown): Promise<void> {
+		if (!rawEdge || typeof rawEdge !== 'object') {
+			return;
+		}
+		const edge = rawEdge as { id?: unknown; target?: unknown; source?: unknown; targetPath?: unknown; sourcePath?: unknown; symbols?: unknown; specifier?: unknown };
+		let targetResource = this.safeParseUri(edge.targetPath);
+		let sourceResource = this.safeParseUri(edge.sourcePath);
+		let symbolNames = this.sanitizeSymbolNames(edge.symbols);
+		if (this._currentGraph) {
+			if (!targetResource && typeof edge.target === 'string') {
+				const node = this._currentGraph.nodeById.get(edge.target);
+				if (node) {
+					targetResource = this.safeParseUri(node.path);
+				}
+			}
+			if (!sourceResource && typeof edge.source === 'string') {
+				const node = this._currentGraph.nodeById.get(edge.source);
+				if (node) {
+					sourceResource = this.safeParseUri(node.path);
+				}
+			}
+			if (!symbolNames.length && typeof edge.id === 'string') {
+				const storedEdge = this._currentGraph.edgeById.get(edge.id);
+				if (storedEdge) {
+					if (!targetResource && storedEdge.targetPath) {
+						targetResource = this.safeParseUri(storedEdge.targetPath);
+					}
+					if (!sourceResource && storedEdge.sourcePath) {
+						sourceResource = this.safeParseUri(storedEdge.sourcePath);
+					}
+					symbolNames = this.sanitizeSymbolNames(storedEdge.symbols);
+				}
+			}
+		}
+		const resourceToOpen = targetResource ?? sourceResource;
+		if (!resourceToOpen) {
+			return;
+		}
+
+		let selection: Range | undefined;
+		if (targetResource && this.areResourcesEqual(resourceToOpen, targetResource) && symbolNames.length) {
+			selection = await this.findSymbolRange(targetResource, symbolNames);
+		}
+		if (!selection && sourceResource && this.areResourcesEqual(resourceToOpen, sourceResource) && typeof edge.specifier === 'string') {
+			selection = await this.findImportRange(sourceResource, edge.specifier);
+		}
+
+		await this.openResourceInSideGroup(resourceToOpen, selection);
+	}
+
+	private areResourcesEqual(a: URI, b: URI): boolean {
+		return this.context.extUri.isEqual(a, b);
+	}
+
+	private safeParseUri(value: unknown): URI | undefined {
+		if (typeof value !== 'string' || !value || !value.includes('://')) {
+			return undefined;
+		}
+		try {
+			return URI.parse(value);
+		} catch (error) {
+			this.logService.debug('[GraphView] failed to parse URI from graph event', value, error);
+			return undefined;
+		}
+	}
+
+	private async openResourceInSideGroup(resource: URI, selection?: Range): Promise<void> {
+		let editorInput: IResourceEditorInput;
+		if (selection) {
+			const options: ITextEditorOptions = {
+				selection: {
+					startLineNumber: selection.startLineNumber,
+					startColumn: selection.startColumn,
+					endLineNumber: selection.endLineNumber,
+					endColumn: selection.endColumn
+				},
+				selectionRevealType: TextEditorSelectionRevealType.NearTopIfOutsideViewport
+			};
+			editorInput = { resource, options };
+		} else {
+			editorInput = { resource };
+		}
+		try {
+			await this.editorService.openEditor(editorInput, SIDE_GROUP);
+		} catch (error) {
+			this.logService.error('[GraphView] failed to open editor', resource.toString(true), error);
+		}
+	}
+
+	private sanitizeSymbolNames(symbols: unknown): string[] {
+		if (!Array.isArray(symbols)) {
+			return [];
+		}
+		const unique = new Set<string>();
+		for (const entry of symbols) {
+			if (typeof entry !== 'string') {
+				continue;
+			}
+			let value = entry.trim();
+			if (!value) {
+				continue;
+			}
+			value = value.replace(/\s*\(type\)$/i, '');
+			if (/^\*\s+as\s+/i.test(value)) {
+				value = value.replace(/^\*\s+as\s+/i, '');
+			}
+			const asMatch = /^(.*)\s+as\s+(.*)$/i.exec(value);
+			if (asMatch) {
+				if (asMatch[1]?.trim()) {
+					unique.add(asMatch[1].trim());
+				}
+				if (asMatch[2]?.trim()) {
+					unique.add(asMatch[2].trim());
+				}
+				continue;
+			}
+			unique.add(value);
+		}
+		return Array.from(unique);
+	}
+
+	private buildSymbolRegexes(name: string): RegExp[] {
+		const escaped = escapeRegExpCharacters(name);
+		return [
+			new RegExp(`^\\s*export\\s+default\\s+function\\s+${escaped}\\b`),
+			new RegExp(`^\\s*export\\s+async\\s+function\\s+${escaped}\\b`),
+			new RegExp(`^\\s*export\\s+function\\s+${escaped}\\b`),
+			new RegExp(`^\\s*async\\s+function\\s+${escaped}\\b`),
+			new RegExp(`^\\s*function\\s+${escaped}\\b`),
+			new RegExp(`^\\s*export\\s+(const|let|var)\\s+${escaped}\\s*=`),
+			new RegExp(`^\\s*(const|let|var)\\s+${escaped}\\s*=`),
+			new RegExp(`^\\s*export\\s+default\\s+class\\s+${escaped}\\b`),
+			new RegExp(`^\\s*export\\s+class\\s+${escaped}\\b`),
+			new RegExp(`^\\s*class\\s+${escaped}\\b`)
+		];
+	}
+
+	private async findSymbolRange(resource: URI, symbolNames: string[]): Promise<Range | undefined> {
+		if (!symbolNames.length) {
+			return undefined;
+		}
+		const lines = await this.readFileLines(resource);
+		if (!lines) {
+			return undefined;
+		}
+
+		let best: { line: number; column: number; length: number } | undefined;
+		let defaultExportLine: number | undefined;
+		for (let i = 0; i < lines.length; i++) {
+			const lineText = lines[i];
+			if (defaultExportLine === undefined && /^\s*export\s+default\b/.test(lineText)) {
+				defaultExportLine = i;
+			}
+			let matched = false;
+			for (const name of symbolNames) {
+				for (const regex of this.buildSymbolRegexes(name)) {
+					const match = regex.exec(lineText);
+					if (match) {
+						const column = (match.index ?? 0) + 1;
+						const length = lineText.length + 1;
+						if (!best || i < best.line || (i === best.line && column < best.column)) {
+							best = { line: i, column, length };
+						}
+						matched = true;
+						break;
+					}
+				}
+				if (matched) {
+					break;
+				}
+			}
+		}
+
+		if (best) {
+			const lineNumber = best.line + 1;
+			const column = best.column;
+			return new Range(lineNumber, column, lineNumber, best.length);
+		}
+		if (defaultExportLine !== undefined) {
+			const lineNumber = defaultExportLine + 1;
+			const length = (lines[defaultExportLine]?.length ?? 0) + 1;
+			return new Range(lineNumber, 1, lineNumber, length);
+		}
+		return undefined;
+	}
+
+	private async findImportRange(resource: URI, specifier: string): Promise<Range | undefined> {
+		if (!specifier) {
+			return undefined;
+		}
+		const lines = await this.readFileLines(resource);
+		if (!lines) {
+			return undefined;
+		}
+		const escaped = escapeRegExpCharacters(specifier);
+		const matcher = new RegExp(escaped, 'g');
+		for (let i = 0; i < lines.length; i++) {
+			const lineText = lines[i];
+			if (!/^\s*import\s+/.test(lineText)) {
+				continue;
+			}
+			const match = matcher.exec(lineText);
+			if (match) {
+				const column = (match.index ?? 0) + 1;
+				const lineNumber = i + 1;
+				return new Range(lineNumber, column, lineNumber, column + specifier.length);
+			}
+			matcher.lastIndex = 0;
+		}
+		return undefined;
+	}
+
+	private async readFileLines(resource: URI): Promise<string[] | undefined> {
+		try {
+			const buffer = await this.fileService.readFile(resource);
+			const content = buffer.value.toString();
+			return content.split(/\r?\n/);
+		} catch (error) {
+			this.logService.error('[GraphView] failed to read file for graph selection', resource.toString(true), error);
+			return undefined;
 		}
 	}
 

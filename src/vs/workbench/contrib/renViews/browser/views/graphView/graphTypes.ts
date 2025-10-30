@@ -26,6 +26,9 @@ export interface GraphEdgePayload {
 	label: string;
 	specifier: string;
 	kind: GraphEdgeKind;
+	sourcePath?: string;
+	targetPath?: string;
+	symbols?: string[];
 }
 
 export interface GraphWebviewPayload {

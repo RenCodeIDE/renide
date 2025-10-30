@@ -100,7 +100,7 @@ export class GraphDataBuilder {
 		};
 
 		const nodes = new Map<string, MutableGraphNode>();
-		const edges = new Map<string, { payload: GraphEdgePayload; symbols: Set<string> }>();
+		const edges = new Map<string, { payload: GraphEdgePayload; labelParts: Set<string>; symbolNames: Set<string> }>();
 		const processed = new Set<string>();
 		const queue: URI[] = [...initialFiles];
 		const descriptorCache = new Map<string, Promise<ImportDescriptor[]>>();
@@ -191,14 +191,20 @@ export class GraphDataBuilder {
 						target: targetId,
 						label: '',
 						specifier: descriptor.specifier,
-						kind: edgeKind
+						kind: edgeKind,
+						sourcePath: sourceNode.path,
+						targetPath: targetNode.path,
+						symbols: []
 					};
-					entry = { payload, symbols: new Set<string>() };
+					entry = { payload, labelParts: new Set<string>(), symbolNames: new Set<string>() };
 					edges.set(edgeKey, entry);
 				}
 
 				for (const symbol of this.getSymbolsForDescriptor(descriptor)) {
-					entry.symbols.add(symbol);
+					entry.labelParts.add(symbol);
+				}
+				for (const candidate of this.getSymbolNameCandidates(descriptor)) {
+					entry.symbolNames.add(candidate);
 				}
 
 				if (descriptor.isSideEffectOnly) {
@@ -211,7 +217,8 @@ export class GraphDataBuilder {
 				sourceNode.fanOut += 1;
 				sourceNode.weight = Math.max(sourceNode.weight, sourceNode.fanIn + sourceNode.fanOut);
 				targetNode.weight = Math.max(targetNode.weight, targetNode.fanIn + targetNode.fanOut);
-				entry.payload.label = this.composeEdgeLabel(entry.symbols, entry.payload.kind);
+				entry.payload.label = this.composeEdgeLabel(entry.labelParts, entry.payload.kind);
+				entry.payload.symbols = entry.symbolNames.size ? Array.from(entry.symbolNames) : [];
 			}
 		}
 
@@ -221,7 +228,12 @@ export class GraphDataBuilder {
 			}
 			return node;
 		});
-		const edgeArray = Array.from(edges.values(), entry => entry.payload);
+		const edgeArray = Array.from(edges.values(), entry => {
+			if (!entry.payload.symbols || entry.payload.symbols.length === 0) {
+				entry.payload.symbols = entry.symbolNames.size ? Array.from(entry.symbolNames) : [];
+			}
+			return entry.payload;
+		});
 		return { nodes: nodeArray, edges: edgeArray };
 	}
 
@@ -267,6 +279,20 @@ export class GraphDataBuilder {
 			symbols.push(this.decorateSymbol(display, item.isTypeOnly));
 		}
 		return symbols;
+	}
+
+	private getSymbolNameCandidates(descriptor: ImportDescriptor): string[] {
+		const candidates: string[] = [];
+		if (descriptor.defaultImport) {
+			candidates.push(descriptor.defaultImport.name);
+		}
+		if (descriptor.namespaceImport) {
+			candidates.push(descriptor.namespaceImport.name);
+		}
+		for (const item of descriptor.namedImports) {
+			candidates.push(item.propertyName ?? item.name);
+		}
+		return candidates;
 	}
 
 	private decorateSymbol(name: string, isTypeOnly: boolean): string {
