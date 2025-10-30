@@ -64,6 +64,14 @@ export class RenMainWindowOverlay {
 			this.switchToView(mode);
 		});
 		this._store.add({ dispose: unsubscribe });
+
+		// Listen for custom view switch events from graph view toolbar
+		const handleCustomSwitch = (e: Event) => {
+			const customEvent = e as CustomEvent<'code' | 'preview' | 'graph'>;
+			this.switchToView(customEvent.detail);
+		};
+		document.addEventListener('ren-switch-view', handleCustomSwitch);
+		this._store.add(toDisposable(() => document.removeEventListener('ren-switch-view', handleCustomSwitch)));
 	}
 
 	private switchToView(mode: RenViewMode): void {

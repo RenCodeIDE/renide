@@ -107,20 +107,55 @@
 .ren-graph-container {
 	width: 100%;
 	height: 100%;
+	display: flex;
+	flex-direction: column;
 	overflow: hidden;
 }
 
-.ren-graph-canvas {
+.ren-graph-title {
+	margin-bottom: 20px;
+	color: var(--vscode-editor-foreground);
+	flex-shrink: 0;
+}
+
+.ren-graph-viewport {
+	flex: 1;
 	position: relative;
+	overflow: auto;
 	width: 100%;
-	height: calc(100% - 60px);
+	height: 100%;
 	background-image: linear-gradient(
 			rgba(128, 128, 128, 0.1) 1px,
 			transparent 1px
 		),
 		linear-gradient(90deg, rgba(128, 128, 128, 0.1) 1px, transparent 1px);
 	background-size: 20px 20px;
-	overflow: visible;
+	background-position: 0 0;
+}
+
+/* iframe-based webview fills the viewport */
+.ren-graph-webview {
+	position: absolute;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	left: 0;
+	width: 100%;
+	height: 100%;
+	border: 0;
+	background: transparent;
+}
+
+.ren-graph-canvas {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	width: 5000px;
+	height: 5000px;
+	min-height: 5000px;
+	min-width: 5000px;
+	margin-top: -2500px;
+	margin-left: -2500px;
 	cursor: grab;
 	transform-origin: 0 0;
 }
@@ -150,6 +185,85 @@
 	z-index: 10;
 }
 
+.ren-graph-zoom-controls {
+	position: absolute;
+	bottom: 20px;
+	right: 20px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	z-index: 100;
+}
+
+.ren-graph-zoom-btn {
+	width: 36px;
+	height: 36px;
+	border-radius: 6px;
+	border: 1px solid var(--vscode-button-border);
+	background-color: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	font-size: 20px;
+	font-weight: bold;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: all 0.2s ease;
+	user-select: none;
+}
+
+.ren-graph-zoom-btn:hover {
+	background-color: var(--vscode-button-hoverBackground);
+	transform: scale(1.05);
+}
+
+.ren-graph-zoom-btn:active {
+	transform: scale(0.95);
+}
+
+.ren-graph-zoom-in {
+	border-radius: 6px 6px 3px 3px;
+}
+
+.ren-graph-zoom-out {
+	border-radius: 3px 3px 6px 6px;
+}
+
+/* Toolbar for view switching */
+.ren-graph-toolbar {
+	position: fixed;
+	top: 20px;
+	right: 160px;
+	display: flex;
+	gap: 8px;
+	z-index: 100;
+	background-color: var(--vscode-editorGroupHeader-tabsBackground);
+	border-radius: 6px;
+	padding: 8px;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.ren-graph-toolbar-btn {
+	padding: 8px 12px;
+	border-radius: 4px;
+	border: 1px solid var(--vscode-button-border);
+	background-color: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+	font-size: 13px;
+	cursor: pointer;
+	transition: all 0.2s ease;
+	user-select: none;
+}
+
+.ren-graph-toolbar-btn:hover {
+	background-color: var(--vscode-button-hoverBackground);
+}
+
+.ren-graph-toolbar-btn.active {
+	background-color: var(--vscode-button-hoverBackground);
+	font-weight: bold;
+}
+
 /* Integration with VS Code editor title area */
 .monaco-workbench
 	.part.editor
@@ -161,6 +275,10 @@
 	margin-left: auto;
 	margin-right: 8px;
 	align-self: center;
+	height: 100%;
+	background: transparent;
+	border-radius: 0;
+	padding: 0 4px;
 }
 
 /* Ensure toolbar doesn't interfere with editor actions */
@@ -186,11 +304,6 @@
 		font-size: 11px;
 		padding: 2px 6px;
 	}
-}
-
-.ren-graph-title {
-	margin-bottom: 20px;
-	color: var(--vscode-editor-foreground);
 }
 
 /* React Project Detection Styles */

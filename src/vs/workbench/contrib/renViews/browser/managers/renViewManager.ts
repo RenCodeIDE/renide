@@ -27,7 +27,7 @@ export class RenViewManager extends Disposable {
 	private initializeViews(): void {
 		this._views.set('code', this._register(new CodeView()));
 		this._views.set('preview', this._register(this.instantiationService.createInstance(PreviewView)));
-		this._views.set('graph', this._register(new GraphView()));
+		this._views.set('graph', this._register(this.instantiationService.createInstance(GraphView)));
 	}
 
 	setContentArea(contentArea: HTMLElement): void {

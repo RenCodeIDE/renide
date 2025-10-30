@@ -55,6 +55,7 @@ export class RenViewsContribution implements IWorkbenchContribution {
 
 				toDelete.delete(group);
 
+
 				if (!overlayWidgets.has(group)) {
 					const scopedInstaService = instantiationService.createChild(new ServiceCollection());
 					const container = group.element;
@@ -66,11 +67,15 @@ export class RenViewsContribution implements IWorkbenchContribution {
 					const envOverlay = scopedInstaService.createInstance(EnvOverlay, editorContent ?? container, getGroupResource);
 					overlayWidgets.set(group, combinedDisposable(overlay, envOverlay, scopedInstaService));
 				}
+
+				// GlobalRenToolbar removed to prevent duplicate view switchers; toolbar handled by RenToolbarManager inside overlay
 			}
 
 			for (const group of toDelete) {
 				overlayWidgets.deleteAndDispose(group);
 			}
+
+			// No toolbarByGroup cleanup needed since GlobalRenToolbar is no longer used
 		}));
 	}
 

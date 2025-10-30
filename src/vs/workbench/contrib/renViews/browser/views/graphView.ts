@@ -5,29 +5,33 @@
 
 import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { getWindow } from '../../../../../base/browser/dom.js';
+// import { sanitizeHtml } from '../../../../../base/browser/domSanitize.js';
+import { ILogService } from '../../../../../platform/log/common/log.js';
+// import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
+import { IWebviewService, IWebviewElement } from '../../../webview/browser/webview.js';
+import { ensureCodeWindow, CodeWindow } from '../../../../../base/browser/window.js';
+import { FileAccess } from '../../../../../base/common/network.js';
+// import { URI } from '../../../../../base/common/uri.js';
+import { joinPath } from '../../../../../base/common/resources.js';
+import { asWebviewUri } from '../../../webview/common/webview.js';
+import { generateUuid } from '../../../../../base/common/uuid.js';
 import { IRenView } from './renView.interface.js';
-
-interface GraphBlock {
-	id: string;
-	x: number;
-	y: number;
-	width: number;
-	height: number;
-	element: HTMLElement;
-}
 
 export class GraphView extends Disposable implements IRenView {
 	private _mainContainer: HTMLElement | null = null;
-	private _canvas: HTMLElement | null = null;
-	private _blocks: Map<string, GraphBlock> = new Map();
-	private _isPanning: boolean = false;
-	private _panStartX: number = 0;
-	private _panStartY: number = 0;
-	private _translateX: number = 0;
-	private _translateY: number = 0;
+	private _toolbar: HTMLElement | null = null;
 	private _window: Window | null = null;
+	private _webview: IWebviewElement | null = null;
+
+	constructor(
+		@ILogService private readonly logService: ILogService,
+		@IWebviewService private readonly webviewService: IWebviewService,
+	) {
+		super();
+	}
 
 	show(contentArea: HTMLElement): void {
+		this.logService.info('[GraphView] show()');
 		// Clear existing content safely
 		contentArea.textContent = '';
 
@@ -37,178 +41,245 @@ export class GraphView extends Disposable implements IRenView {
 		// Create main container
 		this._mainContainer = document.createElement('div');
 		this._mainContainer.className = 'ren-graph-container';
+		// Ensure container participates in layout and fills available space
+		this._mainContainer.style.display = 'flex';
+		this._mainContainer.style.flexDirection = 'column';
+		this._mainContainer.style.height = '100%';
 
 		// Create title
 		const title = document.createElement('h2');
 		title.textContent = 'Graph View';
 		title.className = 'ren-graph-title';
 
-		// Create canvas container
-		this._canvas = document.createElement('div');
-		this._canvas.className = 'ren-graph-canvas';
-		this._canvas.id = 'ren-graph-canvas';
+		// Create viewport container
+		const viewport = document.createElement('div');
+		viewport.className = 'ren-graph-viewport';
+		viewport.style.position = 'relative';
+		viewport.style.flex = '1 1 auto';
+		viewport.style.minHeight = '240px';
 
 		this._mainContainer.appendChild(title);
-		this._mainContainer.appendChild(this._canvas);
+		this._mainContainer.appendChild(viewport);
+
+		// Create toolbar for view switching
+		this.createToolbar();
+		this._mainContainer.appendChild(this._toolbar!);
+
 		contentArea.appendChild(this._mainContainer);
 
-		// Initialize canvas interactions
-		this.initializeCanvas();
-
-		// Create initial blocks
-		this.createInitialBlocks();
+		// Load Cytoscape into a real Webview element
+		this.loadWebview(viewport);
 	}
 
-	private initializeCanvas(): void {
-		if (!this._canvas) {
+
+	private async loadWebview(container: HTMLElement): Promise<void> {
+		if (!this._window) {
 			return;
 		}
 
-		// Pan on middle mouse button or space + drag
-		this._canvas.addEventListener('mousedown', (e) => {
-			if (e.button === 1 || (e.button === 0 && e.ctrlKey)) { // Middle mouse or Ctrl+Left
-				this._isPanning = true;
-				this._panStartX = e.clientX - this._translateX;
-				this._panStartY = e.clientY - this._translateY;
-				this._canvas!.style.cursor = 'grabbing';
-				e.preventDefault();
-			}
+		// Create workbench webview element (matches Getting Started and other views)
+		this._webview = this.webviewService.createWebviewElement({
+			title: 'Graph',
+			options: {
+				disableServiceWorker: false,
+				enableFindWidget: false
+			},
+			contentOptions: {
+				allowScripts: true,
+				localResourceRoots: [FileAccess.asFileUri('vs/workbench/contrib/renViews/browser/media/')]
+			},
+			extension: undefined,
 		});
 
-		this._canvas.addEventListener('mousemove', (e) => {
-			if (this._isPanning) {
-				this._translateX = e.clientX - this._panStartX;
-				this._translateY = e.clientY - this._panStartY;
-				this._canvas!.style.transform = `translate(${this._translateX}px, ${this._translateY}px)`;
-			}
-		});
+		// Claim and mount the webview properly
+		const win = this._window!;
+		ensureCodeWindow(win, 1);
+		this._webview.mountTo(container, win as unknown as CodeWindow);
+		this._register(this._webview);
+		container.style.position = container.style.position || 'relative';
+		container.style.height = '100%';
 
-		this._window?.document.addEventListener('mouseup', () => {
-			if (this._isPanning) {
-				this._isPanning = false;
-				if (this._canvas) {
-					this._canvas.style.cursor = 'default';
-				}
-			}
-		});
+		// Build HTML with proper CSP using webview's built-in system
+		const mediaRoot = FileAccess.asFileUri('vs/workbench/contrib/renViews/browser/media/');
+		const libUri = asWebviewUri(joinPath(mediaRoot, 'cytoscape.min.js')).toString(true);
+		const nonce = generateUuid();
+		const html = this.buildWebviewHTMLForPanel(libUri, nonce);
+		this._webview.setHtml(html);
 
-		// Zoom with wheel
-		this._canvas.addEventListener('wheel', (e) => {
-			if (e.ctrlKey || e.metaKey) {
-				e.preventDefault();
-				const delta = e.deltaY > 0 ? 0.9 : 1.1;
-				const currentScale = parseFloat(this._canvas!.style.transform.split('scale(')[1]?.split(')')[0] || '1');
-				const newScale = Math.max(0.1, Math.min(3, currentScale * delta));
-				this._canvas!.style.transform = `translate(${this._translateX}px, ${this._translateY}px) scale(${newScale})`;
+		// Set up proper webview event handling (following VS Code patterns)
+		this._register(this._webview.onMessage(e => {
+			const data = e.message;
+			if (data?.type === 'REN_GRAPH_READY') {
+				this.logService.info('[GraphView] graph ready', data?.payload ?? '');
+				return;
 			}
-		});
+			if (data?.type === 'REN_GRAPH_EVT') {
+				this.logService.info('[GraphView] graph evt', data?.payload ?? '');
+				return;
+			}
+			if (data?.type === 'REN_ZOOM') {
+				this.logService.info('[GraphView] zoom button', data?.payload ?? '');
+				return;
+			}
+			if (data?.type === 'REN_WHEEL') {
+				this.logService.info('[GraphView] wheel', data?.payload ?? '');
+				return;
+			}
+			if (data?.type === 'REN_GRAPH_ERROR') {
+				this.logService.error('[GraphView] webview error', data?.payload ?? '');
+				return;
+			}
+		}));
+
+		// Basic failure indicator
+		const failTimer = this._window.setTimeout(() => {
+			this.logService.error('[GraphView] graph failed to load (timeout)');
+			this.showGraphFailed(container);
+		}, 5000);
+
+		// Clear timer when webview is ready
+		this._register(this._webview.onMessage(e => {
+			if (e.message?.type === 'REN_GRAPH_READY') {
+				clearTimeout(failTimer);
+			}
+		}));
 	}
 
-	private createInitialBlocks(): void {
-		if (!this._canvas) {
+	// old iframe builder removed
+
+	private createToolbar(): void {
+		if (!this._mainContainer) {
 			return;
 		}
 
-		const blockTypes = [
-			{ name: 'Input', color: '#4EC9B0' },
-			{ name: 'Process', color: '#569CD6' },
-			{ name: 'Output', color: '#D7BA7D' },
-			{ name: 'Data', color: '#C586C0' },
-			{ name: 'Transform', color: '#CE9178' }
-		];
+		this._toolbar = document.createElement('div');
+		this._toolbar.className = 'ren-graph-toolbar';
 
-		blockTypes.forEach((type, index) => {
-			const block = this.createBlock(
-				type.name,
-				200 + index * 180,
-				150 + index * 100,
-				120,
-				80,
-				type.color
-			);
-			this._blocks.set(block.id, block);
+		const codeButton = document.createElement('button');
+		codeButton.className = 'ren-graph-toolbar-btn';
+		codeButton.textContent = 'Code';
+		codeButton.title = 'Switch to Code View';
+		codeButton.addEventListener('click', () => {
+			document.dispatchEvent(new CustomEvent('ren-switch-view', { detail: 'code' }));
 		});
-	}
+		this._toolbar.appendChild(codeButton);
 
-	private createBlock(name: string, x: number, y: number, width: number, height: number, color: string): GraphBlock {
-		if (!this._canvas) {
-			throw new Error('Canvas not initialized');
-		}
-
-		const blockId = `block-${Date.now()}-${Math.random()}`;
-		const blockElement = document.createElement('div');
-		blockElement.className = 'ren-graph-block';
-		blockElement.style.left = `${x}px`;
-		blockElement.style.top = `${y}px`;
-		blockElement.style.width = `${width}px`;
-		blockElement.style.height = `${height}px`;
-		blockElement.style.backgroundColor = color;
-		blockElement.textContent = name;
-		blockElement.draggable = true;
-
-		// Make block draggable
-		let isDragging = false;
-		let startX = 0;
-		let startY = 0;
-
-		blockElement.addEventListener('mousedown', (e) => {
-			if (e.button === 0 && !e.ctrlKey) { // Left mouse without Ctrl
-				isDragging = true;
-				startX = e.clientX - x;
-				startY = e.clientY - y;
-				e.preventDefault();
-			}
+		const previewButton = document.createElement('button');
+		previewButton.className = 'ren-graph-toolbar-btn';
+		previewButton.textContent = 'Preview';
+		previewButton.title = 'Switch to Preview View';
+		previewButton.addEventListener('click', () => {
+			document.dispatchEvent(new CustomEvent('ren-switch-view', { detail: 'preview' }));
 		});
+		this._toolbar.appendChild(previewButton);
 
-		const window = getWindow(blockElement);
-		window.document.addEventListener('mousemove', (e) => {
-			if (isDragging) {
-				const newX = e.clientX - startX;
-				const newY = e.clientY - startY;
-				blockElement.style.left = `${newX}px`;
-				blockElement.style.top = `${newY}px`;
-			}
+		const graphButton = document.createElement('button');
+		graphButton.className = 'ren-graph-toolbar-btn active';
+		graphButton.textContent = 'Graph';
+		graphButton.title = 'Already in Graph View';
+		graphButton.addEventListener('click', () => {
+			document.dispatchEvent(new CustomEvent('ren-switch-view', { detail: 'graph' }));
 		});
-
-		window.document.addEventListener('mouseup', () => {
-			if (isDragging) {
-				isDragging = false;
-			}
-		});
-
-		// Add hover effect
-		blockElement.addEventListener('mouseenter', () => {
-			blockElement.style.transform = 'scale(1.05)';
-			blockElement.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3)';
-		});
-
-		blockElement.addEventListener('mouseleave', () => {
-			blockElement.style.transform = 'scale(1)';
-			blockElement.style.boxShadow = '0 2px 4px rgba(0, 0, 0, 0.2)';
-		});
-
-		this._canvas.appendChild(blockElement);
-
-		const block: GraphBlock = {
-			id: blockId,
-			x,
-			y,
-			width,
-			height,
-			element: blockElement
-		};
-
-		return block;
+		this._toolbar.appendChild(graphButton);
 	}
 
 	hide(): void {
 		if (this._mainContainer) {
 			this._mainContainer.remove();
 			this._mainContainer = null;
-			this._canvas = null;
-			this._blocks.clear();
-			this._translateX = 0;
-			this._translateY = 0;
+			this._toolbar = null;
 		}
+		// Properly dispose of webview
+		if (this._webview) {
+			this._webview.dispose();
+			this._webview = null;
+		}
+	}
+
+	private showGraphFailed(container: HTMLElement): void {
+		// Replace viewport content with a minimal failure notice
+		if (!container) {
+			return;
+		}
+		container.textContent = '';
+		const msg = document.createElement('div');
+		msg.style.padding = '12px';
+		msg.style.color = 'var(--vscode-errorForeground)';
+		msg.textContent = 'Graph failed to load.';
+		container.appendChild(msg);
+	}
+
+	private buildWebviewHTMLForPanel(libSrc: string, nonce: string): string {
+		return `<!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <style>
+            html, body, #cy { height: 100%; width: 100%; margin: 0; padding: 0; background: transparent; }
+            #toolbar {
+              position: absolute;
+              top: 12px;
+              right: 12px;
+              display: flex;
+              gap: 8px;
+              z-index: 99999;
+              background: rgba(0,0,0,0.6);
+              padding: 6px 8px;
+              border-radius: 6px;
+              border: 1px solid rgba(255,255,255,0.3);
+              pointer-events: auto;
+            }
+            #toolbar button {
+              padding: 6px 10px;
+              font-size: 14px;
+              border: 1px solid #ffffffaa;
+              background: #1e1e1e;
+              color: #ffffff;
+              border-radius: 4px;
+              cursor: pointer;
+            }
+            #toolbar button:hover { background: #2a2a2a; }
+          </style>
+          <title>Graph</title>
+        </head>
+        <body>
+          <div id="cy"></div>
+          <div id="toolbar" aria-label="graph zoom controls">
+            <button id="zoomIn" title="Zoom In">+</button>
+            <button id="zoomOut" title="Zoom Out">-</button>
+          </div>
+          <script src="${libSrc}"></script>
+          <script>
+            (function(){
+              const vscode = acquireVsCodeApi();
+              const send=(type,payload)=>{ try{ vscode.postMessage({type,payload}); }catch{} };
+              const start=()=>{
+                if(!window.cytoscape){ return void setTimeout(start, 50); }
+                const cy = window.cytoscape({
+                  container: document.getElementById('cy'),
+                  elements: [ { data:{id:'a',label:'Node A'} }, { data:{id:'b',label:'Node B'} }, { data:{id:'ab',source:'a',target:'b'} } ],
+                  style: [
+                    { selector:'node', style:{ 'label':'data(label)', 'background-color':'#4FC3F7', 'color':'#0B1A2B', 'text-valign':'center', 'text-halign':'center', 'width': 70, 'height': 70, 'font-size': 16, 'font-weight': 'bold', 'border-width': 2, 'border-color': '#0B1A2B' } },
+                    { selector:'edge', style:{ 'width':3, 'line-color':'#F5F5F5', 'target-arrow-color':'#F5F5F5', 'target-arrow-shape':'triangle', 'curve-style':'bezier', 'opacity': 0.9 } }
+                  ],
+                  layout:{ name:'grid', rows:1 },
+                  userPanningEnabled:true, userZoomingEnabled:true, wheelSensitivity:0.2, minZoom:0.1, maxZoom:5
+                });
+                cy.zoom(1); cy.center(); cy.resize(); requestAnimationFrame(()=>{ cy.fit(); send('REN_GRAPH_READY',{ zoom: cy.zoom(), pan: cy.pan(), nodes: cy.nodes().length }); });
+
+                const applyZoom = (factor)=>{
+                  const z = cy.zoom() * factor;
+                  cy.zoom(z);
+                  send('REN_ZOOM', { action: factor>1 ? 'in' : 'out', zoom: cy.zoom(), pan: cy.pan() });
+                };
+                document.getElementById('zoomIn').addEventListener('click', ()=> applyZoom(1.2));
+                document.getElementById('zoomOut').addEventListener('click', ()=> applyZoom(1/1.2));
+              };
+              start();
+            })();
+          </script>
+        </body>
+        </html>`;
 	}
 }
