@@ -19,6 +19,7 @@ import { IUriIdentityService } from '../../../../../../platform/uriIdentity/comm
 import { IQuickInputService, IQuickPickItem } from '../../../../../../platform/quickinput/common/quickInput.js';
 import { ISearchService } from '../../../../../services/search/common/search.js';
 import { IEditorService, SIDE_GROUP } from '../../../../../services/editor/common/editorService.js';
+import { IEditorGroupsService, IEditorGroup } from '../../../../../services/editor/common/editorGroupsService.js';
 import { GroupIdentifier, SideBySideEditor } from '../../../../../common/editor.js';
 import { IResourceEditorInput, ITextEditorOptions, TextEditorSelectionRevealType } from '../../../../../../platform/editor/common/editor.js';
 import { Range } from '../../../../../../editor/common/core/range.js';
@@ -50,6 +51,7 @@ export class GraphView extends Disposable implements IRenView {
 			payload: GraphWebviewPayload;
 			nodeById: Map<string, GraphNodePayload>;
 			edgeById: Map<string, GraphEdgePayload>;
+			nodeByResourceKey: Map<string, GraphNodePayload>;
 		}
 		| undefined;
 	private _codeViewGroupId: GroupIdentifier | undefined;
@@ -66,7 +68,8 @@ export class GraphView extends Disposable implements IRenView {
 		@IUriIdentityService uriIdentityService: IUriIdentityService,
 		@IQuickInputService private readonly quickInputService: IQuickInputService,
 		@ISearchService searchService: ISearchService,
-		@IEditorService private readonly editorService: IEditorService
+		@IEditorService private readonly editorService: IEditorService,
+		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService
 	) {
 		super();
 		this.context = new GraphWorkspaceContext(workspaceService, uriIdentityService);
@@ -438,14 +441,34 @@ export class GraphView extends Disposable implements IRenView {
 
 	private storeGraphPayload(payload: GraphWebviewPayload): void {
 		const nodeById = new Map<string, GraphNodePayload>();
+		const nodeByResourceKey = new Map<string, GraphNodePayload>();
 		for (const node of payload.nodes ?? []) {
 			nodeById.set(node.id, node);
+			const resourceKey = this.getResourceKeyFromNode(node);
+			if (resourceKey) {
+				nodeByResourceKey.set(resourceKey, node);
+			}
 		}
 		const edgeById = new Map<string, GraphEdgePayload>();
 		for (const edge of payload.edges ?? []) {
 			edgeById.set(edge.id, edge);
 		}
-		this._currentGraph = { payload, nodeById, edgeById };
+		this._currentGraph = { payload, nodeById, edgeById, nodeByResourceKey };
+	}
+
+	private getResourceKeyFromNode(node: GraphNodePayload): string | undefined {
+		if (!node?.path) {
+			return undefined;
+		}
+		const resource = this.safeParseUri(node.path);
+		if (!resource) {
+			return undefined;
+		}
+		return this.getResourceKey(resource);
+	}
+
+	private getResourceKey(resource: URI): string {
+		return this.context.getUriKey(resource);
 	}
 
 	private handleGraphEvent(event: unknown): void {
@@ -469,14 +492,18 @@ export class GraphView extends Disposable implements IRenView {
 		if (!rawNode || typeof rawNode !== 'object') {
 			return;
 		}
-		const node = rawNode as { id?: unknown; path?: unknown; kind?: unknown };
+		const node = rawNode as { id?: unknown; path?: unknown; kind?: unknown; openable?: unknown };
 		if (node.kind === 'external') {
 			return;
 		}
-		const fallbackNode = typeof node.id === 'string' ? this._currentGraph?.nodeById.get(node.id) : undefined;
-		const resource = this.safeParseUri(node.path) ?? this.safeParseUri(fallbackNode?.path);
+		const nodePayload = this.resolveNodePayload(node);
+		const resource = this.safeParseUri(node.path) ?? this.safeParseUri(nodePayload?.path);
 		if (!resource) {
 			this.logService.warn('[GraphView] node tap missing resource', node);
+			return;
+		}
+		if (!this.isResourceOpenable(resource, nodePayload)) {
+			await this.notifyUnopenable(resource, 'node');
 			return;
 		}
 		await this.openResourceInSideGroup(resource);
@@ -518,6 +545,10 @@ export class GraphView extends Disposable implements IRenView {
 		}
 		const resourceToOpen = targetResource ?? sourceResource;
 		if (!resourceToOpen) {
+			return;
+		}
+		if (!this.isResourceOpenable(resourceToOpen)) {
+			await this.notifyUnopenable(resourceToOpen, 'edge');
 			return;
 		}
 
@@ -578,7 +609,27 @@ export class GraphView extends Disposable implements IRenView {
 		return undefined;
 	}
 
+	private async notifyUnopenable(resource: URI, context: 'node' | 'edge'): Promise<void> {
+		this.logService.info('[GraphView] skipping open for excluded resource', resource.toString(true), context);
+		await this.sendStatus('Cannot open this item because it is excluded from the workspace.', 'warning', 4000);
+	}
+
+	private isResourceOpenable(resource: URI, nodePayload?: GraphNodePayload | null): boolean {
+		if (nodePayload) {
+			return nodePayload.openable;
+		}
+		const node = this.getNodeForResource(resource);
+		if (node) {
+			return node.openable;
+		}
+		return true;
+	}
+
 	private async openResourceInSideGroup(resource: URI, selection?: Range): Promise<void> {
+		if (!this.isResourceOpenable(resource)) {
+			await this.notifyUnopenable(resource, 'node');
+			return;
+		}
 		let editorInput: IResourceEditorInput;
 		if (selection) {
 			const options: ITextEditorOptions = {
@@ -614,6 +665,16 @@ export class GraphView extends Disposable implements IRenView {
 			return existingEditors[0].groupId;
 		}
 
+		const emptyGroup = this.findEmptyCodeGroup();
+		if (emptyGroup !== undefined) {
+			return emptyGroup;
+		}
+
+		const activeGroupCandidate = this.pickActiveCodeGroup();
+		if (activeGroupCandidate !== undefined) {
+			return activeGroupCandidate;
+		}
+
 		const trackedGroup = this.getTrackedCodeViewGroupId();
 		if (trackedGroup !== undefined) {
 			return trackedGroup;
@@ -622,9 +683,57 @@ export class GraphView extends Disposable implements IRenView {
 		return SIDE_GROUP;
 	}
 
+	private resolveNodePayload(node: { id?: unknown; path?: unknown }): GraphNodePayload | undefined {
+		if (typeof node.id === 'string') {
+			const byId = this._currentGraph?.nodeById.get(node.id);
+			if (byId) {
+				return byId;
+			}
+		}
+		if (typeof node.path === 'string') {
+			const resource = this.safeParseUri(node.path);
+			if (resource) {
+				return this.getNodeForResource(resource);
+			}
+		}
+		return undefined;
+	}
+
+	private getNodeForResource(resource: URI): GraphNodePayload | undefined {
+		if (!this._currentGraph) {
+			return undefined;
+		}
+		return this._currentGraph.nodeByResourceKey.get(this.getResourceKey(resource));
+	}
+
+	private pickActiveCodeGroup(): GroupIdentifier | undefined {
+		const activeGroup = this.editorGroupsService.activeGroup;
+		if (!activeGroup) {
+			return undefined;
+		}
+		if (this.editorGroupsService.count <= 1) {
+			return undefined;
+		}
+		if (!this.groupSupportsCodeEditors(activeGroup)) {
+			return undefined;
+		}
+		return activeGroup.id;
+	}
+
+	private findEmptyCodeGroup(): GroupIdentifier | undefined {
+		const groups = this.editorGroupsService.groups;
+		for (let i = groups.length - 1; i >= 0; i--) {
+			const group = groups[i];
+			if (group.count === 0 && this.groupSupportsCodeEditors(group)) {
+				return group.id;
+			}
+		}
+		return undefined;
+	}
+
 	private getTrackedCodeViewGroupId(): GroupIdentifier | undefined {
 		if (this._codeViewGroupId !== undefined) {
-			if (this.isGroupVisible(this._codeViewGroupId)) {
+			if (this.isGroupPresent(this._codeViewGroupId) && this.groupSupportsCodeEditorsById(this._codeViewGroupId)) {
 				return this._codeViewGroupId;
 			}
 			this._codeViewGroupId = undefined;
@@ -637,22 +746,39 @@ export class GraphView extends Disposable implements IRenView {
 		return this._codeViewGroupId;
 	}
 
-	private isGroupVisible(groupId: GroupIdentifier): boolean {
-		return this.editorService.visibleEditorPanes.some(pane => pane.group.id === groupId);
+	private isGroupPresent(groupId: GroupIdentifier): boolean {
+		return this.editorGroupsService.groups.some(group => group.id === groupId);
 	}
 
 	private findExistingCodeViewGroup(): GroupIdentifier | undefined {
-		const panes = this.editorService.visibleEditorPanes;
-		if (panes.length <= 1) {
+		const groups = this.editorGroupsService.groups;
+		if (groups.length <= 1) {
 			return undefined;
 		}
-		for (const pane of panes) {
-			const control = pane.getControl();
-			if (control && (isCodeEditor(control) || isDiffEditor(control))) {
-				return pane.group.id;
+		const activeGroupId = this.editorGroupsService.activeGroup?.id;
+		for (const group of groups) {
+			if (group.id === activeGroupId) {
+				continue;
+			}
+			if (this.groupSupportsCodeEditors(group)) {
+				return group.id;
 			}
 		}
 		return undefined;
+	}
+
+	private groupSupportsCodeEditorsById(groupId: GroupIdentifier): boolean {
+		const group = this.editorGroupsService.groups.find(candidate => candidate.id === groupId);
+		return !!group && this.groupSupportsCodeEditors(group);
+	}
+
+	private groupSupportsCodeEditors(group: IEditorGroup): boolean {
+		const pane = group.activeEditorPane;
+		if (!pane) {
+			return true;
+		}
+		const control = pane.getControl();
+		return !!control && (isCodeEditor(control) || isDiffEditor(control));
 	}
 
 	private sanitizeSymbolNames(symbols: unknown): string[] {

@@ -15,6 +15,7 @@ export interface GraphNodePayload {
 	weight: number;
 	fanIn: number;
 	fanOut: number;
+	openable: boolean;
 }
 
 export type GraphEdgeKind = 'relative' | 'external' | 'sideEffect';

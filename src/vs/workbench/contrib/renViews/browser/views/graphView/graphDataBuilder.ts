@@ -97,6 +97,7 @@ export class GraphDataBuilder {
 			weight: number;
 			fanIn: number;
 			fanOut: number;
+			openable: boolean;
 		};
 
 		const nodes = new Map<string, MutableGraphNode>();
@@ -110,6 +111,9 @@ export class GraphDataBuilder {
 			const id = this.toNodeId(uri);
 			let node = nodes.get(id);
 			const isRoot = options.scopeMode !== 'workspace' && options.scopeRoots.has(this.context.getUriKey(uri));
+			const isExcluded = isExcludedPath(uri.path);
+			const isWithinWorkspace = this.context.isWithinWorkspace(uri);
+			const openable = isWithinWorkspace && !isExcluded;
 			if (!node) {
 				node = {
 					id,
@@ -118,12 +122,14 @@ export class GraphDataBuilder {
 					kind: isRoot ? 'root' : 'relative',
 					weight: 1,
 					fanIn: 0,
-					fanOut: 0
+					fanOut: 0,
+					openable
 				};
 				nodes.set(id, node);
 			} else if (isRoot && node.kind !== 'root') {
 				node.kind = 'root';
 			}
+			node.openable = node.openable && openable;
 			return node;
 		};
 
@@ -138,7 +144,8 @@ export class GraphDataBuilder {
 					kind: 'external',
 					weight: 1,
 					fanIn: 0,
-					fanOut: 0
+					fanOut: 0,
+					openable: false
 				};
 				nodes.set(id, node);
 			}

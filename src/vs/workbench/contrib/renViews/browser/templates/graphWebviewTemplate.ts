@@ -279,7 +279,8 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 							weight,
 							fanIn: node.fanIn !== undefined ? node.fanIn : 0,
 							fanOut: node.fanOut !== undefined ? node.fanOut : 0,
-							visualSize: computeSize(weight)
+							visualSize: computeSize(weight),
+							openable: node.openable !== undefined ? node.openable : true
 						},
 						classes: node.kind
 					};
