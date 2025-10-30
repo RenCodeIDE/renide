@@ -103,7 +103,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 	<body>
 		<div id="cy" role="presentation" aria-hidden="true"></div>
 		<div id="toolbar" aria-label="Graph controls">
-			<button id="selectFile" title="Select a file to visualize">Select File...</button>
+			<button id="selectFile" title="Select a target to visualize">Select Target...</button>
 			<button id="zoomIn" title="Zoom in">+</button>
 			<button id="zoomOut" title="Zoom out">-</button>
 		</div>
@@ -163,16 +163,16 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 							'background-color': '#4FC3F7',
 							'border-width': 2,
 							'border-color': '#0B1A2B',
-							'label': 'data(label)',
+							'label': 'data(displayLabel)',
 							'font-size': 12,
 							'font-weight': 600,
 							'color': '#0B1A2B',
 							'text-wrap': 'wrap',
-							'text-max-width': 160,
+							'text-max-width': 200,
 							'text-valign': 'center',
 							'text-halign': 'center',
-							'width': 80,
-							'height': 80
+							'width': 'data(visualSize)',
+							'height': 'data(visualSize)'
 						}},
 						{ selector: 'node.root', style: {
 							'background-color': '#FFB300',
@@ -243,16 +243,47 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				ensureCy();
 				cy.stop();
 				cy.elements().remove();
-				const nodes = (payload.nodes || []).map(node => ({
-					group: 'nodes',
-					data: {
-						id: node.id,
-						label: node.label,
-						path: node.path,
-						kind: node.kind
-					},
-					classes: node.kind
-				}));
+				const buildDisplayLabel = node => {
+					const fanIn = node.fanIn !== undefined ? node.fanIn : 0;
+					const fanOut = node.fanOut !== undefined ? node.fanOut : 0;
+					if (fanIn === 0 && fanOut === 0) {
+						return node.label;
+					}
+					return node.label + ' (in ' + fanIn + ' · out ' + fanOut + ')';
+				};
+
+				const nodePayloads = payload.nodes || [];
+				const weights = nodePayloads.map(node => Math.max(1, node.weight !== undefined ? node.weight : 1));
+				const maxWeight = weights.length ? Math.max(...weights) : 1;
+				const minWeight = weights.length ? Math.min(...weights) : 1;
+				const computeSize = weightValue => {
+					const weight = Math.max(1, weightValue || 1);
+					if (maxWeight === minWeight) {
+						return 90;
+					}
+					const normalized = (weight - minWeight) / (maxWeight - minWeight);
+					return 70 + normalized * 120;
+				};
+				const nodes = nodePayloads.map(node => {
+					const weightValue = node.weight !== undefined ? node.weight : 1;
+					const weight = Math.max(1, weightValue);
+					const displayLabel = buildDisplayLabel(node);
+					return {
+						group: 'nodes',
+						data: {
+							id: node.id,
+							label: node.label,
+							displayLabel,
+							path: node.path,
+							kind: node.kind,
+							weight,
+							fanIn: node.fanIn !== undefined ? node.fanIn : 0,
+							fanOut: node.fanOut !== undefined ? node.fanOut : 0,
+							visualSize: computeSize(weight)
+						},
+						classes: node.kind
+					};
+				});
 				const edges = (payload.edges || []).map(edge => ({
 					group: 'edges',
 					data: {
