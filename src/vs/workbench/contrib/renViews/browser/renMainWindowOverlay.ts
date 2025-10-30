@@ -1,9 +1,5 @@
-/*---------------------------------------------------------------------------------------------
- *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
- *--------------------------------------------------------------------------------------------*/
-
 import { DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
+import { getWindow } from '../../../../base/browser/dom.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IContextKeyService, IContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { RenViewManager, RenViewMode } from './managers/renViewManager.js';
@@ -70,8 +66,9 @@ export class RenMainWindowOverlay {
 			const customEvent = e as CustomEvent<'code' | 'preview' | 'graph'>;
 			this.switchToView(customEvent.detail);
 		};
-		document.addEventListener('ren-switch-view', handleCustomSwitch);
-		this._store.add(toDisposable(() => document.removeEventListener('ren-switch-view', handleCustomSwitch)));
+		const targetWindow = getWindow(this.container);
+		targetWindow.document.addEventListener('ren-switch-view', handleCustomSwitch);
+		this._store.add(toDisposable(() => targetWindow.document.removeEventListener('ren-switch-view', handleCustomSwitch)));
 	}
 
 	private switchToView(mode: RenViewMode): void {

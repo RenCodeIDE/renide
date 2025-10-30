@@ -58,6 +58,7 @@ module.exports.unicodeFilter = [
 	'!extensions/typescript-language-features/test-workspace/**',
 	'!extensions/vscode-api-tests/testWorkspace/**',
 	'!extensions/vscode-api-tests/testWorkspace2/**',
+	'!extensions/mermaid-chat-features/chat-webview-out/**',
 	'!extensions/**/dist/**',
 	'!extensions/**/out/**',
 	'!extensions/**/snippets/**',
@@ -67,6 +68,7 @@ module.exports.unicodeFilter = [
 	'!src/vs/base/browser/dompurify/**',
 	'!src/vs/workbench/services/keybinding/browser/keyboardLayouts/**',
 	'!src/vs/workbench/contrib/terminal/common/scripts/psreadline/**',
+	'!src/vs/workbench/contrib/renViews/browser/media/cytoscape.min.js',
 ];
 
 module.exports.indentationFilter = [
@@ -105,6 +107,7 @@ module.exports.indentationFilter = [
 	'!extensions/typescript-language-features/package-manager/node-maintainer/**',
 	'!extensions/markdown-math/notebook-out/**',
 	'!extensions/ipynb/notebook-out/**',
+	'!extensions/mermaid-chat-features/chat-webview-out/**',
 	'!extensions/vscode-api-tests/testWorkspace/**',
 	'!extensions/vscode-api-tests/testWorkspace2/**',
 	'!build/monaco/**',
@@ -133,6 +136,7 @@ module.exports.indentationFilter = [
 	'!src/vs/*/**/*.d.ts',
 	'!src/typings/**/*.d.ts',
 	'!extensions/**/*.d.ts',
+	'!src/vs/workbench/contrib/renViews/browser/media/cytoscape.min.js',
 	'!**/*.{svg,exe,png,bmp,jpg,scpt,bat,cmd,cur,ttf,woff,eot,md,ps1,psm1,template,yaml,yml,d.ts.recipe,ico,icns,plist,opus,admx,adml,wasm}',
 	'!build/{lib,download,linux,darwin}/**/*.js',
 	'!build/**/*.sh',
@@ -190,9 +194,11 @@ module.exports.copyrightFilter = [
 	'!extensions/simple-browser/media/codicon.css',
 	'!extensions/terminal-suggest/src/completions/upstream/**',
 	'!extensions/typescript-language-features/node-maintainer/**',
+	'!extensions/mermaid-chat-features/chat-webview-out/**',
 	'!extensions/html-language-features/server/src/modes/typescript/*',
 	'!extensions/*/server/bin/*',
 	'!src/vs/workbench/contrib/terminal/common/scripts/psreadline/**',
+	'!src/vs/workbench/contrib/renViews/browser/media/cytoscape.min.js',
 ];
 
 module.exports.tsFormattingFilter = [
