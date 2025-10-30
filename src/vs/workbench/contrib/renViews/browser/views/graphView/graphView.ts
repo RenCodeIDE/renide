@@ -32,6 +32,7 @@ import { GraphWorkspaceContext } from './graphContext.js';
 import { GraphDataBuilder } from './graphDataBuilder.js';
 import { GraphPickers } from './graphPickers.js';
 import { GraphEdgePayload, GraphMode, GraphNodePayload, GraphStatusLevel, GraphWebviewPayload } from './graphTypes.js';
+import { isExcludedPath } from './graphConstants.js';
 
 export class GraphView extends Disposable implements IRenView {
 	private _mainContainer: HTMLElement | null = null;
@@ -503,7 +504,7 @@ export class GraphView extends Disposable implements IRenView {
 			return;
 		}
 		if (!this.isResourceOpenable(resource, nodePayload)) {
-			await this.notifyUnopenable(resource, 'node');
+			await this.notifyUnopenable(resource, 'node', 'node-blocked');
 			return;
 		}
 		await this.openResourceInSideGroup(resource);
@@ -548,7 +549,7 @@ export class GraphView extends Disposable implements IRenView {
 			return;
 		}
 		if (!this.isResourceOpenable(resourceToOpen)) {
-			await this.notifyUnopenable(resourceToOpen, 'edge');
+			await this.notifyUnopenable(resourceToOpen, 'edge', 'edge-blocked');
 			return;
 		}
 
@@ -609,25 +610,33 @@ export class GraphView extends Disposable implements IRenView {
 		return undefined;
 	}
 
-	private async notifyUnopenable(resource: URI, context: 'node' | 'edge'): Promise<void> {
-		this.logService.info('[GraphView] skipping open for excluded resource', resource.toString(true), context);
+	private async notifyUnopenable(resource: URI, context: 'node' | 'edge', reason: string): Promise<void> {
+		this.logService.info('[GraphView] skipping open for resource', { resource: resource.toString(true), context, reason });
 		await this.sendStatus('Cannot open this item because it is excluded from the workspace.', 'warning', 4000);
 	}
 
 	private isResourceOpenable(resource: URI, nodePayload?: GraphNodePayload | null): boolean {
-		if (nodePayload) {
-			return nodePayload.openable;
-		}
-		const node = this.getNodeForResource(resource);
+		const node = nodePayload ?? this.getNodeForResource(resource);
 		if (node) {
-			return node.openable;
+			if (!node.openable) {
+				this.logService.info('[GraphView] resource flagged non-openable by node payload', resource.toString(true));
+			}
+			return !!node.openable;
+		}
+		if (!this.context.isWithinWorkspace(resource)) {
+			this.logService.info('[GraphView] resource outside workspace', resource.toString(true));
+			return false;
+		}
+		if (isExcludedPath(resource.path)) {
+			this.logService.info('[GraphView] resource matches excluded path', resource.toString(true));
+			return false;
 		}
 		return true;
 	}
 
 	private async openResourceInSideGroup(resource: URI, selection?: Range): Promise<void> {
 		if (!this.isResourceOpenable(resource)) {
-			await this.notifyUnopenable(resource, 'node');
+			await this.notifyUnopenable(resource, 'node', 'resource-blocked');
 			return;
 		}
 		let editorInput: IResourceEditorInput;
