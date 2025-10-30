@@ -252,7 +252,11 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 		}
 
 		this.logService.debug(`[qwen] including ${blocks.length} context blocks`);
-		return ['You are a coding assistant inside the editor. Use the following context when formulating your response:', ...blocks].join('\n\n');
+		return [
+			'You are an expert coding assistant embedded in the IDE. The code blocks below are the exact context the user means -- even if they refer to them with vague terms like "this", "the file", or "the function".',
+			'Ground every response in those blocks: explain behaviour, data structures, and error cases using only the provided code. Mention the relevant file or block when helpful, and if the answer cannot be derived from this context, say so explicitly before offering any speculation.',
+			...blocks
+		].join('\n\n');
 	}
 
 	private async loadEntryContent(entry: IChatRequestVariableEntry, token: CancellationToken): Promise<string | undefined> {
@@ -295,16 +299,16 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 			if (direct) {
 				return URI.isUri(direct) ? direct : URI.revive(direct as UriComponents);
 			}
-			const value = (entry as { value?: unknown }).value;
-			if (value && typeof value === 'object') {
-				if ('scheme' in value && typeof (value as { scheme?: unknown }).scheme === 'string') {
-					return URI.revive(value as UriComponents);
+			const rawValue = (entry as { value?: unknown }).value;
+			if (rawValue && typeof rawValue === 'object') {
+				const valueRecord = rawValue as Record<string, unknown>;
+				const schemeValue = valueRecord['scheme'];
+				if (typeof schemeValue === 'string') {
+					return URI.revive(valueRecord as unknown as UriComponents);
 				}
-				if ('uri' in value) {
-					const candidate = (value as { uri?: unknown }).uri;
-					if (candidate) {
-						return URI.isUri(candidate as unknown) ? candidate as URI : URI.revive(candidate as UriComponents);
-					}
+				const candidate = valueRecord['uri'];
+				if (candidate) {
+					return URI.isUri(candidate as unknown) ? candidate as URI : URI.revive(candidate as UriComponents);
 				}
 			}
 		} catch (error) {
@@ -323,9 +327,10 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 				range: Range.lift(loc.range)
 			};
 		}
-		if (value && typeof value === 'object' && 'uri' in value && 'range' in value) {
-			const candidateUri = (value as { uri?: unknown }).uri;
-			const candidateRange = (value as { range?: unknown }).range;
+		if (value && typeof value === 'object') {
+			const recordValue = value as Record<string, unknown>;
+			const candidateUri = recordValue['uri'];
+			const candidateRange = recordValue['range'];
 			if (candidateUri && candidateRange) {
 				const revivedUri = URI.isUri(candidateUri as unknown) ? candidateUri as URI : URI.revive(candidateUri as UriComponents);
 				return {
