@@ -1,17 +1,9 @@
-/*---------------------------------------------------------------------------------------------
- *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
- *--------------------------------------------------------------------------------------------*/
-
 import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { getWindow } from '../../../../../base/browser/dom.js';
-// import { sanitizeHtml } from '../../../../../base/browser/domSanitize.js';
 import { ILogService } from '../../../../../platform/log/common/log.js';
-// import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
 import { IWebviewService, IWebviewElement } from '../../../webview/browser/webview.js';
 import { ensureCodeWindow, CodeWindow } from '../../../../../base/browser/window.js';
 import { FileAccess } from '../../../../../base/common/network.js';
-// import { URI } from '../../../../../base/common/uri.js';
 import { joinPath } from '../../../../../base/common/resources.js';
 import { asWebviewUri } from '../../../webview/common/webview.js';
 import { generateUuid } from '../../../../../base/common/uuid.js';
