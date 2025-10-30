@@ -506,7 +506,8 @@ export class LanguageModelsService implements ILanguageModelsService {
 		this._logService.trace('[LM] registering language model provider', vendor, provider);
 
 		if (!this._vendors.has(vendor)) {
-			throw new Error(`Chat model provider uses UNKNOWN vendor ${vendor}.`);
+			this._logService.info(`[LM] creating implicit vendor entry for ${vendor}`);
+			this._vendors.set(vendor, { vendor, displayName: vendor, managementCommand: undefined, when: undefined });
 		}
 		if (this._providers.has(vendor)) {
 			throw new Error(`Chat model provider for vendor ${vendor} is already registered.`);
