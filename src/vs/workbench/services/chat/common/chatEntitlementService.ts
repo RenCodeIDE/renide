@@ -179,13 +179,22 @@ export function isProUser(chatEntitlement: ChatEntitlement): boolean {
 
 //#region Service Implementation
 
+type ProductProviderConfig = {
+	default?: { id?: string; name?: string };
+	enterprise?: { id?: string; name?: string };
+};
+
+const providerConfig: ProductProviderConfig = product.defaultChatAgent?.provider ?? {};
 const defaultChat = {
 	extensionId: product.defaultChatAgent?.extensionId ?? '',
 	chatExtensionId: product.defaultChatAgent?.chatExtensionId ?? '',
 	upgradePlanUrl: product.defaultChatAgent?.upgradePlanUrl ?? '',
-	provider: product.defaultChatAgent?.provider ?? { default: { id: '' }, enterprise: { id: '' } },
+	provider: {
+		default: { id: '', name: '', ...(providerConfig.default ?? {}) },
+		enterprise: { id: '', name: '', ...(providerConfig.enterprise ?? {}) }
+	},
 	providerUriSetting: product.defaultChatAgent?.providerUriSetting ?? '',
-	providerScopes: product.defaultChatAgent?.providerScopes ?? [[]],
+	providerScopes: product.defaultChatAgent?.providerScopes && product.defaultChatAgent.providerScopes.length > 0 ? product.defaultChatAgent.providerScopes : [[]],
 	entitlementUrl: product.defaultChatAgent?.entitlementUrl ?? '',
 	entitlementSignupLimitedUrl: product.defaultChatAgent?.entitlementSignupLimitedUrl ?? '',
 	completionsAdvancedSetting: product.defaultChatAgent?.completionsAdvancedSetting ?? '',
@@ -281,6 +290,18 @@ export class ChatEntitlementService extends Disposable implements IChatEntitleme
 
 		if (!productService.defaultChatAgent) {
 			return; // we need a default chat agent configured going forward from here
+		}
+
+		if (!defaultChat.entitlementUrl) {
+			ChatEntitlementContextKeys.Setup.installed.bindTo(this.contextKeyService).set(true);
+			ChatEntitlementContextKeys.Setup.disabled.bindTo(this.contextKeyService).set(false);
+			ChatEntitlementContextKeys.Setup.hidden.bindTo(this.contextKeyService).set(false);
+			ChatEntitlementContextKeys.Setup.registered.bindTo(this.contextKeyService).set(true);
+			ChatEntitlementContextKeys.Setup.later.bindTo(this.contextKeyService).set(false);
+			ChatEntitlementContextKeys.Entitlement.planFree.bindTo(this.contextKeyService).set(true);
+			ChatEntitlementContextKeys.Entitlement.canSignUp.bindTo(this.contextKeyService).reset();
+			this.anonymousContextKey.set(false);
+			return;
 		}
 
 		const context = this.context = new Lazy(() => this._register(instantiationService.createInstance(ChatEntitlementContext)));

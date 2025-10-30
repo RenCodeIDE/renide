@@ -1648,11 +1648,20 @@ export function stringifyItem(item: IChatRequestViewModel | IChatResponseViewMod
 
 // --- Title Bar Chat Controls
 
+type ProductProviderConfig = {
+	default?: { id?: string; name?: string };
+	enterprise?: { id?: string; name?: string };
+};
+
+const providerConfig: ProductProviderConfig = product.defaultChatAgent?.provider ?? {};
 const defaultChat = {
 	documentationUrl: product.defaultChatAgent?.documentationUrl ?? '',
 	manageSettingsUrl: product.defaultChatAgent?.manageSettingsUrl ?? '',
 	managePlanUrl: product.defaultChatAgent?.managePlanUrl ?? '',
-	provider: product.defaultChatAgent?.provider ?? { enterprise: { id: '' } },
+	provider: {
+		enterprise: { id: '', ...(providerConfig.enterprise ?? {}) },
+		default: { id: '', ...(providerConfig.default ?? {}) }
+	},
 	completionsAdvancedSetting: product.defaultChatAgent?.completionsAdvancedSetting ?? '',
 	completionsMenuCommand: product.defaultChatAgent?.completionsMenuCommand ?? '',
 };

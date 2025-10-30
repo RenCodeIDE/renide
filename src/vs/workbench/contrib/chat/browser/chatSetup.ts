@@ -81,6 +81,14 @@ import { NewSymbolName, NewSymbolNameTriggerKind } from '../../../../editor/comm
 import { ITextModel } from '../../../../editor/common/model.js';
 import { IRange } from '../../../../editor/common/core/range.js';
 
+type ProductProviderConfig = {
+	default?: { id?: string; name?: string };
+	enterprise?: { id?: string; name?: string };
+	apple?: { id?: string; name?: string };
+	google?: { id?: string; name?: string };
+};
+
+const providerConfig: ProductProviderConfig = product.defaultChatAgent?.provider ?? {};
 const defaultChat = {
 	extensionId: product.defaultChatAgent?.extensionId ?? '',
 	chatExtensionId: product.defaultChatAgent?.chatExtensionId ?? '',
@@ -89,9 +97,14 @@ const defaultChat = {
 	publicCodeMatchesUrl: product.defaultChatAgent?.publicCodeMatchesUrl ?? '',
 	manageOveragesUrl: product.defaultChatAgent?.manageOverageUrl ?? '',
 	upgradePlanUrl: product.defaultChatAgent?.upgradePlanUrl ?? '',
-	provider: product.defaultChatAgent?.provider ?? { default: { id: '', name: '' }, enterprise: { id: '', name: '' }, apple: { id: '', name: '' }, google: { id: '', name: '' } },
+	provider: {
+		default: { id: '', name: '', ...(providerConfig.default ?? {}) },
+		enterprise: { id: '', name: '', ...(providerConfig.enterprise ?? {}) },
+		apple: { id: '', name: '', ...(providerConfig.apple ?? {}) },
+		google: { id: '', name: '', ...(providerConfig.google ?? {}) }
+	},
 	providerUriSetting: product.defaultChatAgent?.providerUriSetting ?? '',
-	providerScopes: product.defaultChatAgent?.providerScopes ?? [[]],
+	providerScopes: product.defaultChatAgent?.providerScopes && product.defaultChatAgent.providerScopes.length > 0 ? product.defaultChatAgent.providerScopes : [[]],
 	manageSettingsUrl: product.defaultChatAgent?.manageSettingsUrl ?? '',
 	completionsAdvancedSetting: product.defaultChatAgent?.completionsAdvancedSetting ?? '',
 	walkthroughCommand: product.defaultChatAgent?.walkthroughCommand ?? '',
@@ -145,7 +158,8 @@ class SetupAgent extends Disposable implements IChatAgentImplementation {
 					break;
 			}
 
-			return SetupAgent.doRegisterAgent(instantiationService, chatAgentService, id, `${defaultChat.provider.default.name} Copilot` /* Do NOT change, this hides the username altogether in Chat */, true, description, location, mode, context, controller);
+			const displayName = defaultChat.provider.default.name ? `${defaultChat.provider.default.name} Agent` : 'local agent';
+			return SetupAgent.doRegisterAgent(instantiationService, chatAgentService, id, displayName /* Keep user label generic */, true, description, location, mode, context, controller);
 		});
 	}
 
