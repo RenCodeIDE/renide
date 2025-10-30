@@ -178,6 +178,15 @@ export default tseslint.config(
 			]
 		}
 	},
+	// Disable license header rule for renViews browser sources
+	{
+		files: [
+			'src/vs/workbench/contrib/renViews/browser/**/*.ts',
+		],
+		rules: {
+			'header/header': 'off',
+		},
+	},
 	// Disallow 'in' operator except in type predicates
 	{
 		files: [
