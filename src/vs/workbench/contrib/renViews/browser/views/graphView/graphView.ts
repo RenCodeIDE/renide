@@ -19,10 +19,12 @@ import { IUriIdentityService } from '../../../../../../platform/uriIdentity/comm
 import { IQuickInputService, IQuickPickItem } from '../../../../../../platform/quickinput/common/quickInput.js';
 import { ISearchService } from '../../../../../services/search/common/search.js';
 import { IEditorService, SIDE_GROUP } from '../../../../../services/editor/common/editorService.js';
+import { GroupIdentifier, SideBySideEditor } from '../../../../../common/editor.js';
 import { IResourceEditorInput, ITextEditorOptions, TextEditorSelectionRevealType } from '../../../../../../platform/editor/common/editor.js';
 import { Range } from '../../../../../../editor/common/core/range.js';
 import { escapeRegExpCharacters } from '../../../../../../base/common/strings.js';
 import { URI } from '../../../../../../base/common/uri.js';
+import { isCodeEditor, isDiffEditor } from '../../../../../../editor/browser/editorBrowser.js';
 
 import { buildGraphWebviewHTML } from '../../templates/graphWebviewTemplate.js';
 import { GraphWorkspaceContext } from './graphContext.js';
@@ -50,6 +52,7 @@ export class GraphView extends Disposable implements IRenView {
 			edgeById: Map<string, GraphEdgePayload>;
 		}
 		| undefined;
+	private _codeViewGroupId: GroupIdentifier | undefined;
 
 	private readonly context: GraphWorkspaceContext;
 	private readonly dataBuilder: GraphDataBuilder;
@@ -466,12 +469,14 @@ export class GraphView extends Disposable implements IRenView {
 		if (!rawNode || typeof rawNode !== 'object') {
 			return;
 		}
-		const node = rawNode as { path?: unknown; kind?: unknown };
+		const node = rawNode as { id?: unknown; path?: unknown; kind?: unknown };
 		if (node.kind === 'external') {
 			return;
 		}
-		const resource = this.safeParseUri(node.path);
+		const fallbackNode = typeof node.id === 'string' ? this._currentGraph?.nodeById.get(node.id) : undefined;
+		const resource = this.safeParseUri(node.path) ?? this.safeParseUri(fallbackNode?.path);
 		if (!resource) {
+			this.logService.warn('[GraphView] node tap missing resource', node);
 			return;
 		}
 		await this.openResourceInSideGroup(resource);
@@ -532,15 +537,45 @@ export class GraphView extends Disposable implements IRenView {
 	}
 
 	private safeParseUri(value: unknown): URI | undefined {
-		if (typeof value !== 'string' || !value || !value.includes('://')) {
+		if (!value) {
 			return undefined;
 		}
-		try {
-			return URI.parse(value);
-		} catch (error) {
-			this.logService.debug('[GraphView] failed to parse URI from graph event', value, error);
-			return undefined;
+		if (value instanceof URI) {
+			return value;
 		}
+		if (typeof value === 'string') {
+			if (value.includes('://')) {
+				try {
+					return URI.parse(value);
+				} catch (error) {
+					this.logService.debug('[GraphView] failed to parse URI from graph event', value, error);
+				}
+			}
+			const workspaceRoot = this.context.getDefaultWorkspaceRoot();
+			if (workspaceRoot) {
+				const normalized = value.startsWith('/') ? value.slice(1) : value;
+				try {
+					return this.context.extUri.joinPath(workspaceRoot, normalized);
+				} catch (error) {
+					this.logService.debug('[GraphView] failed to join workspace path for graph event', value, error);
+				}
+			}
+			const isWindowsAbsolute = /^[a-zA-Z]:[\\/]/.test(value);
+			if (value.startsWith('/') || isWindowsAbsolute) {
+				try {
+					return URI.file(value);
+				} catch (error) {
+					this.logService.debug('[GraphView] failed to treat absolute path as file URI', value, error);
+				}
+			}
+			const absoluteCandidate = value.startsWith('/') ? value : `/${value}`;
+			try {
+				return URI.file(absoluteCandidate);
+			} catch (error) {
+				this.logService.debug('[GraphView] failed to treat path as file URI', value, error);
+			}
+		}
+		return undefined;
 	}
 
 	private async openResourceInSideGroup(resource: URI, selection?: Range): Promise<void> {
@@ -559,11 +594,65 @@ export class GraphView extends Disposable implements IRenView {
 		} else {
 			editorInput = { resource };
 		}
+
+		const preferredGroup = this.resolvePreferredEditorGroup(resource);
 		try {
-			await this.editorService.openEditor(editorInput, SIDE_GROUP);
+			const editorPane = await this.editorService.openEditor(editorInput, preferredGroup);
+			const groupId = editorPane?.group?.id;
+			if (groupId !== undefined) {
+				this._codeViewGroupId = groupId;
+			}
+			this.logService.info('[GraphView] opened editor', resource.toString(true), groupId ?? preferredGroup);
 		} catch (error) {
 			this.logService.error('[GraphView] failed to open editor', resource.toString(true), error);
 		}
+	}
+
+	private resolvePreferredEditorGroup(resource: URI): GroupIdentifier | typeof SIDE_GROUP {
+		const existingEditors = this.editorService.findEditors(resource, { supportSideBySide: SideBySideEditor.ANY });
+		if (existingEditors.length > 0) {
+			return existingEditors[0].groupId;
+		}
+
+		const trackedGroup = this.getTrackedCodeViewGroupId();
+		if (trackedGroup !== undefined) {
+			return trackedGroup;
+		}
+
+		return SIDE_GROUP;
+	}
+
+	private getTrackedCodeViewGroupId(): GroupIdentifier | undefined {
+		if (this._codeViewGroupId !== undefined) {
+			if (this.isGroupVisible(this._codeViewGroupId)) {
+				return this._codeViewGroupId;
+			}
+			this._codeViewGroupId = undefined;
+		}
+
+		const existingGroup = this.findExistingCodeViewGroup();
+		if (existingGroup !== undefined) {
+			this._codeViewGroupId = existingGroup;
+		}
+		return this._codeViewGroupId;
+	}
+
+	private isGroupVisible(groupId: GroupIdentifier): boolean {
+		return this.editorService.visibleEditorPanes.some(pane => pane.group.id === groupId);
+	}
+
+	private findExistingCodeViewGroup(): GroupIdentifier | undefined {
+		const panes = this.editorService.visibleEditorPanes;
+		if (panes.length <= 1) {
+			return undefined;
+		}
+		for (const pane of panes) {
+			const control = pane.getControl();
+			if (control && (isCodeEditor(control) || isDiffEditor(control))) {
+				return pane.group.id;
+			}
+		}
+		return undefined;
 	}
 
 	private sanitizeSymbolNames(symbols: unknown): string[] {
