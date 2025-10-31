@@ -223,11 +223,30 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				background: var(--vscode-editorHoverWidget-background, rgba(158, 158, 158, 0.8));
 				color: var(--vscode-editorHoverWidget-foreground, #000000);
 			}
+
+			#heatmapSummary {
+				position: absolute;
+				top: 60px;
+				left: 12px;
+				right: 12px;
+				padding: 6px 10px;
+				border-radius: 6px;
+				font-size: 12px;
+				background: var(--vscode-editorWidget-background, rgba(32, 32, 32, 0.86));
+				color: var(--vscode-editorWidget-foreground, #ffffff);
+				display: none;
+				z-index: 5;
+			}
+
+			#heatmapSummary.visible {
+				display: block;
+			}
 		</style>
 	</head>
 	<body>
 		<div id="cy" role="presentation" aria-hidden="true"></div>
 		<div id="legend" aria-live="polite" aria-label="Architecture legend"></div>
+		<div id="heatmapSummary" aria-live="polite" aria-label="Git heatmap summary"></div>
 		<div id="toolbar" aria-label="Graph controls">
 			<button id="selectFile" title="Select a target to visualize">Select Target...</button>
 			<button id="toggleSelectMode" title="Highlight a node and its connections">Select Nodes</button>
@@ -241,11 +260,14 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			const vscode = acquireVsCodeApi();
 			let cy;
 			let autoClearHandle = undefined;
-			const statusEl = document.getElementById('status');
-			const legendEl = document.getElementById('legend');
-		const selectModeButton = document.getElementById('toggleSelectMode');
-		let selectionMode = false;
-		let highlightedNodeId = null;
+		const statusEl = document.getElementById('status');
+		const legendEl = document.getElementById('legend');
+	const heatmapSummaryEl = document.getElementById('heatmapSummary');
+	const selectModeButton = document.getElementById('toggleSelectMode');
+	let selectionMode = false;
+	let highlightedNodeId = null;
+	let heatmapMode = false;
+	let heatmapSelection = null;
 		const send = (type, payload) => {
 			try {
 				vscode.postMessage({ type, payload });
@@ -575,6 +597,185 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				}
 			};
 
+			const setHeatmapSummary = heatmap => {
+				if (!heatmapSummaryEl) {
+					return;
+				}
+				if (!heatmap) {
+					heatmapSummaryEl.classList.remove('visible');
+					heatmapSummaryEl.textContent = '';
+					return;
+				}
+				const parts = [];
+				if (typeof heatmap.description === 'string' && heatmap.description.trim()) {
+					parts.push(heatmap.description.trim());
+				}
+				if (Array.isArray(heatmap.summary) && heatmap.summary.length) {
+					parts.push(...heatmap.summary);
+				}
+				if (typeof heatmap.normalization === 'string' && heatmap.normalization.trim()) {
+					parts.push(heatmap.normalization.trim());
+				}
+				heatmapSummaryEl.textContent = parts.join(' • ');
+				heatmapSummaryEl.classList.add('visible');
+			};
+
+			const computeHeatmapColor = (value, scale) => {
+				const min = scale && typeof scale.min === 'number' ? scale.min : 0;
+				const max = scale && typeof scale.max === 'number' ? scale.max : 0;
+				if (!Number.isFinite(value) || value <= 0 || max <= 0 || min === max) {
+					return 'rgba(52, 52, 58, 0.35)';
+				}
+				const clamped = Math.max(0, Math.min(1, (value - min) / Math.max(max - min, 1e-6)));
+				const base = [40, 42, 52];
+				const mid = [239, 108, 0];
+				const peak = [255, 214, 102];
+				const mix = (a, b, t) => Math.round(a + (b - a) * t);
+				const pivot = 0.65;
+				let rgb;
+				if (clamped <= pivot) {
+					const t = clamped / pivot;
+					rgb = [mix(base[0], mid[0], t), mix(base[1], mid[1], t), mix(base[2], mid[2], t)];
+				} else {
+					const t = (clamped - pivot) / (1 - pivot);
+					rgb = [mix(mid[0], peak[0], t), mix(mid[1], peak[1], t), mix(mid[2], peak[2], t)];
+				}
+				return 'rgb(' + rgb[0] + ', ' + rgb[1] + ', ' + rgb[2] + ')';
+			};
+
+			const clearHeatmapState = notify => {
+				heatmapSelection = null;
+				if (cy) {
+					cy.batch(() => {
+						cy.nodes('.heatmap-cell').removeClass('highlight dimmed');
+						cy.nodes('.heatmap-label').removeClass('highlight');
+					});
+				}
+				if (notify) {
+					send('REN_GRAPH_EVT', { type: 'heatmap-selection-cleared' });
+				}
+			};
+
+			const applyHeatmapSelection = node => {
+				if (!node || !cy) {
+					return;
+				}
+				const row = node.data('row');
+				const column = node.data('column');
+				heatmapSelection = node;
+				cy.batch(() => {
+					cy.nodes('.heatmap-cell').forEach(cell => {
+						if (cell.id() === node.id()) {
+							cell.removeClass('dimmed');
+							cell.addClass('highlight');
+							return;
+						}
+						const sameLine = cell.data('row') === row || cell.data('column') === column;
+						cell.toggleClass('dimmed', !sameLine);
+						cell.removeClass('highlight');
+					});
+					cy.nodes('.heatmap-label').forEach(label => {
+						const index = label.data('index');
+						if (label.hasClass('row')) {
+							label.toggleClass('highlight', index === row);
+						} else {
+							label.toggleClass('highlight', index === column);
+						}
+					});
+				});
+			};
+
+			const renderHeatmap = heatmap => {
+				ensureCy();
+				heatmapMode = true;
+				selectionMode = false;
+				updateSelectModeButton();
+				clearSelectionHighlight(false);
+				if (selectModeButton) {
+					selectModeButton.disabled = true;
+				}
+				setHeatmapSummary(heatmap);
+				if (legendEl) {
+					legendEl.classList.remove('visible');
+					legendEl.innerHTML = '';
+				}
+				cy.stop();
+				cy.elements().remove();
+				const modules = Array.isArray(heatmap?.modules) ? heatmap.modules : [];
+				if (!modules.length) {
+					cy.reset();
+					return;
+				}
+				const spacing = modules.length > 60 ? 26 : 34;
+				const cellSize = Math.max(18, spacing - 6);
+				cy.style()
+					.selector('node.heatmap-cell')
+					.style('width', cellSize)
+					.style('height', cellSize)
+					.update();
+				const startX = 140;
+				const startY = 140;
+				const labelGap = 70;
+				const mirror = new Map();
+				for (const cell of Array.isArray(heatmap.cells) ? heatmap.cells : []) {
+					if (typeof cell.row !== 'number' || typeof cell.column !== 'number') {
+						continue;
+					}
+					const normalized = typeof cell.normalizedWeight === 'number' ? cell.normalizedWeight : (typeof cell.normalized === 'number' ? cell.normalized : 0);
+					const pack = {
+						normalized,
+						weight: typeof cell.weight === 'number' ? cell.weight : 0,
+						commitCount: typeof cell.commitCount === 'number' ? cell.commitCount : 0,
+						commits: Array.isArray(cell.commits) ? cell.commits : []
+					};
+					mirror.set(cell.row + ':' + cell.column, pack);
+					if (cell.row !== cell.column) {
+						mirror.set(cell.column + ':' + cell.row, pack);
+					}
+				}
+				const elements = [];
+				modules.forEach((name, index) => {
+					elements.push({
+						data: { id: 'heatmap-row-' + index, label: name, index, type: 'row' },
+						classes: 'heatmap-label row',
+						position: { x: startX - labelGap, y: startY + index * spacing }
+					});
+					elements.push({
+						data: { id: 'heatmap-column-' + index, label: name, index, type: 'column' },
+						classes: 'heatmap-label column',
+						position: { x: startX + index * spacing, y: startY - labelGap }
+					});
+				});
+				for (let row = 0; row < modules.length; row++) {
+					for (let column = 0; column < modules.length; column++) {
+						const key = row + ':' + column;
+						const entry = mirror.get(key);
+						const normalized = entry?.normalized ?? 0;
+						const color = computeHeatmapColor(normalized, heatmap.colorScale ?? {});
+						elements.push({
+							data: {
+								id: 'heatmap-cell-' + row + '-' + column,
+								row,
+								column,
+								normalized,
+								normalizedWeight: normalized,
+								weight: entry?.weight ?? 0,
+								commitCount: entry?.commitCount ?? 0,
+								commits: entry?.commits ?? [],
+								color
+							},
+							classes: 'heatmap-cell',
+							position: { x: startX + column * spacing, y: startY + row * spacing }
+						});
+					}
+				}
+				cy.add(elements);
+				cy.style().selector('node.heatmap-cell').style('background-color', 'data(color)').update();
+				cy.layout({ name: 'preset' }).run();
+				cy.fit(cy.elements(), 80);
+				clearHeatmapState(false);
+			};
+
 			const ensureCy = () => {
 				if (cy) {
 					return;
@@ -730,6 +931,47 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					'opacity': 0.1,
 					'text-opacity': 0.1
 				}}
+				,
+				{ selector: 'node.heatmap-cell', style: {
+					'width': 28,
+					'height': 28,
+					'shape': 'round-rectangle',
+					'background-color': 'data(color)',
+					'border-width': 1,
+					'border-color': '#3d1f1f',
+					'label': '',
+					'opacity': 1
+				}},
+				{ selector: 'node.heatmap-cell.highlight', style: {
+					'border-width': 2,
+					'border-color': '#ffe082',
+					'background-color': 'data(color)',
+					'opacity': 1
+				}},
+				{ selector: 'node.heatmap-cell.dimmed', style: {
+					'opacity': 0.12
+				}},
+				{ selector: 'node.heatmap-label', style: {
+					'background-opacity': 0,
+					'label': 'data(label)',
+					'color': '#ECEFF1',
+					'font-size': 11,
+					'font-weight': 600,
+					'text-halign': 'center',
+					'text-valign': 'center',
+					'width': 1,
+					'height': 1
+				}},
+				{ selector: 'node.heatmap-label.highlight', style: {
+					'color': '#FFE082'
+				}},
+				{ selector: 'node.heatmap-label.row', style: {
+					'text-halign': 'right'
+				}},
+				{ selector: 'node.heatmap-label.column', style: {
+					'text-valign': 'bottom',
+					'text-rotation': '270deg'
+				}}
 					],
 					wheelSensitivity: 0.2,
 					minZoom: 0.1,
@@ -737,8 +979,20 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				});
 
 				cy.on('tap', 'node', evt => {
+					const node = evt.target;
+					if (heatmapMode) {
+						if (!node.hasClass('heatmap-cell')) {
+							return;
+						}
+						if (heatmapSelection && heatmapSelection.id() === node.id()) {
+							clearHeatmapState(true);
+						} else {
+							applyHeatmapSelection(node);
+							send('REN_GRAPH_EVT', { type: 'heatmap-cell', data: node.data() });
+						}
+						return;
+					}
 					if (selectionMode) {
-						const node = evt.target;
 						if (highlightedNodeId === node.id()) {
 							clearSelectionHighlight(true);
 						} else {
@@ -747,21 +1001,39 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 						}
 						return;
 					}
-					send('REN_GRAPH_EVT', { type: 'node-tap', data: evt.target.data() });
+					send('REN_GRAPH_EVT', { type: 'node-tap', data: node.data() });
 				});
 				cy.on('tap', 'edge', evt => {
-					if (selectionMode) {
+					if (heatmapMode || selectionMode) {
 						return;
 					}
 					send('REN_GRAPH_EVT', { type: 'edge-tap', data: evt.target.data() });
 				});
 				cy.on('tap', evt => {
+					if (heatmapMode) {
+						if (evt.target === cy) {
+							clearHeatmapState(true);
+						}
+						return;
+					}
 					if (!selectionMode) {
 						return;
 					}
 					if (evt.target === cy) {
 						clearSelectionHighlight(true);
 					}
+				});
+				cy.on('mouseover', 'node.heatmap-cell', evt => {
+					if (!heatmapMode) {
+						return;
+					}
+					send('REN_GRAPH_EVT', { type: 'heatmap-hover', data: evt.target.data() });
+				});
+				cy.on('mouseout', 'node.heatmap-cell', () => {
+					if (!heatmapMode) {
+						return;
+					}
+					send('REN_GRAPH_EVT', { type: 'heatmap-selection-cleared' });
 				});
 			};
 
@@ -784,6 +1056,16 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				clearSelectionHighlight();
 				cy.stop();
 				cy.elements().remove();
+				if (payload.mode === 'gitHeatmap' && payload.heatmap) {
+					renderHeatmap(payload.heatmap);
+					return;
+				}
+				heatmapMode = false;
+				heatmapSelection = null;
+				setHeatmapSummary(null);
+				if (selectModeButton) {
+					selectModeButton.disabled = false;
+				}
 				const selectButton = document.getElementById('selectFile');
 				if (selectButton) {
 					if (payload.mode === 'architecture') {

@@ -23,6 +23,13 @@ import { MonitorXChangelogViewPane } from './views/monitorXChangelogViewPane.js'
 import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
 import { IRenWorkspaceStore, IMonitorXChangelogEntryInput } from '../common/renWorkspaceStore.js';
 import './renWorkspaceStore.js';
+import { isWeb } from '../../../../base/common/platform.js';
+import { registerSingleton, InstantiationType } from '../../../../platform/instantiation/common/extensions.js';
+import { IGitHeatmapService, NullGitHeatmapService } from '../../../../platform/gitHeatmap/common/gitHeatmapService.js';
+
+if (isWeb) {
+	registerSingleton(IGitHeatmapService, NullGitHeatmapService, InstantiationType.Delayed);
+}
 
 export class RenViewsContribution implements IWorkbenchContribution {
 	static readonly ID = 'ren.views.contribution';

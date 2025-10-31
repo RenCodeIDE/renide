@@ -42,6 +42,56 @@ export interface GraphEdgePayload {
 	category?: string;
 }
 
+export type GitHeatmapGranularity = 'topLevel' | 'twoLevel' | 'file';
+
+export interface GitHeatmapCommitFile {
+	path: string;
+	additions: number;
+	deletions: number;
+}
+
+export interface GitHeatmapCommitSummary {
+	hash: string;
+	message: string;
+	author: string;
+	authorEmail?: string;
+	timestamp: number;
+	modules: string[];
+	churn: number;
+	files: GitHeatmapCommitFile[];
+}
+
+export interface GitHeatmapCell {
+	row: number;
+	column: number;
+	weight: number;
+	normalizedWeight: number;
+	commitCount: number;
+	commits: GitHeatmapCommitSummary[];
+}
+
+export interface GitHeatmapScale {
+	min: number;
+	median: number;
+	max: number;
+}
+
+export interface GitHeatmapPayload {
+	modules: string[];
+	granularity: GitHeatmapGranularity;
+	windowDays: number;
+	totalCommits: number;
+	consideredCommits: number;
+	generationStartedAt: number;
+	churn: number[];
+	cells: GitHeatmapCell[];
+	colorScale: GitHeatmapScale;
+	summary: string[];
+	description: string;
+	normalization: string;
+	filters: string[];
+}
+
 export interface GraphWebviewPayload {
 	nodes: GraphNodePayload[];
 	edges: GraphEdgePayload[];
@@ -50,6 +100,7 @@ export interface GraphWebviewPayload {
 	warnings?: string[];
 	generatedAt?: number;
 	metadata?: Record<string, unknown>;
+	heatmap?: GitHeatmapPayload;
 }
 
 export interface ImportDescriptor {
@@ -60,7 +111,7 @@ export interface ImportDescriptor {
 	isSideEffectOnly: boolean;
 }
 
-export type GraphMode = 'file' | 'folder' | 'workspace' | 'architecture';
+export type GraphMode = 'file' | 'folder' | 'workspace' | 'architecture' | 'gitHeatmap';
 
 export type GraphStatusLevel = 'info' | 'warning' | 'error' | 'loading' | 'success';
 

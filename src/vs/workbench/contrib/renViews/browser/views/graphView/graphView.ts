@@ -33,9 +33,10 @@ import { buildGraphWebviewHTML } from '../../templates/graphWebviewTemplate.js';
 import { GraphWorkspaceContext } from './graphContext.js';
 import { GraphDataBuilder } from './graphDataBuilder.js';
 import { GraphPickers } from './graphPickers.js';
-import { GraphEdgePayload, GraphMode, GraphNodePayload, GraphStatusLevel, GraphWebviewPayload } from './graphTypes.js';
+import { GitHeatmapCommitSummary, GitHeatmapGranularity, GitHeatmapPayload, GraphEdgePayload, GraphMode, GraphNodePayload, GraphStatusLevel, GraphWebviewPayload } from './graphTypes.js';
 import { isExcludedPath } from './graphConstants.js';
 import { ViewButtons } from '../../components/viewButtons.js';
+import { IGitHeatmapService } from '../../../../../../platform/gitHeatmap/common/gitHeatmapService.js';
 
 export class GraphView extends Disposable implements IRenView {
 	private _mainContainer: HTMLElement | null = null;
@@ -62,6 +63,16 @@ export class GraphView extends Disposable implements IRenView {
 	private _codeViewGroupId: GroupIdentifier | undefined;
 	private _viewButtons: ViewButtons | null = null;
 	private _selectionModeEnabled = false;
+	private _heatmapGranularity: GitHeatmapGranularity = 'topLevel';
+	private _heatmapWindowDays = 120;
+	private _heatmapControls: {
+		container: HTMLElement;
+		granularitySelect: HTMLSelectElement;
+		windowSelect: HTMLSelectElement;
+		summary: HTMLElement;
+	} | null = null;
+	private _latestHeatmap: GitHeatmapPayload | null = null;
+	private _heatmapRefreshQueued = false;
 
 	private readonly context: GraphWorkspaceContext;
 	private readonly dataBuilder: GraphDataBuilder;
@@ -78,11 +89,12 @@ export class GraphView extends Disposable implements IRenView {
 		@IEditorService private readonly editorService: IEditorService,
 		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
 		@ICommandService private readonly _commandService: ICommandService,
-		@ILanguageFeaturesService private readonly _languageFeaturesService: ILanguageFeaturesService
+		@ILanguageFeaturesService private readonly _languageFeaturesService: ILanguageFeaturesService,
+		@IGitHeatmapService gitHeatmapService: IGitHeatmapService
 	) {
 		super();
 		this.context = new GraphWorkspaceContext(workspaceService, uriIdentityService);
-		this.dataBuilder = new GraphDataBuilder(this.logService, this.fileService, searchService, this.context, this._commandService, this._languageFeaturesService);
+		this.dataBuilder = new GraphDataBuilder(this.logService, this.fileService, searchService, this.context, this._commandService, this._languageFeaturesService, gitHeatmapService);
 		this.pickers = new GraphPickers(this.quickInputService, searchService, this.fileService, this.logService, this.context);
 	}
 
@@ -262,7 +274,7 @@ export class GraphView extends Disposable implements IRenView {
 		const modeSelect = document.createElement('select');
 		modeSelect.id = 'renGraphModeSelect';
 		modeSelect.className = 'ren-graph-toolbar-select';
-		(['file', 'folder', 'workspace', 'architecture'] as GraphMode[]).forEach(mode => {
+		(['file', 'folder', 'workspace', 'architecture', 'gitHeatmap'] as GraphMode[]).forEach(mode => {
 			const option = document.createElement('option');
 			option.value = mode;
 			option.textContent = this.getModeLabel(mode);
@@ -295,6 +307,66 @@ export class GraphView extends Disposable implements IRenView {
 		});
 		toolbar.appendChild(targetButton);
 		this._targetButton = targetButton;
+
+		const heatmapControlsContainer = document.createElement('div');
+		heatmapControlsContainer.className = 'ren-graph-toolbar-heatmap';
+		heatmapControlsContainer.style.display = 'none';
+		heatmapControlsContainer.style.alignItems = 'center';
+		heatmapControlsContainer.style.gap = '6px';
+
+		const granularityLabel = document.createElement('label');
+		granularityLabel.className = 'ren-graph-toolbar-field';
+		granularityLabel.textContent = 'Granularity: ';
+		const granularitySelect = document.createElement('select');
+		granularitySelect.className = 'ren-graph-toolbar-select';
+		([['topLevel', 'Top folders'], ['twoLevel', 'Folder · Subfolder'], ['file', 'Individual files']] as const).forEach(([value, label]) => {
+			const option = document.createElement('option');
+			option.value = value;
+			option.textContent = label;
+			granularitySelect.appendChild(option);
+		});
+		granularitySelect.value = this._heatmapGranularity;
+		granularitySelect.addEventListener('change', () => {
+			this._heatmapGranularity = granularitySelect.value as GitHeatmapGranularity;
+			this.handleHeatmapSettingChanged();
+		});
+		granularityLabel.appendChild(granularitySelect);
+		heatmapControlsContainer.appendChild(granularityLabel);
+
+		const windowLabel = document.createElement('label');
+		windowLabel.className = 'ren-graph-toolbar-field';
+		windowLabel.textContent = 'Window: ';
+		const windowSelect = document.createElement('select');
+		windowSelect.className = 'ren-graph-toolbar-select';
+		([['60', '60 days'], ['90', '90 days'], ['120', '120 days'], ['180', '180 days']] as const).forEach(([value, label]) => {
+			const option = document.createElement('option');
+			option.value = value;
+			option.textContent = label;
+			windowSelect.appendChild(option);
+		});
+		windowSelect.value = String(this._heatmapWindowDays);
+		windowSelect.addEventListener('change', () => {
+			const parsed = parseInt(windowSelect.value, 10);
+			if (!Number.isNaN(parsed) && parsed > 0) {
+				this._heatmapWindowDays = parsed;
+				this.handleHeatmapSettingChanged();
+			}
+		});
+		windowLabel.appendChild(windowSelect);
+		heatmapControlsContainer.appendChild(windowLabel);
+
+		const heatmapSummary = document.createElement('span');
+		heatmapSummary.className = 'ren-graph-toolbar-summary';
+		heatmapSummary.textContent = 'Coupling across recent commits.';
+		heatmapControlsContainer.appendChild(heatmapSummary);
+
+		toolbar.appendChild(heatmapControlsContainer);
+		this._heatmapControls = {
+			container: heatmapControlsContainer,
+			granularitySelect,
+			windowSelect,
+			summary: heatmapSummary
+		};
 
 		this._toolbar = toolbar;
 		this.updateToolbarUI();
@@ -330,6 +402,10 @@ export class GraphView extends Disposable implements IRenView {
 					this._targetButton.textContent = 'Analyze Architecture';
 					this._targetButton.title = 'Inspect the project to build an architecture graph';
 					break;
+				case 'gitHeatmap':
+					this._targetButton.textContent = 'Refresh Heatmap';
+					this._targetButton.title = 'Rebuild module co-change heatmap from Git history';
+					break;
 				case 'file':
 				default:
 					this._targetButton.textContent = this._selectedFile
@@ -337,6 +413,17 @@ export class GraphView extends Disposable implements IRenView {
 						: 'Select File…';
 					this._targetButton.title = 'Choose a file to visualize';
 					break;
+			}
+		}
+		if (this._heatmapControls) {
+			const visible = this._mode === 'gitHeatmap';
+			this._heatmapControls.container.style.display = visible ? 'inline-flex' : 'none';
+			if (visible) {
+				this._heatmapControls.granularitySelect.value = this._heatmapGranularity;
+				this._heatmapControls.windowSelect.value = String(this._heatmapWindowDays);
+				this._heatmapControls.summary.textContent = this._latestHeatmap
+					? this.buildHeatmapSummary(this._latestHeatmap)
+					: 'Coupling across recent commits.';
 			}
 		}
 	}
@@ -355,9 +442,107 @@ export class GraphView extends Disposable implements IRenView {
 		}
 		this.updateToolbarUI();
 		void this.sendStatus(this.getReadyMessage(), 'info');
-		if ((this._mode === 'workspace' || this._mode === 'architecture') && this._graphReady) {
+		if (this._graphReady && (this._mode === 'workspace' || this._mode === 'architecture' || this._mode === 'gitHeatmap')) {
 			void this.promptForTargetAndRender();
 		}
+	}
+
+	private buildHeatmapSummary(payload: GitHeatmapPayload): string {
+		const modules = payload.modules.length;
+		const pairs = payload.cells.length;
+		const windowDays = payload.windowDays;
+		const peak = payload.colorScale.max;
+		const roundedPeak = Number.isFinite(peak) && peak > 0 ? peak.toFixed(2) : '0';
+		return `${modules} modules · ${pairs} pairs · ${windowDays}d · peak ${roundedPeak}`;
+	}
+
+	private handleHeatmapSettingChanged(): void {
+		if (this._mode !== 'gitHeatmap') {
+			return;
+		}
+		this.queueHeatmapRefresh();
+	}
+
+	private queueHeatmapRefresh(): void {
+		if (this._mode !== 'gitHeatmap' || !this._graphReady) {
+			return;
+		}
+		if (this._promptInFlight) {
+			this._heatmapRefreshQueued = true;
+			return;
+		}
+		void this.promptForTargetAndRender();
+	}
+
+	private updateHeatmapSummary(payload: GitHeatmapPayload | null): void {
+		if (!this._heatmapControls) {
+			return;
+		}
+		this._heatmapControls.summary.textContent = payload
+			? this.buildHeatmapSummary(payload)
+			: 'Coupling across recent commits.';
+	}
+
+	private onHeatmapCellSelected(raw: unknown): void {
+		if (!this._latestHeatmap || !raw || typeof raw !== 'object') {
+			return;
+		}
+		const cell = raw as {
+			row?: unknown;
+			column?: unknown;
+			normalized?: unknown;
+			normalizedWeight?: unknown;
+			weight?: unknown;
+			commitCount?: unknown;
+			commits?: unknown;
+		};
+		const row = typeof cell.row === 'number' ? cell.row : -1;
+		const column = typeof cell.column === 'number' ? cell.column : -1;
+		const moduleA = this._latestHeatmap.modules[row] ?? `(row ${row})`;
+		const moduleB = this._latestHeatmap.modules[column] ?? `(col ${column})`;
+		const normalized = typeof cell.normalized === 'number'
+			? cell.normalized
+			: typeof cell.normalizedWeight === 'number'
+				? cell.normalizedWeight
+				: 0;
+		const weight = typeof cell.weight === 'number' ? cell.weight : 0;
+		const commitCount = typeof cell.commitCount === 'number'
+			? cell.commitCount
+			: Array.isArray(cell.commits)
+				? (cell.commits as unknown[]).length
+				: 0;
+		let message = `${moduleA} ↔ ${moduleB}: score ${normalized.toFixed(2)} · weighted ${weight.toFixed(1)} · commits ${commitCount}`;
+		const commits = Array.isArray(cell.commits)
+			? (cell.commits as GitHeatmapCommitSummary[])
+			: [];
+		if (commits.length > 0) {
+			const sample = commits[0];
+			const hash = sample.hash ? sample.hash.slice(0, 7) : '';
+			const subject = sample.message ? sample.message.trim() : '';
+			const excerpt = [hash, subject].filter(Boolean).join(' ');
+			if (excerpt) {
+				message += ` · e.g. ${excerpt}`;
+			}
+		}
+		void this.sendStatus(message, 'info', 8000);
+	}
+
+	private onHeatmapHover(raw: unknown): void {
+		if (!this._latestHeatmap || !this._heatmapControls || !raw || typeof raw !== 'object') {
+			return;
+		}
+		const hover = raw as { row?: unknown; column?: unknown; normalized?: unknown };
+		if (typeof hover.row !== 'number' || typeof hover.column !== 'number') {
+			return;
+		}
+		const moduleA = this._latestHeatmap.modules[hover.row] ?? `(row ${hover.row})`;
+		const moduleB = this._latestHeatmap.modules[hover.column] ?? `(col ${hover.column})`;
+		const score = typeof hover.normalized === 'number' ? hover.normalized : 0;
+		this._heatmapControls.summary.textContent = `${moduleA} ↔ ${moduleB} · ${score.toFixed(2)}`;
+	}
+
+	private onHeatmapSelectionCleared(): void {
+		this.updateHeatmapSummary(this._latestHeatmap);
 	}
 
 	private async promptForTargetAndRender(): Promise<void> {
@@ -392,6 +577,9 @@ export class GraphView extends Disposable implements IRenView {
 				case 'architecture':
 					await this.renderArchitectureGraph(requestId);
 					break;
+				case 'gitHeatmap':
+					await this.renderGitHeatmap(requestId);
+					break;
 				case 'file':
 				default: {
 					await this.sendStatus('Waiting for file selection…', 'loading');
@@ -409,6 +597,10 @@ export class GraphView extends Disposable implements IRenView {
 		} finally {
 			if (requestId === this._renderRequestId) {
 				this._promptInFlight = false;
+				if (this._heatmapRefreshQueued && this._mode === 'gitHeatmap') {
+					this._heatmapRefreshQueued = false;
+					void this.promptForTargetAndRender();
+				}
 			}
 		}
 	}
@@ -496,6 +688,34 @@ export class GraphView extends Disposable implements IRenView {
 		}
 	}
 
+	private async renderGitHeatmap(requestId: number): Promise<void> {
+		await this.sendStatus(`Mining Git history (last ${this._heatmapWindowDays} days)…`, 'loading');
+		try {
+			const payload = await this.dataBuilder.buildGitHeatmap({
+				windowDays: this._heatmapWindowDays,
+				granularity: this._heatmapGranularity,
+			});
+			if (requestId !== this._renderRequestId) {
+				return;
+			}
+			this._currentGraph = undefined;
+			this._latestHeatmap = payload.heatmap ?? null;
+			this.updateToolbarUI();
+			await this._webview?.postMessage({ type: 'REN_GRAPH_DATA', payload });
+			this.updateHeatmapSummary(payload.heatmap ?? null);
+			if (payload.heatmap) {
+				await this.sendStatus(`Rendered Git heatmap across ${payload.heatmap.modules.length} modules.`, 'success', 6000);
+			} else {
+				await this.sendStatus('Git heatmap data unavailable.', 'warning', 4000);
+			}
+		} catch (error) {
+			this.logService.error('[GraphView] failed to build git heatmap', error);
+			if (requestId === this._renderRequestId) {
+				await this.sendStatus('Failed to build Git heatmap. Check logs for details.', 'error');
+			}
+		}
+	}
+
 	private async renderArchitectureGraph(requestId: number): Promise<void> {
 		await this.sendStatus('Analyzing project architecture…', 'loading');
 		const progressListeners = new DisposableStore();
@@ -570,6 +790,15 @@ export class GraphView extends Disposable implements IRenView {
 		}
 		const { type, data } = event as { type?: string; data?: unknown };
 		switch (type) {
+			case 'heatmap-cell':
+				this.onHeatmapCellSelected(data);
+				break;
+			case 'heatmap-hover':
+				this.onHeatmapHover(data);
+				break;
+			case 'heatmap-selection-cleared':
+				this.onHeatmapSelectionCleared();
+				break;
 			case 'selection-mode-changed':
 				this._selectionModeEnabled = !!(data && typeof data === 'object' && (data as { enabled?: unknown }).enabled);
 				this.logService.debug('[GraphView] selection mode changed', this._selectionModeEnabled);
@@ -1054,6 +1283,8 @@ export class GraphView extends Disposable implements IRenView {
 				return 'Folder';
 			case 'architecture':
 				return 'Architecture';
+			case 'gitHeatmap':
+				return 'Git Heatmap';
 			case 'file':
 			default:
 				return 'File';
@@ -1068,6 +1299,8 @@ export class GraphView extends Disposable implements IRenView {
 				return 'Select a folder to visualize its imports.';
 			case 'architecture':
 				return 'Analyze the workspace to discover its architecture.';
+			case 'gitHeatmap':
+				return 'Generate a Git co-change heatmap for your workspace.';
 			case 'file':
 			default:
 				return 'Select a file to visualize its imports.';
