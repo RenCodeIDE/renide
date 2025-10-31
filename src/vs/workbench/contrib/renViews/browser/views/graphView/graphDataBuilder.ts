@@ -830,7 +830,7 @@ export class GraphDataBuilder {
 			if (!node) {
 				node = {
 					id,
-					label: this.context.formatNodeLabel(uri),
+					label: this.context.extUri.basename(uri),
 					path: uri.toString(true),
 					kind: isRoot ? 'root' : 'relative',
 					weight: 1,
@@ -846,13 +846,25 @@ export class GraphDataBuilder {
 			return node;
 		};
 
-		const ensureExternalNode = (specifier: string): MutableGraphNode => {
+		const ensureExternalNode = (specifier: string, resolvedUri?: URI): MutableGraphNode => {
 			const id = this.toNodeId(`module:${specifier}`);
 			let node = nodes.get(id);
 			if (!node) {
+				// Try to extract basename from resolvedUri if available
+				let label = specifier;
+				if (resolvedUri) {
+					label = this.context.extUri.basename(resolvedUri);
+				} else {
+					// Try to extract basename from specifier path if it looks like a file path
+					const specifierParts = specifier.split(/[\\/]/);
+					const lastPart = specifierParts[specifierParts.length - 1];
+					if (lastPart && lastPart.includes('.')) {
+						label = lastPart;
+					}
+				}
 				node = {
 					id,
-					label: specifier,
+					label,
 					path: specifier,
 					kind: 'external',
 					weight: 1,
@@ -909,7 +921,7 @@ export class GraphDataBuilder {
 					targetId = targetNode.id;
 					edgeKind = descriptor.isSideEffectOnly ? 'sideEffect' : 'relative';
 				} else {
-					targetNode = ensureExternalNode(descriptor.specifier);
+					targetNode = ensureExternalNode(descriptor.specifier, resolvedUri);
 					targetId = targetNode.id;
 					edgeKind = descriptor.isSideEffectOnly ? 'sideEffect' : 'external';
 				}

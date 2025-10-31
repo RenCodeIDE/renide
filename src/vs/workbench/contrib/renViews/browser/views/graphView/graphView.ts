@@ -394,8 +394,8 @@ export class GraphView extends Disposable implements IRenView {
 					break;
 				case 'folder':
 					this._targetButton.textContent = this._selectedFolder
-						? `Folder: ${this.context.formatNodeLabel(this._selectedFolder)} (Change…)`
-						: 'Select Folder…';
+						? 'Change source'
+						: 'Select source';
 					this._targetButton.title = 'Choose a folder to visualize';
 					break;
 				case 'architecture':
@@ -409,8 +409,8 @@ export class GraphView extends Disposable implements IRenView {
 				case 'file':
 				default:
 					this._targetButton.textContent = this._selectedFile
-						? `File: ${this.context.formatNodeLabel(this._selectedFile)} (Change…)`
-						: 'Select File…';
+						? 'Change source'
+						: 'Select source';
 					this._targetButton.title = 'Choose a file to visualize';
 					break;
 			}

@@ -790,7 +790,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 							'label': 'data(displayLabel)',
 							'font-size': 12,
 							'font-weight': 600,
-							'color': '#0B1A2B',
+							'color': '#ffffff',
 							'text-wrap': 'wrap',
 							'text-max-width': 200,
 							'text-valign': 'center',
@@ -801,73 +801,73 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 						{ selector: 'node.root', style: {
 							'background-color': '#FFB300',
 							'border-color': '#8D6E63',
-							'color': '#221600'
+							'color': '#ffffff'
 						}},
 						{ selector: 'node.external', style: {
 							'background-color': '#AB47BC',
 							'border-color': '#6A1B9A',
-							'color': '#1E0F2B'
+							'color': '#ffffff'
 						}},
 						{ selector: 'node.category-frontend', style: {
 							'background-color': '#29B6F6',
 							'border-color': '#01579B',
-							'color': '#052136'
+							'color': '#ffffff'
 						}},
 						{ selector: 'node.category-backend', style: {
 							'background-color': '#81C784',
 							'border-color': '#1B5E20',
-							'color': '#0B1A2B'
+							'color': '#ffffff'
 						}},
 						{ selector: 'node.category-database', style: {
 							'background-color': '#FF8A65',
 							'border-color': '#D84315',
-							'color': '#3E2723'
+							'color': '#ffffff'
 						}},
 						{ selector: 'node.category-cache', style: {
 							'background-color': '#F06292',
 							'border-color': '#AD1457',
-							'color': '#460A2D'
+							'color': '#ffffff'
 						}},
 				{ selector: 'node.category-dataset', style: {
 					'background-color': '#4DD0E1',
 					'border-color': '#00796B',
-					'color': '#00332F',
+					'color': '#ffffff',
 					'shape': 'round-rectangle'
 				}},
 						{ selector: 'node.category-queue', style: {
 							'background-color': '#CE93D8',
 							'border-color': '#6A1B9A',
-							'color': '#1E0F2B'
+							'color': '#ffffff'
 						}},
 						{ selector: 'node.category-messagebus', style: {
 							'background-color': '#9575CD',
 							'border-color': '#4527A0',
-							'color': '#1E0F2B'
+							'color': '#ffffff'
 						}},
 						{ selector: 'node.category-externalservice', style: {
 							'background-color': '#B39DDB',
 							'border-color': '#5E35B1',
-							'color': '#1E0F2B'
+							'color': '#ffffff'
 						}},
 						{ selector: 'node.category-infrastructure', style: {
 							'background-color': '#90A4AE',
 							'border-color': '#455A64',
-							'color': '#11181D'
+							'color': '#ffffff'
 						}},
 						{ selector: 'node.category-supportingservice', style: {
 							'background-color': '#A5D6A7',
 							'border-color': '#2E7D32',
-							'color': '#0B1A2B'
+							'color': '#ffffff'
 						}},
 						{ selector: 'node.category-configuration', style: {
 							'background-color': '#C5E1A5',
 							'border-color': '#558B2F',
-							'color': '#1B310C'
+							'color': '#ffffff'
 						}},
 						{ selector: 'node.category-unknown', style: {
 							'background-color': '#B0BEC5',
 							'border-color': '#455A64',
-							'color': '#102027'
+							'color': '#ffffff'
 						}},
 						{ selector: 'edge', style: {
 							'width': 2,
@@ -907,7 +907,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					'border-color': '#FFEB3B',
 					'border-width': 4,
 					'background-color': '#FFD54F',
-					'color': '#1B1300',
+					'color': '#ffffff',
 					'opacity': 1
 				}},
 				{ selector: 'node.connected', style: {
