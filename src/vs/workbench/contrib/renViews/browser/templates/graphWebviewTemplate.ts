@@ -183,6 +183,77 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				box-shadow: 0 0 0 1px rgba(0, 122, 204, 0.35);
 			}
 
+			#heatmapToolbar {
+				position: absolute;
+				top: 12px;
+				right: 12px;
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				padding: 8px 10px;
+				border-radius: 8px;
+				background: var(--vscode-editorWidget-background, rgba(32, 32, 32, 0.8));
+				border: 1px solid var(--vscode-editorWidget-border, rgba(255, 255, 255, 0.08));
+				z-index: 5;
+				font-size: 12px;
+			}
+
+			#heatmapToolbar .toolbar-field {
+				display: flex;
+				align-items: center;
+				gap: 4px;
+				color: var(--vscode-editorWidget-foreground, #ffffff);
+			}
+
+			#heatmapToolbar .toolbar-select {
+				background: var(--vscode-dropdown-background, #2d2d30);
+				color: var(--vscode-dropdown-foreground, #ffffff);
+				border: 1px solid var(--vscode-dropdown-border, rgba(255,255,255,0.2));
+				border-radius: 4px;
+				padding: 2px 6px;
+				font-size: 12px;
+				cursor: pointer;
+			}
+
+			#heatmapToolbar .toolbar-select:hover {
+				background: var(--vscode-dropdown-listBackground, #3c3c40);
+			}
+
+			#heatmapToolbar button {
+				background: var(--vscode-button-background, #0e639c);
+				color: var(--vscode-button-foreground, #ffffff);
+				border: 1px solid var(--vscode-button-border, transparent);
+				border-radius: 4px;
+				padding: 4px 10px;
+				font-size: 12px;
+				cursor: pointer;
+				line-height: 1.4;
+			}
+
+			#heatmapToolbar button:hover {
+				background: var(--vscode-button-hoverBackground, #1177bb);
+			}
+
+			#heatmapToolbar .toolbar-icon-button {
+				width: 24px;
+				height: 24px;
+				min-width: 24px;
+				padding: 0;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				font-size: 14px;
+				font-weight: 600;
+				border-radius: 4px;
+				background: transparent;
+				border: 1px solid transparent;
+			}
+
+			#heatmapToolbar .toolbar-icon-button:hover {
+				background: var(--vscode-button-hoverBackground, rgba(60, 60, 64, 0.5));
+				border-color: var(--vscode-button-border, rgba(255, 255, 255, 0.2));
+			}
+
 			#status {
 				position: absolute;
 				left: 16px;
@@ -224,34 +295,182 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				color: var(--vscode-editorHoverWidget-foreground, #000000);
 			}
 
-			#heatmapSummary {
-				position: absolute;
-				top: 60px;
-				left: 12px;
-				right: 12px;
-				padding: 6px 10px;
-				border-radius: 6px;
-				font-size: 12px;
-				background: var(--vscode-editorWidget-background, rgba(32, 32, 32, 0.86));
+			#heatmapInfoModal {
+				position: fixed;
+				top: 50%;
+				left: 50%;
+				transform: translate(-50%, -50%);
+				max-width: 500px;
+				max-height: 80vh;
+				padding: 16px 20px;
+				border-radius: 8px;
+				background: var(--vscode-editorWidget-background, rgba(32, 32, 32, 0.95));
+				border: 1px solid var(--vscode-editorWidget-border, rgba(255, 255, 255, 0.08));
 				color: var(--vscode-editorWidget-foreground, #ffffff);
+				font-size: 12px;
+				line-height: 1.5;
+				z-index: 100;
+				box-shadow: 0 4px 16px rgba(0,0,0,0.4);
 				display: none;
-				z-index: 5;
+				overflow-y: auto;
 			}
 
-			#heatmapSummary.visible {
+			#heatmapInfoModal.visible {
 				display: block;
 			}
+
+			#heatmapInfoModal h4 {
+				margin: 0 0 12px;
+				font-size: 14px;
+				font-weight: 600;
+			}
+
+			#heatmapInfoModal .modal-close {
+				position: absolute;
+				top: 8px;
+				right: 8px;
+				width: 20px;
+				height: 20px;
+				border: none;
+				background: transparent;
+				color: var(--vscode-editorWidget-foreground, #ffffff);
+				cursor: pointer;
+				font-size: 16px;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				border-radius: 4px;
+			}
+
+			#heatmapInfoModal .modal-close:hover {
+				background: var(--vscode-button-hoverBackground, #3c3c40);
+			}
+
+			#heatmapInfoModal .modal-content {
+				padding-right: 24px;
+			}
+
+			#heatmapModalOverlay {
+				position: fixed;
+				top: 0;
+				left: 0;
+				right: 0;
+				bottom: 0;
+				background: rgba(0, 0, 0, 0.4);
+				z-index: 99;
+				display: none;
+			}
+
+			#heatmapModalOverlay.visible {
+				display: block;
+			}
+
+		#sizingControl {
+			position: absolute;
+			top: 60px;
+			right: 12px;
+			max-width: 200px;
+			padding: 10px 12px;
+			border-radius: 8px;
+			background: var(--vscode-editorWidget-background, rgba(32, 32, 32, 0.8));
+			border: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.08));
+			box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+			font-size: 12px;
+			color: var(--vscode-editorWidget-foreground, #ffffff);
+			z-index: 5;
+		}
+
+		#sizingControl h3 {
+			margin: 0 0 8px;
+			font-size: 11px;
+			font-weight: normal;
+			text-transform: uppercase;
+			letter-spacing: 0.04em;
+		}
+
+		#sizingControl .sizing-options {
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+		}
+
+		#sizingControl .sizing-option {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			cursor: pointer;
+			padding: 4px 0;
+		}
+
+		#sizingControl .sizing-option input[type="radio"] {
+			margin: 0;
+			accent-color: var(--vscode-charts-foreground, #4FC3F7);
+			cursor: pointer;
+		}
+
+		#sizingControl .sizing-option span {
+			cursor: pointer;
+			user-select: none;
+		}
 		</style>
 	</head>
 	<body>
 		<div id="cy" role="presentation" aria-hidden="true"></div>
 		<div id="legend" aria-live="polite" aria-label="Architecture legend"></div>
-		<div id="heatmapSummary" aria-live="polite" aria-label="Git heatmap summary"></div>
+		<div id="heatmapModalOverlay"></div>
+		<div id="heatmapInfoModal" aria-label="Heatmap information">
+			<button class="modal-close" aria-label="Close">×</button>
+			<div class="modal-content" id="heatmapInfoContent"></div>
+		</div>
+		<div id="sizingControl" aria-label="Node sizing control">
+			<h3>Node Size</h3>
+			<div class="sizing-options">
+				<label class="sizing-option">
+					<input type="radio" name="sizingMode" value="exports" checked>
+					<span>By Exports</span>
+				</label>
+				<label class="sizing-option">
+					<input type="radio" name="sizingMode" value="imports">
+					<span>By Imports</span>
+				</label>
+			</div>
+		</div>
 		<div id="toolbar" aria-label="Graph controls">
 			<button id="selectFile" title="Select a target to visualize">Select Target...</button>
 			<button id="toggleSelectMode" title="Highlight a node and its connections">Select Nodes</button>
 			<button id="zoomIn" title="Zoom in">+</button>
 			<button id="zoomOut" title="Zoom out">-</button>
+		</div>
+		<div id="heatmapToolbar" aria-label="Heatmap controls" style="display: none;">
+			<label class="toolbar-field">
+				View:
+				<select id="heatmapModeSelect" class="toolbar-select">
+					<option value="file">File</option>
+					<option value="folder">Folder</option>
+					<option value="workspace">Workspace</option>
+					<option value="architecture">Architecture</option>
+					<option value="gitHeatmap" selected>Git Heatmap</option>
+				</select>
+			</label>
+			<button id="heatmapRefresh" class="toolbar-icon-button" title="Rebuild module co-change heatmap from Git history" aria-label="Refresh heatmap">${String.fromCharCode(8635)}</button>
+			<label class="toolbar-field">
+				Granularity:
+				<select id="heatmapGranularity" class="toolbar-select">
+					<option value="topLevel">Top folders</option>
+					<option value="twoLevel">Folder · Subfolder</option>
+					<option value="file">Individual files</option>
+				</select>
+			</label>
+			<label class="toolbar-field">
+				Window:
+				<select id="heatmapWindow" class="toolbar-select">
+					<option value="60">60 days</option>
+					<option value="90">90 days</option>
+					<option value="120" selected>120 days</option>
+					<option value="180">180 days</option>
+				</select>
+			</label>
+			<button id="heatmapToolbarInfo" class="toolbar-icon-button" title="Show heatmap information" aria-label="Heatmap information" style="display: none;">i</button>
 		</div>
 		<div id="status" class="status" aria-live="polite"></div>
 		<script src="${libSrc}"></script>
@@ -262,12 +481,24 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			let autoClearHandle = undefined;
 		const statusEl = document.getElementById('status');
 		const legendEl = document.getElementById('legend');
-	const heatmapSummaryEl = document.getElementById('heatmapSummary');
+	const heatmapInfoModal = document.getElementById('heatmapInfoModal');
+	const heatmapInfoContent = document.getElementById('heatmapInfoContent');
+	const heatmapModalOverlay = document.getElementById('heatmapModalOverlay');
 	const selectModeButton = document.getElementById('toggleSelectMode');
+	const toolbar = document.getElementById('toolbar');
+	const sizingControl = document.getElementById('sizingControl');
+	const heatmapToolbar = document.getElementById('heatmapToolbar');
+	const heatmapModeSelect = document.getElementById('heatmapModeSelect');
+	const heatmapRefresh = document.getElementById('heatmapRefresh');
+	const heatmapGranularity = document.getElementById('heatmapGranularity');
+	const heatmapWindow = document.getElementById('heatmapWindow');
+	const heatmapToolbarInfo = document.getElementById('heatmapToolbarInfo');
+	let heatmapSummaryContent = '';
 	let selectionMode = false;
 	let highlightedNodeId = null;
 	let heatmapMode = false;
 	let heatmapSelection = null;
+	let sizingMode = 'exports';
 		const send = (type, payload) => {
 			try {
 				vscode.postMessage({ type, payload });
@@ -349,7 +580,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			const hadHighlight = highlightedNodeId !== null;
 			if (cy) {
 				cy.batch(() => {
-					cy.elements().removeClass('selected connected highlighted dimmed');
+					cy.elements().removeClass('selected connected highlighted dimmed incoming outgoing');
 				});
 			}
 			highlightedNodeId = null;
@@ -362,8 +593,9 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			if (!node || !cy) {
 				return;
 			}
+			const nodeId = node.id();
 			cy.batch(() => {
-				cy.elements().removeClass('selected connected highlighted dimmed');
+				cy.elements().removeClass('selected connected highlighted dimmed incoming outgoing');
 				const neighborhood = node.closedNeighborhood();
 				const connectedEdges = neighborhood.edges();
 				const connectedNodes = neighborhood.nodes();
@@ -371,11 +603,19 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				const otherEdges = cy.edges().not(connectedEdges);
 				node.addClass('selected');
 				connectedNodes.not(node).addClass('connected');
-				connectedEdges.addClass('highlighted');
+				// Distinguish incoming vs outgoing edges
+				connectedEdges.forEach(edge => {
+					edge.addClass('highlighted');
+					if (edge.source().id() === nodeId) {
+						edge.addClass('outgoing');
+					} else if (edge.target().id() === nodeId) {
+						edge.addClass('incoming');
+					}
+				});
 				otherNodes.addClass('dimmed');
 				otherEdges.addClass('dimmed');
 			});
-			highlightedNodeId = node.id();
+			highlightedNodeId = nodeId;
 		};
 
 		if (selectModeButton) {
@@ -598,12 +838,11 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			};
 
 			const setHeatmapSummary = heatmap => {
-				if (!heatmapSummaryEl) {
-					return;
-				}
 				if (!heatmap) {
-					heatmapSummaryEl.classList.remove('visible');
-					heatmapSummaryEl.textContent = '';
+					if (heatmapToolbarInfo) {
+						heatmapToolbarInfo.style.display = 'none';
+					}
+					heatmapSummaryContent = '';
 					return;
 				}
 				const parts = [];
@@ -616,9 +855,80 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				if (typeof heatmap.normalization === 'string' && heatmap.normalization.trim()) {
 					parts.push(heatmap.normalization.trim());
 				}
-				heatmapSummaryEl.textContent = parts.join(' • ');
-				heatmapSummaryEl.classList.add('visible');
+				heatmapSummaryContent = parts.join(' • ');
+				if (heatmapToolbarInfo && heatmapSummaryContent) {
+					heatmapToolbarInfo.style.display = 'flex';
+				}
 			};
+
+			const showHeatmapInfoModal = () => {
+				if (heatmapInfoModal && heatmapInfoContent && heatmapModalOverlay) {
+					heatmapInfoContent.textContent = heatmapSummaryContent;
+					heatmapInfoModal.classList.add('visible');
+					heatmapModalOverlay.classList.add('visible');
+				}
+			};
+
+			const hideHeatmapInfoModal = () => {
+				if (heatmapInfoModal && heatmapModalOverlay) {
+					heatmapInfoModal.classList.remove('visible');
+					heatmapModalOverlay.classList.remove('visible');
+				}
+			};
+
+			if (heatmapModalOverlay) {
+				heatmapModalOverlay.addEventListener('click', () => {
+					hideHeatmapInfoModal();
+				});
+			}
+
+			const modalClose = document.querySelector('#heatmapInfoModal .modal-close');
+			if (modalClose) {
+				modalClose.addEventListener('click', () => {
+					hideHeatmapInfoModal();
+				});
+			}
+
+			document.addEventListener('keydown', (e) => {
+				if (e.key === 'Escape' && heatmapInfoModal && heatmapInfoModal.classList.contains('visible')) {
+					hideHeatmapInfoModal();
+				}
+			});
+
+			if (heatmapModeSelect) {
+				heatmapModeSelect.addEventListener('change', () => {
+					const mode = heatmapModeSelect.value;
+					send('REN_GRAPH_EVT', { type: 'heatmap-mode-change', data: { mode } });
+				});
+			}
+
+			if (heatmapRefresh) {
+				heatmapRefresh.addEventListener('click', () => {
+					send('REN_GRAPH_EVT', { type: 'heatmap-refresh' });
+				});
+			}
+
+			if (heatmapGranularity) {
+				heatmapGranularity.addEventListener('change', () => {
+					const granularity = heatmapGranularity.value;
+					send('REN_GRAPH_EVT', { type: 'heatmap-granularity-change', data: { granularity } });
+				});
+			}
+
+			if (heatmapWindow) {
+				heatmapWindow.addEventListener('change', () => {
+					const windowDays = parseInt(heatmapWindow.value, 10);
+					if (!Number.isNaN(windowDays) && windowDays > 0) {
+						send('REN_GRAPH_EVT', { type: 'heatmap-window-change', data: { windowDays } });
+					}
+				});
+			}
+
+			if (heatmapToolbarInfo) {
+				heatmapToolbarInfo.addEventListener('click', () => {
+					showHeatmapInfoModal();
+				});
+			}
 
 			const computeHeatmapColor = (value, scale) => {
 				const min = scale && typeof scale.min === 'number' ? scale.min : 0;
@@ -685,6 +995,18 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				});
 			};
 
+			const updateControlVisibility = () => {
+				if (heatmapMode) {
+					if (toolbar) toolbar.style.display = 'none';
+					if (sizingControl) sizingControl.style.display = 'none';
+					if (heatmapToolbar) heatmapToolbar.style.display = 'flex';
+				} else {
+					if (toolbar) toolbar.style.display = 'flex';
+					if (sizingControl) sizingControl.style.display = '';
+					if (heatmapToolbar) heatmapToolbar.style.display = 'none';
+				}
+			};
+
 			const renderHeatmap = heatmap => {
 				ensureCy();
 				heatmapMode = true;
@@ -694,6 +1016,15 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				if (selectModeButton) {
 					selectModeButton.disabled = true;
 				}
+				if (heatmap) {
+					if (heatmap.granularity && heatmapGranularity) {
+						heatmapGranularity.value = heatmap.granularity;
+					}
+					if (heatmap.windowDays && heatmapWindow) {
+						heatmapWindow.value = String(heatmap.windowDays);
+					}
+				}
+				updateControlVisibility();
 				setHeatmapSummary(heatmap);
 				if (legendEl) {
 					legendEl.classList.remove('visible');
@@ -923,6 +1254,20 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					'text-opacity': 1,
 					'text-background-opacity': 1
 				}},
+				{ selector: 'edge.highlighted.outgoing', style: {
+					'line-color': '#81C784',
+					'target-arrow-color': '#81C784',
+					'line-style': 'solid',
+					'width': 3,
+					'opacity': 1
+				}},
+				{ selector: 'edge.highlighted.incoming', style: {
+					'line-color': '#64B5F6',
+					'target-arrow-color': '#64B5F6',
+					'line-style': 'solid',
+					'width': 3,
+					'opacity': 1
+				}},
 				{ selector: 'node.dimmed', style: {
 					'opacity': 0.15,
 					'color': 'rgba(255, 255, 255, 0.35)'
@@ -1063,6 +1408,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				heatmapMode = false;
 				heatmapSelection = null;
 				setHeatmapSummary(null);
+				updateControlVisibility();
 				if (selectModeButton) {
 					selectModeButton.disabled = false;
 				}
@@ -1077,24 +1423,26 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					}
 				}
 				const buildDisplayLabel = (node, mode) => {
-					const fanIn = node.fanIn !== undefined ? node.fanIn : 0;
-					const fanOut = node.fanOut !== undefined ? node.fanOut : 0;
 					let label = node.label;
 					if (mode === 'architecture' && typeof node.confidence === 'number' && !Number.isNaN(node.confidence)) {
 						label += ' · ' + Math.round(node.confidence * 100) + '%';
 					}
-					if (fanIn === 0 && fanOut === 0) {
-						return label;
-					}
-					return label + ' (in ' + fanIn + ' · out ' + fanOut + ')';
+					return label;
 				};
 
 			const nodePayloads = payload.nodes || [];
-			const weights = nodePayloads.map(node => Math.max(1, node.weight !== undefined ? node.weight : 1));
+			const getSizingValue = node => {
+				if (sizingMode === 'imports') {
+					return Math.max(1, node.fanIn !== undefined ? node.fanIn : 1);
+				} else {
+					return Math.max(1, node.fanOut !== undefined ? node.fanOut : 1);
+				}
+			};
+			const weights = nodePayloads.map(node => getSizingValue(node));
 			const maxWeight = weights.length ? Math.max(...weights) : 1;
 			const minWeight = weights.length ? Math.min(...weights) : 1;
-			const computeSize = weightValue => {
-				const weight = Math.max(1, weightValue || 1);
+			const computeSize = (node) => {
+				const weight = getSizingValue(node);
 				if (maxWeight === minWeight) {
 					return 90;
 				}
@@ -1103,8 +1451,6 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			};
 
 			const nodes = nodePayloads.map(node => {
-				const weightValue = node.weight !== undefined ? node.weight : 1;
-				const weight = Math.max(1, weightValue);
 				const displayLabel = buildDisplayLabel(node, payload.mode);
 				const classNames = new Set();
 				if (node.kind) {
@@ -1124,10 +1470,9 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 						displayLabel,
 						path: node.path,
 						kind: node.kind,
-						weight,
 						fanIn: node.fanIn !== undefined ? node.fanIn : 0,
 						fanOut: node.fanOut !== undefined ? node.fanOut : 0,
-						visualSize: computeSize(weight),
+						visualSize: computeSize(node),
 						openable: node.openable !== undefined ? node.openable : true,
 						category: node.category ?? null,
 						confidence: node.confidence ?? null,
@@ -1202,6 +1547,57 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					default:
 						break;
 				}
+			});
+
+			const updateNodeSizes = () => {
+				if (!cy) {
+					return;
+				}
+				const nodePayloads = cy.nodes().map(node => ({
+					fanIn: node.data('fanIn') || 0,
+					fanOut: node.data('fanOut') || 0
+				}));
+				if (nodePayloads.length === 0) {
+					return;
+				}
+				const getSizingValue = node => {
+					if (sizingMode === 'imports') {
+						return Math.max(1, node.fanIn || 1);
+					} else {
+						return Math.max(1, node.fanOut || 1);
+					}
+				};
+				const weights = nodePayloads.map(getSizingValue);
+				const maxWeight = Math.max(...weights);
+				const minWeight = Math.min(...weights);
+				const computeSize = node => {
+					const weight = getSizingValue(node);
+					if (maxWeight === minWeight) {
+						return 90;
+					}
+					const normalized = (weight - minWeight) / (maxWeight - minWeight);
+					return 70 + normalized * 120;
+				};
+				cy.nodes().forEach(node => {
+					const nodeData = {
+						fanIn: node.data('fanIn') || 0,
+						fanOut: node.data('fanOut') || 0
+					};
+					const newSize = computeSize(nodeData);
+					node.style('width', newSize);
+					node.style('height', newSize);
+				});
+				cy.resize();
+			};
+
+			const sizingControls = document.querySelectorAll('input[name="sizingMode"]');
+			sizingControls.forEach(radio => {
+				radio.addEventListener('change', (e) => {
+					if (e.target.checked) {
+						sizingMode = e.target.value;
+						updateNodeSizes();
+					}
+				});
 			});
 
 			document.getElementById('selectFile').addEventListener('click', () => send('REN_SELECT_FILE'));

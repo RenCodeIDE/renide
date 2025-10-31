@@ -426,6 +426,9 @@ export class GraphView extends Disposable implements IRenView {
 					: 'Coupling across recent commits.';
 			}
 		}
+		if (this._toolbar) {
+			this._toolbar.style.display = this._mode === 'gitHeatmap' ? 'none' : 'inline-flex';
+		}
 	}
 
 	private applyModeChange(mode: GraphMode): void {
@@ -528,17 +531,8 @@ export class GraphView extends Disposable implements IRenView {
 	}
 
 	private onHeatmapHover(raw: unknown): void {
-		if (!this._latestHeatmap || !this._heatmapControls || !raw || typeof raw !== 'object') {
-			return;
-		}
-		const hover = raw as { row?: unknown; column?: unknown; normalized?: unknown };
-		if (typeof hover.row !== 'number' || typeof hover.column !== 'number') {
-			return;
-		}
-		const moduleA = this._latestHeatmap.modules[hover.row] ?? `(row ${hover.row})`;
-		const moduleB = this._latestHeatmap.modules[hover.column] ?? `(col ${hover.column})`;
-		const score = typeof hover.normalized === 'number' ? hover.normalized : 0;
-		this._heatmapControls.summary.textContent = `${moduleA} ↔ ${moduleB} · ${score.toFixed(2)}`;
+		// Hover updates are now handled in the webview only, not in the toolbar summary
+		// This prevents the toolbar from being updated on every hover
 	}
 
 	private onHeatmapSelectionCleared(): void {
@@ -798,6 +792,44 @@ export class GraphView extends Disposable implements IRenView {
 				break;
 			case 'heatmap-selection-cleared':
 				this.onHeatmapSelectionCleared();
+				break;
+			case 'heatmap-mode-change':
+				if (data && typeof data === 'object') {
+					const eventData = data as { mode?: unknown };
+					if (eventData.mode !== undefined) {
+						const mode = eventData.mode;
+						if (typeof mode === 'string') {
+							this.applyModeChange(mode as GraphMode);
+						}
+					}
+				}
+				break;
+			case 'heatmap-refresh':
+				void this.promptForTargetAndRender();
+				break;
+			case 'heatmap-granularity-change':
+				if (data && typeof data === 'object') {
+					const eventData = data as { granularity?: unknown };
+					if (eventData.granularity !== undefined) {
+						const granularity = eventData.granularity;
+						if (typeof granularity === 'string' && ['topLevel', 'twoLevel', 'file'].includes(granularity)) {
+							this._heatmapGranularity = granularity as GitHeatmapGranularity;
+							this.handleHeatmapSettingChanged();
+						}
+					}
+				}
+				break;
+			case 'heatmap-window-change':
+				if (data && typeof data === 'object') {
+					const eventData = data as { windowDays?: unknown };
+					if (eventData.windowDays !== undefined) {
+						const windowDays = eventData.windowDays;
+						if (typeof windowDays === 'number' && windowDays > 0) {
+							this._heatmapWindowDays = windowDays;
+							this.handleHeatmapSettingChanged();
+						}
+					}
+				}
 				break;
 			case 'selection-mode-changed':
 				this._selectionModeEnabled = !!(data && typeof data === 'object' && (data as { enabled?: unknown }).enabled);
