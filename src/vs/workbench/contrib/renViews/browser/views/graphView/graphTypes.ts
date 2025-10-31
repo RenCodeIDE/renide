@@ -16,6 +16,12 @@ export interface GraphNodePayload {
 	fanIn: number;
 	fanOut: number;
 	openable: boolean;
+	description?: string;
+	category?: string;
+	confidence?: number;
+	tags?: string[];
+	metadata?: Record<string, unknown>;
+	evidence?: string[];
 }
 
 export type GraphEdgeKind = 'relative' | 'external' | 'sideEffect';
@@ -30,11 +36,20 @@ export interface GraphEdgePayload {
 	sourcePath?: string;
 	targetPath?: string;
 	symbols?: string[];
+	confidence?: number;
+	metadata?: Record<string, unknown>;
+	evidence?: string[];
+	category?: string;
 }
 
 export interface GraphWebviewPayload {
 	nodes: GraphNodePayload[];
 	edges: GraphEdgePayload[];
+	mode?: GraphMode;
+	summary?: string[];
+	warnings?: string[];
+	generatedAt?: number;
+	metadata?: Record<string, unknown>;
 }
 
 export interface ImportDescriptor {
@@ -45,7 +60,7 @@ export interface ImportDescriptor {
 	isSideEffectOnly: boolean;
 }
 
-export type GraphMode = 'file' | 'folder' | 'workspace';
+export type GraphMode = 'file' | 'folder' | 'workspace' | 'architecture';
 
 export type GraphStatusLevel = 'info' | 'warning' | 'error' | 'loading' | 'success';
 

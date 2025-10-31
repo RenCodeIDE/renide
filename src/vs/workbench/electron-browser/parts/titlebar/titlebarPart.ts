@@ -3,25 +3,22 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Event } from '../../../../base/common/event.js';
 import { getZoomFactor } from '../../../../base/browser/browser.js';
-import { $, addDisposableListener, append, EventType, getWindow, getWindowId, hide, show } from '../../../../base/browser/dom.js';
+import { getWindow, getWindowId } from '../../../../base/browser/dom.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IConfigurationService, IConfigurationChangeEvent } from '../../../../platform/configuration/common/configuration.js';
 import { IStorageService } from '../../../../platform/storage/common/storage.js';
 import { INativeWorkbenchEnvironmentService } from '../../../services/environment/electron-browser/environmentService.js';
 import { IHostService } from '../../../services/host/browser/host.js';
-import { isMacintosh, isWindows, isLinux, isBigSurOrNewer } from '../../../../base/common/platform.js';
-import { IMenuService, MenuId } from '../../../../platform/actions/common/actions.js';
+import { isBigSurOrNewer } from '../../../../base/common/platform.js';
+import { IMenuService } from '../../../../platform/actions/common/actions.js';
 import { BrowserTitlebarPart, BrowserTitleService, IAuxiliaryTitlebarPart } from '../../../browser/parts/titlebar/titlebarPart.js';
 import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
 import { IThemeService } from '../../../../platform/theme/common/themeService.js';
 import { IWorkbenchLayoutService, Parts } from '../../../services/layout/browser/layoutService.js';
 import { INativeHostService } from '../../../../platform/native/common/native.js';
-import { hasNativeTitlebar, useWindowControlsOverlay, DEFAULT_CUSTOM_TITLEBAR_HEIGHT, hasNativeMenu } from '../../../../platform/window/common/window.js';
+import { useWindowControlsOverlay, DEFAULT_CUSTOM_TITLEBAR_HEIGHT } from '../../../../platform/window/common/window.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
-import { Codicon } from '../../../../base/common/codicons.js';
-import { ThemeIcon } from '../../../../base/common/themables.js';
 import { NativeMenubarControl } from './menubarControl.js';
 import { IEditorGroupsContainer, IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
@@ -34,10 +31,6 @@ export class NativeTitlebarPart extends BrowserTitlebarPart {
 	//#region IView
 
 	override get minimumHeight(): number {
-		if (!isMacintosh) {
-			return super.minimumHeight;
-		}
-
 		return (this.isCommandCenterVisible ? DEFAULT_CUSTOM_TITLEBAR_HEIGHT : this.macTitlebarSize) / (this.preventZoom ? getZoomFactor(getWindow(this.element)) : 1);
 	}
 	override get maximumHeight(): number { return this.minimumHeight; }
@@ -52,9 +45,6 @@ export class NativeTitlebarPart extends BrowserTitlebarPart {
 	}
 
 	//#endregion
-
-	private maxRestoreControl: HTMLElement | undefined;
-	private resizer: HTMLElement | undefined;
 
 	private cachedWindowControlStyles: { bgColor: string; fgColor: string } | undefined;
 	private cachedWindowControlHeight: number | undefined;
@@ -98,154 +88,23 @@ export class NativeTitlebarPart extends BrowserTitlebarPart {
 	}
 
 	protected override onMenubarVisibilityChanged(visible: boolean): void {
-
-		// Hide title when toggling menu bar
-		if ((isWindows || isLinux) && this.currentMenubarVisibility === 'toggle' && visible) {
-
-			// Hack to fix issue #52522 with layered webkit-app-region elements appearing under cursor
-			if (this.dragRegion) {
-				hide(this.dragRegion);
-				setTimeout(() => show(this.dragRegion!), 50);
-			}
-		}
-
 		super.onMenubarVisibilityChanged(visible);
 	}
 
 	protected override onConfigurationChanged(event: IConfigurationChangeEvent): void {
 		super.onConfigurationChanged(event);
-
-		if (event.affectsConfiguration('window.doubleClickIconToClose')) {
-			if (this.appIcon) {
-				this.onUpdateAppIconDragBehavior();
-			}
-		}
 	}
 
-	private onUpdateAppIconDragBehavior(): void {
-		const setting = this.configurationService.getValue('window.doubleClickIconToClose');
-		if (setting && this.appIcon) {
-			(this.appIcon.style as CSSStyleDeclaration & { '-webkit-app-region': string })['-webkit-app-region'] = 'no-drag';
-		} else if (this.appIcon) {
-			(this.appIcon.style as CSSStyleDeclaration & { '-webkit-app-region': string })['-webkit-app-region'] = 'drag';
-		}
-	}
-
-	protected override installMenubar(): void {
-		super.installMenubar();
-
-		if (this.menubar) {
-			return;
-		}
-
-		if (this.customMenubar.value) {
-			this._register(this.customMenubar.value.onFocusStateChange(e => this.onMenubarFocusChanged(e)));
-		}
-	}
-
-	private onMenubarFocusChanged(focused: boolean): void {
-		if ((isWindows || isLinux) && this.currentMenubarVisibility !== 'compact' && this.dragRegion) {
-			if (focused) {
-				hide(this.dragRegion);
-			} else {
-				show(this.dragRegion);
-			}
-		}
-	}
 
 	protected override createContentArea(parent: HTMLElement): HTMLElement {
 		const result = super.createContentArea(parent);
-		const targetWindow = getWindow(parent);
-		const targetWindowId = getWindowId(targetWindow);
 
-		// Native menu controller
-		if (isMacintosh || hasNativeMenu(this.configurationService)) {
-			this._register(this.instantiationService.createInstance(NativeMenubarControl));
-		}
-
-		// App Icon (Native Windows/Linux)
-		if (this.appIcon) {
-			this.onUpdateAppIconDragBehavior();
-
-			this._register(addDisposableListener(this.appIcon, EventType.DBLCLICK, (() => {
-				this.nativeHostService.closeWindow({ targetWindowId });
-			})));
-		}
-
-		// Custom Window Controls (Native Windows/Linux)
-		if (
-			!hasNativeTitlebar(this.configurationService) &&		// not for native title bars
-			!useWindowControlsOverlay(this.configurationService) &&	// not when controls are natively drawn
-			this.windowControlsContainer
-		) {
-
-			// Minimize
-			const minimizeIcon = append(this.windowControlsContainer, $('div.window-icon.window-minimize' + ThemeIcon.asCSSSelector(Codicon.chromeMinimize)));
-			this._register(addDisposableListener(minimizeIcon, EventType.CLICK, () => {
-				this.nativeHostService.minimizeWindow({ targetWindowId });
-			}));
-
-			// Restore
-			this.maxRestoreControl = append(this.windowControlsContainer, $('div.window-icon.window-max-restore'));
-			this._register(addDisposableListener(this.maxRestoreControl, EventType.CLICK, async () => {
-				const maximized = await this.nativeHostService.isMaximized({ targetWindowId });
-				if (maximized) {
-					return this.nativeHostService.unmaximizeWindow({ targetWindowId });
-				}
-
-				return this.nativeHostService.maximizeWindow({ targetWindowId });
-			}));
-
-			// Close
-			const closeIcon = append(this.windowControlsContainer, $('div.window-icon.window-close' + ThemeIcon.asCSSSelector(Codicon.chromeClose)));
-			this._register(addDisposableListener(closeIcon, EventType.CLICK, () => {
-				this.nativeHostService.closeWindow({ targetWindowId });
-			}));
-
-			// Resizer
-			this.resizer = append(this.rootContainer, $('div.resizer'));
-			this._register(Event.runAndSubscribe(this.layoutService.onDidChangeWindowMaximized, ({ windowId, maximized }) => {
-				if (windowId === targetWindowId) {
-					this.onDidChangeWindowMaximized(maximized);
-				}
-			}, { windowId: targetWindowId, maximized: this.layoutService.isWindowMaximized(targetWindow) }));
-		}
-
-		// Window System Context Menu
-		// See https://github.com/electron/electron/issues/24893
-		if (isWindows && !hasNativeTitlebar(this.configurationService)) {
-			this._register(this.nativeHostService.onDidTriggerWindowSystemContextMenu(({ windowId, x, y }) => {
-				if (targetWindowId !== windowId) {
-					return;
-				}
-
-				const zoomFactor = getZoomFactor(getWindow(this.element));
-				this.onContextMenu(new MouseEvent(EventType.MOUSE_UP, { clientX: x / zoomFactor, clientY: y / zoomFactor }), MenuId.TitleBarContext);
-			}));
-		}
+		// Native menu controller (macOS)
+		this._register(this.instantiationService.createInstance(NativeMenubarControl));
 
 		return result;
 	}
 
-	private onDidChangeWindowMaximized(maximized: boolean): void {
-		if (this.maxRestoreControl) {
-			if (maximized) {
-				this.maxRestoreControl.classList.remove(...ThemeIcon.asClassNameArray(Codicon.chromeMaximize));
-				this.maxRestoreControl.classList.add(...ThemeIcon.asClassNameArray(Codicon.chromeRestore));
-			} else {
-				this.maxRestoreControl.classList.remove(...ThemeIcon.asClassNameArray(Codicon.chromeRestore));
-				this.maxRestoreControl.classList.add(...ThemeIcon.asClassNameArray(Codicon.chromeMaximize));
-			}
-		}
-
-		if (this.resizer) {
-			if (maximized) {
-				hide(this.resizer);
-			} else {
-				show(this.resizer);
-			}
-		}
-	}
 
 	override updateStyles(): void {
 		super.updateStyles();

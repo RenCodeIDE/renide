@@ -255,6 +255,28 @@
 	user-select: none;
 }
 
+.ren-graph-toolbar-field {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--vscode-foreground);
+	font-size: 12px;
+}
+
+.ren-graph-toolbar-select {
+	padding: 6px 10px;
+	border-radius: 4px;
+	border: 1px solid var(--vscode-dropdown-border, var(--vscode-button-border));
+	background-color: var(--vscode-dropdown-background, var(--vscode-editor-background));
+	color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+	font-size: 13px;
+}
+
+.ren-graph-toolbar-select:focus {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: 1px;
+}
+
 .ren-graph-toolbar-btn:hover {
 	background-color: var(--vscode-button-hoverBackground);
 }

@@ -6,16 +6,23 @@
 import { URI } from '../../../../../../base/common/uri.js';
 import { ILogService } from '../../../../../../platform/log/common/log.js';
 import { IFileService } from '../../../../../../platform/files/common/files.js';
-import { ISearchService, IFileMatch, QueryType } from '../../../../../services/search/common/search.js';
+import { ICommandService } from '../../../../../../platform/commands/common/commands.js';
+import { ILanguageFeaturesService } from '../../../../../../editor/common/services/languageFeatures.js';
+import {
+	ISearchService,
+	IFileMatch,
+	QueryType,
+} from '../../../../../services/search/common/search.js';
 
 import { GraphWorkspaceContext } from './graphContext.js';
 import {
 	GraphEdgeKind,
 	GraphEdgePayload,
 	GraphNodeKind,
+	GraphNodePayload,
 	GraphScopeOptions,
 	GraphWebviewPayload,
-	ImportDescriptor
+	ImportDescriptor,
 } from './graphTypes.js';
 
 import {
@@ -25,51 +32,313 @@ import {
 	GRAPH_INDEX_FILENAMES,
 	getImportBase,
 	isExcludedPath,
-	toCytoscapeId
+	toCytoscapeId,
 } from './graphConstants.js';
+import {
+	ArchitectureAnalyzer,
+	ArchitectureComponent,
+	ArchitectureRelationship,
+	ArchitectureComponentKind,
+	ArchitectureRelationshipKind,
+	DetectionEvidence,
+} from './architectureAnalyzer.js';
 
 export class GraphDataBuilder {
+	private readonly architectureAnalyzer: ArchitectureAnalyzer;
+
 	constructor(
 		private readonly logService: ILogService,
 		private readonly fileService: IFileService,
 		private readonly searchService: ISearchService,
-		private readonly context: GraphWorkspaceContext
-	) { }
+		private readonly context: GraphWorkspaceContext,
+		commandService: ICommandService,
+		languageFeaturesService: ILanguageFeaturesService,
+	) {
+		this.architectureAnalyzer = new ArchitectureAnalyzer(
+			this.logService,
+			this.fileService,
+			this.searchService,
+			commandService,
+			languageFeaturesService,
+			this.context,
+		);
+	}
+
+	get onArchitectureProgress() {
+		return this.architectureAnalyzer.onProgress;
+	}
 
 	async buildGraphForFile(sourceUri: URI): Promise<GraphWebviewPayload> {
-		return this.buildGraphFromFiles([
-			sourceUri
-		], {
+		return this.buildGraphFromFiles([sourceUri], {
 			scopeRoots: new Set([this.context.getUriKey(sourceUri)]),
-			scopeMode: 'file'
+			scopeMode: 'file',
 		});
 	}
 
-	async buildGraphForScope(folders: URI[], mode: 'folder' | 'workspace'): Promise<GraphWebviewPayload> {
+	async buildGraphForScope(
+		folders: URI[],
+		mode: 'folder' | 'workspace',
+	): Promise<GraphWebviewPayload> {
 		const files = await this.collectFilesInScope(folders);
 		return this.buildGraphFromFiles(files, {
-			scopeRoots: new Set(files.map(uri => this.context.getUriKey(uri))),
-			scopeMode: mode
+			scopeRoots: new Set(files.map((uri) => this.context.getUriKey(uri))),
+			scopeMode: mode,
 		});
+	}
+
+	async buildArchitectureGraph(): Promise<GraphWebviewPayload> {
+		const analysis = await this.architectureAnalyzer.analyze();
+		const nodeById = new Map<string, GraphNodePayload>();
+		for (const component of analysis.components) {
+			const node = this.createArchitectureNode(component);
+			nodeById.set(node.id, node);
+		}
+
+		const edges: GraphEdgePayload[] = [];
+		for (const relationship of analysis.relationships) {
+			if (
+				!nodeById.has(relationship.source) ||
+				!nodeById.has(relationship.target)
+			) {
+				continue;
+			}
+			const edge = this.createArchitectureEdge(relationship);
+			edges.push(edge);
+			const sourceNode = nodeById.get(edge.source);
+			const targetNode = nodeById.get(edge.target);
+			if (sourceNode) {
+				sourceNode.fanOut += 1;
+				sourceNode.weight = Math.max(
+					sourceNode.weight,
+					sourceNode.fanIn + sourceNode.fanOut,
+				);
+			}
+			if (targetNode) {
+				targetNode.fanIn += 1;
+				targetNode.weight = Math.max(
+					targetNode.weight,
+					targetNode.fanIn + targetNode.fanOut,
+				);
+			}
+		}
+
+		for (const node of nodeById.values()) {
+			node.weight = Math.max(
+				node.weight,
+				Math.max(1, Math.round((node.confidence ?? 0.5) * 5)),
+			);
+		}
+
+		return {
+			nodes: Array.from(nodeById.values()),
+			edges,
+			mode: 'architecture',
+			summary: analysis.summary,
+			warnings: analysis.warnings,
+			generatedAt: analysis.generatedAt,
+			metadata: this.buildArchitectureMetadata(nodeById.values(), edges),
+		};
+	}
+
+	private createArchitectureNode(
+		component: ArchitectureComponent,
+	): GraphNodePayload {
+		const evidenceDescriptions = this.takeEvidenceDescriptions(
+			component.evidence,
+		);
+		const primaryResource =
+			this.getEvidenceResource(component.evidence) ??
+			this.parseMetadataResource(component.metadata?.workspaceFolder);
+		const path = primaryResource
+			? primaryResource.toString(true)
+			: `arch://${component.key}`;
+		const openable =
+			!!primaryResource && this.context.isWithinWorkspace(primaryResource);
+		const metadata: Record<string, unknown> = {
+			...(component.metadata ?? {}),
+			key: component.key,
+		};
+		if (component.tags?.length) {
+			metadata.tags = component.tags;
+		}
+		return {
+			id: component.id,
+			label: component.label,
+			path,
+			kind: this.mapComponentKindToNodeKind(component.kind),
+			weight: Math.max(1, Math.round((component.confidence ?? 0.4) * 4)),
+			fanIn: 0,
+			fanOut: 0,
+			openable,
+			category: component.kind,
+			confidence: component.confidence,
+			tags: component.tags ?? [],
+			metadata,
+			description: component.description,
+			evidence: evidenceDescriptions,
+		};
+	}
+
+	private createArchitectureEdge(
+		relationship: ArchitectureRelationship,
+	): GraphEdgePayload {
+		const evidenceDescriptions = this.takeEvidenceDescriptions(
+			relationship.evidence,
+		);
+		return {
+			id: relationship.id,
+			source: relationship.source,
+			target: relationship.target,
+			label:
+				relationship.description ??
+				this.formatRelationshipLabel(relationship.kind),
+			specifier: `architecture:${relationship.kind}`,
+			kind: this.mapRelationshipKindToEdgeKind(relationship.kind),
+			symbols: evidenceDescriptions,
+			category: relationship.kind,
+			confidence: relationship.confidence,
+			metadata: { ...(relationship.metadata ?? {}), kind: relationship.kind },
+			evidence: evidenceDescriptions,
+		};
+	}
+
+	private mapComponentKindToNodeKind(
+		kind: ArchitectureComponentKind,
+	): GraphNodeKind {
+		switch (kind) {
+			case 'application':
+			case 'infrastructure':
+			case 'configuration':
+				return 'root';
+			case 'externalService':
+				return 'external';
+			default:
+				return 'relative';
+		}
+	}
+
+	private mapRelationshipKindToEdgeKind(
+		kind: ArchitectureRelationshipKind,
+	): GraphEdgeKind {
+		switch (kind) {
+			case 'calls':
+			case 'publishes':
+			case 'consumes':
+				return 'external';
+			case 'dependsOn':
+			case 'connectsTo':
+			case 'stores':
+			case 'queries':
+			case 'hosts':
+			default:
+				return 'relative';
+		}
+	}
+
+	private buildArchitectureMetadata(
+		nodes: Iterable<GraphNodePayload>,
+		edges: GraphEdgePayload[],
+	): Record<string, unknown> {
+		const nodeArray = Array.from(nodes);
+		const categoryCounts = new Map<string, number>();
+		const datasets: Array<{
+			id: string;
+			label: string;
+			metadata?: Record<string, unknown>;
+		}> = [];
+		for (const node of nodeArray) {
+			const category = node.category ?? 'unknown';
+			categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
+			if (category === 'dataset') {
+				datasets.push({
+					id: node.id,
+					label: node.label,
+					metadata: node.metadata,
+				});
+			}
+		}
+
+		const relationshipCounts = new Map<string, number>();
+		for (const edge of edges) {
+			const category = edge.category ?? edge.kind;
+			relationshipCounts.set(
+				category,
+				(relationshipCounts.get(category) ?? 0) + 1,
+			);
+		}
+
+		return {
+			categoryCounts: Object.fromEntries(categoryCounts),
+			relationshipCounts: Object.fromEntries(relationshipCounts),
+			datasets,
+		};
+	}
+
+	private takeEvidenceDescriptions(
+		evidence: DetectionEvidence[],
+		max = 4,
+	): string[] {
+		const descriptions: string[] = [];
+		for (const entry of evidence) {
+			if (!entry?.description) {
+				continue;
+			}
+			descriptions.push(entry.description);
+			if (descriptions.length >= max) {
+				break;
+			}
+		}
+		return descriptions;
+	}
+
+	private getEvidenceResource(evidence: DetectionEvidence[]): URI | undefined {
+		for (const entry of evidence) {
+			if (entry.resource) {
+				return entry.resource;
+			}
+		}
+		return undefined;
+	}
+
+	private parseMetadataResource(value: unknown): URI | undefined {
+		if (typeof value !== 'string' || !value) {
+			return undefined;
+		}
+		try {
+			return URI.parse(value);
+		} catch (error) {
+			this.logService.debug(
+				'[GraphDataBuilder] failed to parse metadata resource',
+				value,
+				error,
+			);
+			return undefined;
+		}
+	}
+
+	private formatRelationshipLabel(kind: ArchitectureRelationshipKind): string {
+		return kind.replace(/([a-z])([A-Z])/g, '$1 $2');
 	}
 
 	async collectFilesInScope(folders: readonly URI[]): Promise<URI[]> {
 		if (!folders.length) {
 			return [];
 		}
-		const folderQueries = folders.map(folder => ({ folder }));
+		const folderQueries = folders.map((folder) => ({ folder }));
 		const searchQuery = {
 			type: QueryType.File as QueryType.File,
 			folderQueries,
 			filePattern: undefined,
 			sortByScore: false,
 			excludePattern: GRAPH_DEFAULT_EXCLUDE_GLOBS,
-			maxResults: 5000
+			maxResults: 5000,
 		};
 		const results = await this.searchService.fileSearch(searchQuery);
 		const files: URI[] = [];
 		if (results.limitHit) {
-			this.logService.warn('[GraphView] file search limit reached; graph may be incomplete.');
+			this.logService.warn(
+				'[GraphView] file search limit reached; graph may be incomplete.',
+			);
 		}
 		for (const match of results.results) {
 			const resource = (match as IFileMatch).resource;
@@ -80,7 +349,7 @@ export class GraphDataBuilder {
 				continue;
 			}
 			const lowerPath = resource.path.toLowerCase();
-			if (!GRAPH_FILE_EXTENSIONS.some(ext => lowerPath.endsWith(ext))) {
+			if (!GRAPH_FILE_EXTENSIONS.some((ext) => lowerPath.endsWith(ext))) {
 				continue;
 			}
 			files.push(resource);
@@ -88,7 +357,10 @@ export class GraphDataBuilder {
 		return files;
 	}
 
-	private async buildGraphFromFiles(initialFiles: URI[], options: GraphScopeOptions): Promise<GraphWebviewPayload> {
+	private async buildGraphFromFiles(
+		initialFiles: URI[],
+		options: GraphScopeOptions,
+	): Promise<GraphWebviewPayload> {
 		type MutableGraphNode = {
 			id: string;
 			label: string;
@@ -101,7 +373,14 @@ export class GraphDataBuilder {
 		};
 
 		const nodes = new Map<string, MutableGraphNode>();
-		const edges = new Map<string, { payload: GraphEdgePayload; labelParts: Set<string>; symbolNames: Set<string> }>();
+		const edges = new Map<
+			string,
+			{
+				payload: GraphEdgePayload;
+				labelParts: Set<string>;
+				symbolNames: Set<string>;
+			}
+		>();
 		const processed = new Set<string>();
 		const queue: URI[] = [...initialFiles];
 		const descriptorCache = new Map<string, Promise<ImportDescriptor[]>>();
@@ -110,7 +389,9 @@ export class GraphDataBuilder {
 		const ensureFileNode = (uri: URI): MutableGraphNode => {
 			const id = this.toNodeId(uri);
 			let node = nodes.get(id);
-			const isRoot = options.scopeMode !== 'workspace' && options.scopeRoots.has(this.context.getUriKey(uri));
+			const isRoot =
+				options.scopeMode !== 'workspace' &&
+				options.scopeRoots.has(this.context.getUriKey(uri));
 			const isExcluded = isExcludedPath(uri.path);
 			const isWithinWorkspace = this.context.isWithinWorkspace(uri);
 			const openable = isWithinWorkspace && !isExcluded;
@@ -123,7 +404,7 @@ export class GraphDataBuilder {
 					weight: 1,
 					fanIn: 0,
 					fanOut: 0,
-					openable
+					openable,
 				};
 				nodes.set(id, node);
 			} else if (isRoot && node.kind !== 'root') {
@@ -145,7 +426,7 @@ export class GraphDataBuilder {
 					weight: 1,
 					fanIn: 0,
 					fanOut: 0,
-					openable: false
+					openable: false,
 				};
 				nodes.set(id, node);
 			}
@@ -165,12 +446,20 @@ export class GraphDataBuilder {
 			try {
 				descriptors = await this.getImportDescriptors(fileUri, descriptorCache);
 			} catch (error) {
-				this.logService.error('[GraphView] failed to parse imports', fileUri.toString(true), error);
+				this.logService.error(
+					'[GraphView] failed to parse imports',
+					fileUri.toString(true),
+					error,
+				);
 				continue;
 			}
 
 			for (const descriptor of descriptors) {
-				const resolvedUri = await this.resolveImportTargetCached(fileUri, descriptor.specifier, resolvedCache);
+				const resolvedUri = await this.resolveImportTargetCached(
+					fileUri,
+					descriptor.specifier,
+					resolvedCache,
+				);
 				if (this.shouldIgnoreImport(descriptor.specifier, resolvedUri)) {
 					continue;
 				}
@@ -178,7 +467,11 @@ export class GraphDataBuilder {
 				let targetNode: MutableGraphNode;
 				let targetId: string;
 				let edgeKind: GraphEdgeKind;
-				if (resolvedUri && this.context.isWithinWorkspace(resolvedUri) && !isExcludedPath(resolvedUri.path)) {
+				if (
+					resolvedUri &&
+					this.context.isWithinWorkspace(resolvedUri) &&
+					!isExcludedPath(resolvedUri.path)
+				) {
 					queue.push(resolvedUri);
 					targetNode = ensureFileNode(resolvedUri);
 					targetId = targetNode.id;
@@ -201,9 +494,13 @@ export class GraphDataBuilder {
 						kind: edgeKind,
 						sourcePath: sourceNode.path,
 						targetPath: targetNode.path,
-						symbols: []
+						symbols: [],
 					};
-					entry = { payload, labelParts: new Set<string>(), symbolNames: new Set<string>() };
+					entry = {
+						payload,
+						labelParts: new Set<string>(),
+						symbolNames: new Set<string>(),
+					};
 					edges.set(edgeKey, entry);
 				}
 
@@ -222,29 +519,45 @@ export class GraphDataBuilder {
 
 				targetNode.fanIn += 1;
 				sourceNode.fanOut += 1;
-				sourceNode.weight = Math.max(sourceNode.weight, sourceNode.fanIn + sourceNode.fanOut);
-				targetNode.weight = Math.max(targetNode.weight, targetNode.fanIn + targetNode.fanOut);
-				entry.payload.label = this.composeEdgeLabel(entry.labelParts, entry.payload.kind);
-				entry.payload.symbols = entry.symbolNames.size ? Array.from(entry.symbolNames) : [];
+				sourceNode.weight = Math.max(
+					sourceNode.weight,
+					sourceNode.fanIn + sourceNode.fanOut,
+				);
+				targetNode.weight = Math.max(
+					targetNode.weight,
+					targetNode.fanIn + targetNode.fanOut,
+				);
+				entry.payload.label = this.composeEdgeLabel(
+					entry.labelParts,
+					entry.payload.kind,
+				);
+				entry.payload.symbols = entry.symbolNames.size
+					? Array.from(entry.symbolNames)
+					: [];
 			}
 		}
 
-		const nodeArray = Array.from(nodes.values()).map(node => {
+		const nodeArray = Array.from(nodes.values()).map((node) => {
 			if (node.weight <= 1) {
 				node.weight = Math.max(1, node.fanIn + node.fanOut);
 			}
 			return node;
 		});
-		const edgeArray = Array.from(edges.values(), entry => {
+		const edgeArray = Array.from(edges.values(), (entry) => {
 			if (!entry.payload.symbols || entry.payload.symbols.length === 0) {
-				entry.payload.symbols = entry.symbolNames.size ? Array.from(entry.symbolNames) : [];
+				entry.payload.symbols = entry.symbolNames.size
+					? Array.from(entry.symbolNames)
+					: [];
 			}
 			return entry.payload;
 		});
 		return { nodes: nodeArray, edges: edgeArray };
 	}
 
-	private async getImportDescriptors(uri: URI, cache: Map<string, Promise<ImportDescriptor[]>>): Promise<ImportDescriptor[]> {
+	private async getImportDescriptors(
+		uri: URI,
+		cache: Map<string, Promise<ImportDescriptor[]>>,
+	): Promise<ImportDescriptor[]> {
 		const key = this.context.getUriKey(uri);
 		let promise = cache.get(key);
 		if (!promise) {
@@ -258,7 +571,11 @@ export class GraphDataBuilder {
 		return promise;
 	}
 
-	private async resolveImportTargetCached(sourceUri: URI, specifier: string, cache: Map<string, Promise<URI | undefined>>): Promise<URI | undefined> {
+	private async resolveImportTargetCached(
+		sourceUri: URI,
+		specifier: string,
+		cache: Map<string, Promise<URI | undefined>>,
+	): Promise<URI | undefined> {
 		const cacheKey = `${this.context.getUriKey(sourceUri)}::${specifier}`;
 		let promise = cache.get(cacheKey);
 		if (!promise) {
@@ -276,13 +593,25 @@ export class GraphDataBuilder {
 	private getSymbolsForDescriptor(descriptor: ImportDescriptor): string[] {
 		const symbols: string[] = [];
 		if (descriptor.defaultImport) {
-			symbols.push(this.decorateSymbol(descriptor.defaultImport.name, descriptor.defaultImport.isTypeOnly));
+			symbols.push(
+				this.decorateSymbol(
+					descriptor.defaultImport.name,
+					descriptor.defaultImport.isTypeOnly,
+				),
+			);
 		}
 		if (descriptor.namespaceImport) {
-			symbols.push(this.decorateSymbol(`* as ${descriptor.namespaceImport.name}`, descriptor.namespaceImport.isTypeOnly));
+			symbols.push(
+				this.decorateSymbol(
+					`* as ${descriptor.namespaceImport.name}`,
+					descriptor.namespaceImport.isTypeOnly,
+				),
+			);
 		}
 		for (const item of descriptor.namedImports) {
-			const display = item.propertyName ? `${item.propertyName} as ${item.name}` : item.name;
+			const display = item.propertyName
+				? `${item.propertyName} as ${item.name}`
+				: item.name;
 			symbols.push(this.decorateSymbol(display, item.isTypeOnly));
 		}
 		return symbols;
@@ -313,16 +642,24 @@ export class GraphDataBuilder {
 		if (symbols.size === 0) {
 			return '';
 		}
-		return Array.from(symbols).sort((a, b) => a.localeCompare(b)).join(', ');
+		return Array.from(symbols)
+			.sort((a, b) => a.localeCompare(b))
+			.join(', ');
 	}
 
-	private async resolveImportTarget(sourceUri: URI, specifier: string): Promise<URI | undefined> {
+	private async resolveImportTarget(
+		sourceUri: URI,
+		specifier: string,
+	): Promise<URI | undefined> {
 		if (!specifier) {
 			return undefined;
 		}
 		let baseUri: URI | undefined;
 		if (specifier.startsWith('.')) {
-			baseUri = this.context.extUri.resolvePath(this.context.extUri.dirname(sourceUri), specifier);
+			baseUri = this.context.extUri.resolvePath(
+				this.context.extUri.dirname(sourceUri),
+				specifier,
+			);
 		} else if (specifier.startsWith('/')) {
 			const workspaceRoot = this.context.getDefaultWorkspaceRoot();
 			if (workspaceRoot) {
@@ -362,7 +699,7 @@ export class GraphDataBuilder {
 			}
 		};
 
-		if (extension && GRAPH_FILE_EXTENSIONS.some(ext => ext === extension)) {
+		if (extension && GRAPH_FILE_EXTENSIONS.some((ext) => ext === extension)) {
 			pushCandidate(baseUri);
 			return candidates;
 		}
@@ -383,14 +720,20 @@ export class GraphDataBuilder {
 		return candidates;
 	}
 
-	private shouldIgnoreImport(specifier: string, resolvedUri: URI | undefined): boolean {
+	private shouldIgnoreImport(
+		specifier: string,
+		resolvedUri: URI | undefined,
+	): boolean {
 		const base = getImportBase(specifier);
 		if (GRAPH_IGNORED_IMPORT_SPECIFIERS.has(base)) {
 			return true;
 		}
 		if (resolvedUri) {
 			const path = resolvedUri.path.toLowerCase();
-			if (path.includes('/node_modules/') || path.includes('\\node_modules\\')) {
+			if (
+				path.includes('/node_modules/') ||
+				path.includes('\\node_modules\\')
+			) {
 				return true;
 			}
 		}
@@ -420,13 +763,18 @@ export class GraphDataBuilder {
 				defaultImport: undefined,
 				namespaceImport: undefined,
 				namedImports: [],
-				isSideEffectOnly: false
+				isSideEffectOnly: false,
 			};
 
 			let remainder = clause;
-			if (remainder && !remainder.startsWith('{') && !remainder.startsWith('*')) {
+			if (
+				remainder &&
+				!remainder.startsWith('{') &&
+				!remainder.startsWith('*')
+			) {
 				const commaIndex = remainder.indexOf(',');
-				const defaultPart = commaIndex === -1 ? remainder : remainder.slice(0, commaIndex);
+				const defaultPart =
+					commaIndex === -1 ? remainder : remainder.slice(0, commaIndex);
 				remainder = commaIndex === -1 ? '' : remainder.slice(commaIndex + 1);
 				const name = defaultPart.trim();
 				if (name) {
@@ -454,18 +802,26 @@ export class GraphDataBuilder {
 						if (alias) {
 							descriptor.namedImports.push({
 								name: alias,
-								propertyName: original && original !== alias ? original : undefined,
-								isTypeOnly
+								propertyName:
+									original && original !== alias ? original : undefined,
+								isTypeOnly,
 							});
 						}
 					} else if (token) {
-						descriptor.namedImports.push({ name: token, propertyName: undefined, isTypeOnly });
+						descriptor.namedImports.push({
+							name: token,
+							propertyName: undefined,
+							isTypeOnly,
+						});
 					}
 				}
 			} else if (remainder.startsWith('*')) {
 				const nsMatch = /\*\s+as\s+([A-Za-z0-9_$]+)/.exec(remainder);
 				if (nsMatch) {
-					descriptor.namespaceImport = { name: nsMatch[1], isTypeOnly: clauseIsTypeOnly };
+					descriptor.namespaceImport = {
+						name: nsMatch[1],
+						isTypeOnly: clauseIsTypeOnly,
+					};
 				}
 			}
 
@@ -483,11 +839,12 @@ export class GraphDataBuilder {
 				defaultImport: undefined,
 				namespaceImport: undefined,
 				namedImports: [],
-				isSideEffectOnly: true
+				isSideEffectOnly: true,
 			});
 		}
 
-		const importEqualsRegex = /import\s+(type\s+)?([A-Za-z0-9_$]+)\s*=\s*require\(\s*['"]([^'";]+)['"]\s*\)/g;
+		const importEqualsRegex =
+			/import\s+(type\s+)?([A-Za-z0-9_$]+)\s*=\s*require\(\s*['"]([^'";]+)['"]\s*\)/g;
 		while ((match = importEqualsRegex.exec(content)) !== null) {
 			const specifier = match[3]?.trim() ?? '';
 			const name = match[2]?.trim() ?? '';
@@ -500,11 +857,10 @@ export class GraphDataBuilder {
 				defaultImport: { name, isTypeOnly },
 				namespaceImport: undefined,
 				namedImports: [],
-				isSideEffectOnly: false
+				isSideEffectOnly: false,
 			});
 		}
 
 		return descriptors;
 	}
 }
-

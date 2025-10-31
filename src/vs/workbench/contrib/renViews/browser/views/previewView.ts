@@ -1,8 +1,3 @@
-/*---------------------------------------------------------------------------------------------
- *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
- *--------------------------------------------------------------------------------------------*/
-
 import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { IRenView } from './renView.interface.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
@@ -46,36 +41,11 @@ export class PreviewView extends Disposable implements IRenView {
 
 		// Detect React project
 		const reactInfo = await this.detectReactProject();
-
-		if (reactInfo.isReactProject) {
+		if (reactInfo) {
 			const reactInfoDiv = document.createElement('div');
 			reactInfoDiv.className = 'ren-react-info';
-
-			const statusText = document.createElement('p');
-			statusText.textContent = '✓ React project detected!';
-			statusText.className = 'ren-react-status';
-
-			const packageManagerText = document.createElement('p');
-			packageManagerText.textContent = `Package Manager: ${reactInfo.packageManager}`;
-			packageManagerText.className = 'ren-package-manager';
-
 			const scriptsInfo = document.createElement('div');
 			scriptsInfo.className = 'ren-scripts-info';
-
-			// Show detected preview URL
-			const previewUrl = `http://localhost:${reactInfo.preferredPort ?? 3000}`;
-			const urlText = document.createElement('p');
-			urlText.className = 'ren-help-text';
-			urlText.textContent = `Preview URL: ${previewUrl}`;
-
-			if (reactInfo.devScriptPresent || reactInfo.startScriptPresent) {
-				const runButton = document.createElement('button');
-				runButton.textContent = '> Run Development Server';
-				runButton.className = 'ren-run-button';
-				runButton.onclick = () => this.runDevelopmentServer(reactInfo);
-
-				scriptsInfo.appendChild(runButton);
-			}
 
 			if (reactInfo.buildScriptPresent) {
 				const buildButton = document.createElement('button');
@@ -92,37 +62,21 @@ export class PreviewView extends Disposable implements IRenView {
 			previewButton.onclick = () => this.openBrowserPreview(reactInfo);
 
 			scriptsInfo.appendChild(previewButton);
-			scriptsInfo.appendChild(urlText);
-
-			reactInfoDiv.appendChild(statusText);
-			reactInfoDiv.appendChild(packageManagerText);
-			reactInfoDiv.appendChild(scriptsInfo);
-
-			this._container.appendChild(title);
-			this._container.appendChild(reactInfoDiv);
-		} else {
-			const notReactDiv = document.createElement('div');
-			notReactDiv.className = 'ren-not-react';
-
-			const statusText = document.createElement('p');
-			statusText.textContent = 'X No React project detected in this workspace.';
-			statusText.className = 'ren-not-react-status';
 
 			const helpText = document.createElement('p');
 			helpText.textContent = 'Make sure you have a package.json file with React dependencies (react, react-dom) and appropriate scripts (dev, start, or build).';
 			helpText.className = 'ren-help-text';
 
-			notReactDiv.appendChild(statusText);
-			notReactDiv.appendChild(helpText);
+			reactInfoDiv.appendChild(scriptsInfo);
 
 			this._container.appendChild(title);
-			this._container.appendChild(notReactDiv);
+			this._container.appendChild(reactInfoDiv);
 		}
 
 		contentArea.appendChild(this._container);
 	}
 
-	private async detectReactProject(): Promise<ReactProjectInfo> {
+	private async detectReactProject(): Promise<ReactProjectInfo | null> {
 		const workspaceFolders = this.workspaceService.getWorkspace().folders;
 		if (workspaceFolders.length === 0) {
 			return {
@@ -134,59 +88,41 @@ export class PreviewView extends Disposable implements IRenView {
 			};
 		}
 
-		const rootFolder = workspaceFolders[0].uri;
-		const packageJsonUri = URI.joinPath(rootFolder, 'package.json');
-
-		try {
-			const packageJsonContent = await this.fileService.readFile(packageJsonUri);
-			const packageJson = JSON.parse(packageJsonContent.value.toString());
-
-			// Check for React dependencies
-			const dependencies = packageJson.dependencies || {};
-			const devDependencies = packageJson.devDependencies || {};
-			const hasReact = dependencies.react || dependencies['react-dom'] || devDependencies.react || devDependencies['react-dom'];
-
-			if (!hasReact) {
-				return {
-					isReactProject: false,
-					packageManager: 'unknown',
-					devScriptPresent: false,
-					startScriptPresent: false,
-					buildScriptPresent: false
-				};
+		for (const folder of workspaceFolders) {
+			const folderUri = folder.uri;
+			const packageJsonUri = URI.joinPath(folderUri, 'package.json');
+			try {
+				await this.fileService.stat(packageJsonUri);
+			} catch {
+				continue;
 			}
 
-			// Detect package manager
-			const packageManager = await this.detectPackageManager(rootFolder);
-
-			// Extract scripts and infer dev server details
-			const scriptsAny = packageJson.scripts ?? {};
-			const devScriptPresent = typeof scriptsAny.dev === 'string';
-			const startScriptPresent = typeof scriptsAny.start === 'string';
-			const buildScriptPresent = typeof scriptsAny.build === 'string';
-			const devCommandRaw = typeof scriptsAny.dev === 'string' ? scriptsAny.dev : undefined;
-			const preferredPort = this.inferDevServerPort(devCommandRaw);
-
-			return {
-				isReactProject: true,
-				packageManager,
-				devScriptPresent,
-				startScriptPresent,
-				buildScriptPresent,
-				devCommandRaw,
-				preferredPort,
-				packageJsonPath: packageJsonUri.fsPath
-			};
-		} catch (error) {
-			return {
-				isReactProject: false,
-				packageManager: 'unknown',
-				devScriptPresent: false,
-				startScriptPresent: false,
-				buildScriptPresent: false
-			};
+			const packageManager = await this.detectPackageManager(folderUri);
+			if (packageManager) {
+				const packageJsonContent = await this.fileService.readFile(packageJsonUri);
+				const packageJson = JSON.parse(packageJsonContent.value.toString());
+				const scriptsAny = packageJson.scripts ?? {};
+				const devScriptPresent = typeof scriptsAny.dev === 'string';
+				const startScriptPresent = typeof scriptsAny.start === 'string';
+				const buildScriptPresent = typeof scriptsAny.build === 'string';
+				const devCommandRaw = typeof scriptsAny.dev === 'string' ? scriptsAny.dev : undefined;
+				const preferredPort = this.inferDevServerPort(devCommandRaw);
+				return {
+					isReactProject: true,
+					packageManager,
+					devScriptPresent,
+					startScriptPresent,
+					buildScriptPresent,
+					devCommandRaw,
+					preferredPort,
+					packageJsonPath: packageJsonUri.fsPath
+				};
+			}
 		}
+
+		return null;
 	}
+
 
 	private async detectPackageManager(workspaceUri: URI): Promise<string> {
 		// Check for lock files to determine package manager
@@ -217,30 +153,6 @@ export class PreviewView extends Disposable implements IRenView {
 		}
 
 		return 'npm'; // Default fallback
-	}
-
-	private async runDevelopmentServer(reactInfo: ReactProjectInfo): Promise<void> {
-		const scriptName = reactInfo.devScriptPresent ? 'dev' : (reactInfo.startScriptPresent ? 'start' : undefined);
-		if (!scriptName) {
-			return;
-		}
-
-		const command = `${reactInfo.packageManager} run ${scriptName}`;
-		const folders = this.workspaceService.getWorkspace().folders;
-		const cwd = folders.length > 0 ? folders[0].uri.fsPath : undefined;
-
-		try {
-			await this.commandService.executeCommand('workbench.action.terminal.new');
-			if (cwd) {
-				await this.commandService.executeCommand('workbench.action.terminal.sendSequence', { text: `cd "${cwd}"\r` });
-			}
-			await this.commandService.executeCommand('workbench.action.terminal.sendSequence', { text: command + '\r' });
-
-			// Open the preview immediately; avoid CSP-blocked polling from workbench context
-			this.openBrowserPreview(reactInfo);
-		} catch (error) {
-			console.error('Failed to run development server:', error);
-		}
 	}
 
 	private async runBuildScript(reactInfo: ReactProjectInfo): Promise<void> {

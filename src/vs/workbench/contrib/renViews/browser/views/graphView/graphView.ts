@@ -16,10 +16,12 @@ import { IRenView } from '../renView.interface.js';
 import { IFileService } from '../../../../../../platform/files/common/files.js';
 import { IWorkspaceContextService } from '../../../../../../platform/workspace/common/workspace.js';
 import { IUriIdentityService } from '../../../../../../platform/uriIdentity/common/uriIdentity.js';
-import { IQuickInputService, IQuickPickItem } from '../../../../../../platform/quickinput/common/quickInput.js';
+import { IQuickInputService } from '../../../../../../platform/quickinput/common/quickInput.js';
 import { ISearchService } from '../../../../../services/search/common/search.js';
 import { IEditorService, SIDE_GROUP } from '../../../../../services/editor/common/editorService.js';
 import { IEditorGroupsService, IEditorGroup } from '../../../../../services/editor/common/editorGroupsService.js';
+import { ICommandService } from '../../../../../../platform/commands/common/commands.js';
+import { ILanguageFeaturesService } from '../../../../../../editor/common/services/languageFeatures.js';
 import { GroupIdentifier, SideBySideEditor } from '../../../../../common/editor.js';
 import { IResourceEditorInput, ITextEditorOptions, TextEditorSelectionRevealType } from '../../../../../../platform/editor/common/editor.js';
 import { Range } from '../../../../../../editor/common/core/range.js';
@@ -33,11 +35,12 @@ import { GraphDataBuilder } from './graphDataBuilder.js';
 import { GraphPickers } from './graphPickers.js';
 import { GraphEdgePayload, GraphMode, GraphNodePayload, GraphStatusLevel, GraphWebviewPayload } from './graphTypes.js';
 import { isExcludedPath } from './graphConstants.js';
+import { ViewButtons } from '../../components/viewButtons.js';
 
 export class GraphView extends Disposable implements IRenView {
 	private _mainContainer: HTMLElement | null = null;
 	private _toolbar: HTMLElement | null = null;
-	private _modeButton: HTMLButtonElement | null = null;
+	private _modeSelect: HTMLSelectElement | null = null;
 	private _targetButton: HTMLButtonElement | null = null;
 	private _window: Window | null = null;
 	private _webview: IWebviewElement | null = null;
@@ -45,6 +48,7 @@ export class GraphView extends Disposable implements IRenView {
 	private _promptInFlight = false;
 	private _renderRequestId = 0;
 	private _mode: GraphMode = 'file';
+	private _isUpdatingProgrammatically = false;
 	private _selectedFile: URI | undefined;
 	private _selectedFolder: URI | undefined;
 	private _currentGraph:
@@ -56,6 +60,7 @@ export class GraphView extends Disposable implements IRenView {
 		}
 		| undefined;
 	private _codeViewGroupId: GroupIdentifier | undefined;
+	private _viewButtons: ViewButtons | null = null;
 
 	private readonly context: GraphWorkspaceContext;
 	private readonly dataBuilder: GraphDataBuilder;
@@ -70,11 +75,13 @@ export class GraphView extends Disposable implements IRenView {
 		@IQuickInputService private readonly quickInputService: IQuickInputService,
 		@ISearchService searchService: ISearchService,
 		@IEditorService private readonly editorService: IEditorService,
-		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService
+		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
+		@ICommandService private readonly _commandService: ICommandService,
+		@ILanguageFeaturesService private readonly _languageFeaturesService: ILanguageFeaturesService
 	) {
 		super();
 		this.context = new GraphWorkspaceContext(workspaceService, uriIdentityService);
-		this.dataBuilder = new GraphDataBuilder(this.logService, this.fileService, searchService, this.context);
+		this.dataBuilder = new GraphDataBuilder(this.logService, this.fileService, searchService, this.context, this._commandService, this._languageFeaturesService);
 		this.pickers = new GraphPickers(this.quickInputService, searchService, this.fileService, this.logService, this.context);
 	}
 
@@ -86,6 +93,19 @@ export class GraphView extends Disposable implements IRenView {
 		this._graphReady = false;
 		this._promptInFlight = false;
 		this._renderRequestId++;
+
+		// Set up event listener for graph mode changes from top toolbar
+		if (this._window) {
+			const handleGraphModeChange = (e: Event) => {
+				const customEvent = e as CustomEvent<GraphMode>;
+				if (customEvent.detail && customEvent.detail !== this._mode) {
+					// Prevent event loop by checking if mode is different
+					this.applyModeChange(customEvent.detail);
+				}
+			};
+			this._window.document.addEventListener('ren-graph-mode-change', handleGraphModeChange);
+			this._register({ dispose: () => this._window?.document.removeEventListener('ren-graph-mode-change', handleGraphModeChange) });
+		}
 
 		this._mainContainer = document.createElement('div');
 		this._mainContainer.className = 'ren-graph-container';
@@ -108,6 +128,10 @@ export class GraphView extends Disposable implements IRenView {
 		this._mainContainer.appendChild(this.ensureToolbar());
 
 		contentArea.appendChild(this._mainContainer);
+
+		// Add view buttons at bottom right
+		contentArea.style.position = 'relative';
+		this.addViewButtons(contentArea);
 
 		void this.loadWebview(viewport);
 	}
@@ -192,7 +216,17 @@ export class GraphView extends Disposable implements IRenView {
 		}));
 	}
 
+	private addViewButtons(container: HTMLElement): void {
+		container.style.position = 'relative';
+		this._viewButtons = new ViewButtons(container);
+		this._register(this._viewButtons);
+	}
+
 	hide(): void {
+		if (this._viewButtons) {
+			this._viewButtons.dispose();
+			this._viewButtons = null;
+		}
 		if (this._mainContainer) {
 			this._mainContainer.remove();
 			this._mainContainer = null;
@@ -219,13 +253,38 @@ export class GraphView extends Disposable implements IRenView {
 		toolbar.style.margin = '8px 0 0';
 		toolbar.style.alignSelf = 'flex-end';
 
-		const modeButton = document.createElement('button');
-		modeButton.className = 'ren-graph-toolbar-btn';
-		modeButton.addEventListener('click', () => {
-			void this.pickGraphMode();
+		const modeLabel = document.createElement('label');
+		modeLabel.className = 'ren-graph-toolbar-field';
+		modeLabel.textContent = 'View: ';
+
+		const modeSelect = document.createElement('select');
+		modeSelect.id = 'renGraphModeSelect';
+		modeSelect.className = 'ren-graph-toolbar-select';
+		(['file', 'folder', 'workspace', 'architecture'] as GraphMode[]).forEach(mode => {
+			const option = document.createElement('option');
+			option.value = mode;
+			option.textContent = this.getModeLabel(mode);
+			modeSelect.appendChild(option);
 		});
-		toolbar.appendChild(modeButton);
-		this._modeButton = modeButton;
+		modeSelect.value = this._mode;
+		modeSelect.title = 'Select graph scope';
+		modeSelect.addEventListener('change', () => {
+			// Prevent event loop - ignore changes triggered programmatically
+			if (this._isUpdatingProgrammatically) {
+				return;
+			}
+			const selectedMode = modeSelect.value as GraphMode;
+			// Dispatch event to sync with top toolbar
+			if (this._window) {
+				const event = new CustomEvent('ren-graph-mode-change', { detail: selectedMode });
+				this._window.document.dispatchEvent(event);
+			}
+			this.applyModeChange(selectedMode);
+		});
+
+		modeLabel.appendChild(modeSelect);
+		toolbar.appendChild(modeLabel);
+		this._modeSelect = modeSelect;
 
 		const targetButton = document.createElement('button');
 		targetButton.className = 'ren-graph-toolbar-btn';
@@ -241,9 +300,17 @@ export class GraphView extends Disposable implements IRenView {
 	}
 
 	private updateToolbarUI(): void {
-		if (this._modeButton) {
-			this._modeButton.textContent = `Mode: ${this.getModeLabel(this._mode)}`;
-			this._modeButton.title = 'Click to change graph scope';
+		if (this._modeSelect) {
+			this._isUpdatingProgrammatically = true;
+			try {
+				this._modeSelect.value = this._mode;
+			} finally {
+				// Use setTimeout to ensure the change event has fired before resetting the flag
+				setTimeout(() => {
+					this._isUpdatingProgrammatically = false;
+				}, 0);
+			}
+			this._modeSelect.title = 'Select graph scope';
 		}
 		if (this._targetButton) {
 			switch (this._mode) {
@@ -257,6 +324,10 @@ export class GraphView extends Disposable implements IRenView {
 						: 'Select Folder…';
 					this._targetButton.title = 'Choose a folder to visualize';
 					break;
+				case 'architecture':
+					this._targetButton.textContent = 'Analyze Architecture';
+					this._targetButton.title = 'Inspect the project to build an architecture graph';
+					break;
 				case 'file':
 				default:
 					this._targetButton.textContent = this._selectedFile
@@ -268,43 +339,23 @@ export class GraphView extends Disposable implements IRenView {
 		}
 	}
 
-	private async pickGraphMode(): Promise<void> {
-		const pick = this.quickInputService.createQuickPick<IQuickPickItem & { mode: GraphMode }>();
-		pick.placeholder = 'Select graph scope';
-		pick.items = [
-			{ label: 'File', description: 'Visualize imports for a single file', mode: 'file' },
-			{ label: 'Folder', description: 'Visualize imports within a folder', mode: 'folder' },
-			{ label: 'Workspace', description: 'Visualize imports across the entire workspace', mode: 'workspace' }
-		];
-		pick.activeItems = pick.items.filter(item => item.mode === this._mode);
-		const disposables = new DisposableStore();
-		disposables.add(pick);
+	private applyModeChange(mode: GraphMode): void {
+		if (mode === this._mode) {
+			return;
+		}
 
-		return new Promise(resolve => {
-			disposables.add(pick.onDidAccept(() => {
-				const selection = pick.selectedItems[0];
-				if (selection) {
-					this._mode = selection.mode;
-					if (this._mode !== 'file') {
-						this._selectedFile = undefined;
-					}
-					if (this._mode !== 'folder') {
-						this._selectedFolder = undefined;
-					}
-					this.updateToolbarUI();
-					void this.sendStatus(this.getReadyMessage(), 'info');
-					if (this._mode === 'workspace' && this._graphReady) {
-						void this.promptForTargetAndRender();
-					}
-				}
-				pick.hide();
-			}));
-			disposables.add(pick.onDidHide(() => {
-				disposables.dispose();
-				resolve();
-			}));
-			pick.show();
-		});
+		this._mode = mode;
+		if (this._mode !== 'file') {
+			this._selectedFile = undefined;
+		}
+		if (this._mode !== 'folder') {
+			this._selectedFolder = undefined;
+		}
+		this.updateToolbarUI();
+		void this.sendStatus(this.getReadyMessage(), 'info');
+		if ((this._mode === 'workspace' || this._mode === 'architecture') && this._graphReady) {
+			void this.promptForTargetAndRender();
+		}
 	}
 
 	private async promptForTargetAndRender(): Promise<void> {
@@ -336,6 +387,9 @@ export class GraphView extends Disposable implements IRenView {
 					await this.renderFolderGraph(folder, requestId);
 					break;
 				}
+				case 'architecture':
+					await this.renderArchitectureGraph(requestId);
+					break;
 				case 'file':
 				default: {
 					await this.sendStatus('Waiting for file selection…', 'loading');
@@ -437,6 +491,42 @@ export class GraphView extends Disposable implements IRenView {
 			if (requestId === undefined && effectiveRequestId === this._renderRequestId) {
 				this._promptInFlight = false;
 			}
+		}
+	}
+
+	private async renderArchitectureGraph(requestId: number): Promise<void> {
+		await this.sendStatus('Analyzing project architecture…', 'loading');
+		const progressListeners = new DisposableStore();
+		try {
+			progressListeners.add(this.dataBuilder.onArchitectureProgress(message => {
+				if (typeof message === 'string' && message.trim().length) {
+					void this.sendStatus(message, 'loading');
+				}
+			}));
+			const payload = await this.dataBuilder.buildArchitectureGraph();
+			if (requestId !== this._renderRequestId) {
+				return;
+			}
+			this.storeGraphPayload(payload);
+			await this._webview?.postMessage({ type: 'REN_GRAPH_DATA', payload });
+			const nodeCount = this.getNodeCount(payload);
+			this.logService.info('[GraphView] architecture graph result', { nodes: nodeCount, edges: this.getEdgeCount(payload) });
+			if (nodeCount === 0) {
+				await this.sendStatus('Unable to detect architecture components in this workspace. Falling back to import graph.', 'warning', 6000);
+				await this.renderWorkspaceGraph(requestId);
+				return;
+			}
+			await this.sendStatus(`Rendered architecture graph (${nodeCount} components).`, 'success', 4000);
+			if (Array.isArray(payload.warnings) && payload.warnings.length) {
+				await this.sendStatus(payload.warnings[0], 'warning', 6000);
+			}
+		} catch (error) {
+			this.logService.error('[GraphView] failed to build architecture graph', error);
+			if (requestId === this._renderRequestId) {
+				await this.sendStatus('Failed to analyze architecture. Check logs for details.', 'error');
+			}
+		} finally {
+			progressListeners.dispose();
 		}
 	}
 
@@ -942,6 +1032,8 @@ export class GraphView extends Disposable implements IRenView {
 				return 'Workspace';
 			case 'folder':
 				return 'Folder';
+			case 'architecture':
+				return 'Architecture';
 			case 'file':
 			default:
 				return 'File';
@@ -954,6 +1046,8 @@ export class GraphView extends Disposable implements IRenView {
 				return 'Rendering entire workspace import graph…';
 			case 'folder':
 				return 'Select a folder to visualize its imports.';
+			case 'architecture':
+				return 'Analyze the workspace to discover its architecture.';
 			case 'file':
 			default:
 				return 'Select a file to visualize its imports.';
