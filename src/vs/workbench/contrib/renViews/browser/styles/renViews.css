@@ -88,19 +88,44 @@
 	color: var(--vscode-button-secondaryForeground);
 }
 
-/* Preview view styles */
-.ren-preview-container {
+/* MonitorX view styles */
+.ren-monitorx-container {
 	text-align: center;
 	padding: 50px;
 }
 
-.ren-preview-title {
+.ren-monitorx-title {
 	margin-bottom: 20px;
 	color: var(--vscode-editor-foreground);
 }
 
-.ren-preview-description {
-	color: var(--vscode-descriptionForeground);
+.ren-monitorx-changelog-section {
+	margin-top: 32px;
+	text-align: left;
+	max-width: 720px;
+	margin-left: auto;
+	margin-right: auto;
+}
+
+.ren-monitorx-changelog-title {
+	margin-bottom: 12px;
+	font-size: 18px;
+	font-weight: 600;
+	color: var(--vscode-editor-foreground);
+}
+
+.ren-monitorx-changelog-body {
+	background-color: var(--vscode-editorWidget-background);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 8px;
+	padding: 16px;
+	max-height: 320px;
+	overflow: auto;
+}
+
+.monitorx-pane-container .ren-monitorx-changelog-body {
+	max-height: none;
+	height: 100%;
 }
 
 /* Graph view styles */
@@ -328,8 +353,8 @@
 	}
 }
 
-/* React Project Detection Styles */
-.ren-react-info {
+/* MonitorX React project detection styles */
+.ren-monitorx-react-info {
 	background-color: var(--vscode-panel-background);
 	border: 1px solid var(--vscode-panel-border);
 	border-radius: 8px;
@@ -341,29 +366,29 @@
 	margin-right: auto;
 }
 
-.ren-react-status {
+.ren-monitorx-status {
 	font-size: 16px;
 	font-weight: 600;
 	color: var(--vscode-terminal-ansiGreen);
 	margin-bottom: 10px;
 }
 
-.ren-package-manager {
+.ren-monitorx-package-manager {
 	font-size: 14px;
 	color: var(--vscode-descriptionForeground);
 	margin-bottom: 20px;
 }
 
-.ren-scripts-info {
+.ren-monitorx-scripts-info {
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
 	align-items: stretch;
 }
 
-.ren-run-button,
-.ren-build-button,
-.ren-preview-button {
+.ren-monitorx-run-button,
+.ren-monitorx-build-button,
+.ren-monitorx-button {
 	padding: 12px 20px;
 	border: none;
 	border-radius: 6px;
@@ -377,41 +402,41 @@
 	gap: 8px;
 }
 
-.ren-run-button {
+.ren-monitorx-run-button {
 	background-color: var(--vscode-button-background);
 	color: var(--vscode-button-foreground);
 }
 
-.ren-run-button:hover {
+.ren-monitorx-run-button:hover {
 	background-color: var(--vscode-button-hoverBackground);
 	transform: translateY(-1px);
 	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
-.ren-build-button {
+.ren-monitorx-build-button {
 	background-color: var(--vscode-button-secondaryBackground);
 	color: var(--vscode-button-secondaryForeground);
 }
 
-.ren-build-button:hover {
+.ren-monitorx-build-button:hover {
 	background-color: var(--vscode-button-secondaryHoverBackground);
 	transform: translateY(-1px);
 	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
-.ren-preview-button {
+.ren-monitorx-button {
 	background-color: var(--vscode-button-secondaryBackground);
 	color: var(--vscode-button-secondaryForeground);
 	border: 1px solid var(--vscode-button-border);
 }
 
-.ren-preview-button:hover {
+.ren-monitorx-button:hover {
 	background-color: var(--vscode-button-secondaryHoverBackground);
 	transform: translateY(-1px);
 	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
-.ren-not-react {
+.ren-monitorx-not-react {
 	background-color: var(--vscode-panel-background);
 	border: 1px solid var(--vscode-panel-border);
 	border-radius: 8px;
@@ -423,17 +448,77 @@
 	margin-right: auto;
 }
 
-.ren-not-react-status {
+.ren-monitorx-not-react-status {
 	font-size: 16px;
 	font-weight: 600;
 	color: var(--vscode-terminal-ansiRed);
 	margin-bottom: 10px;
 }
 
-.ren-help-text {
+.ren-monitorx-help-text {
 	font-size: 14px;
 	color: var(--vscode-descriptionForeground);
 	line-height: 1.5;
+}
+
+.ren-monitorx-changelog-empty {
+	color: var(--vscode-descriptionForeground);
+	font-size: 13px;
+	text-align: center;
+}
+
+.ren-monitorx-changelog-list {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.ren-monitorx-changelog-entry {
+	border: 1px solid var(--vscode-panel-border);
+	background-color: var(--vscode-sideBarSectionHeader-background);
+	padding: 12px;
+	border-radius: 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.ren-monitorx-changelog-entry-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 8px;
+	font-weight: 600;
+}
+
+.ren-monitorx-changelog-entry-file {
+	font-size: 13px;
+	color: var(--vscode-editor-foreground);
+	word-break: break-all;
+}
+
+.ren-monitorx-changelog-entry-time {
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.ren-monitorx-changelog-entry-reason {
+	margin: 0;
+	font-size: 13px;
+	color: var(--vscode-foreground);
+}
+
+.ren-monitorx-changelog-entry-diff {
+	margin: 0;
+	padding: 8px;
+	border-radius: 4px;
+	background-color: var(--vscode-editor-background);
+	border: 1px solid var(--vscode-panel-border);
+	font-family: var(--monaco-monospace-font);
+	font-size: 12px;
+	white-space: pre-wrap;
+	max-height: 160px;
+	overflow: auto;
 }
 
 /* .env overlay */
@@ -505,20 +590,26 @@
 
 /* Responsive adjustments for React project UI */
 @media (max-width: 600px) {
-	.ren-react-info,
-	.ren-not-react {
+	.ren-monitorx-react-info,
+	.ren-monitorx-not-react {
 		margin: 10px;
 		padding: 15px;
 	}
 
-	.ren-scripts-info {
+	.ren-monitorx-scripts-info {
 		gap: 8px;
 	}
 
-	.ren-run-button,
-	.ren-build-button,
-	.ren-preview-button {
+	.ren-monitorx-run-button,
+	.ren-monitorx-build-button,
+	.ren-monitorx-button {
 		padding: 10px 16px;
 		font-size: 13px;
 	}
+}
+
+.monitorx-pane-container {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
 }

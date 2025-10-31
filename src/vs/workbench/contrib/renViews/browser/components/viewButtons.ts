@@ -24,10 +24,10 @@ export class ViewButtons implements IDisposable {
 	}
 
 	private createButtons(): void {
-		const views: RenViewMode[] = ['code', 'preview', 'graph'];
+		const views: RenViewMode[] = ['code', 'monitorx', 'graph'];
 		const labels: Record<RenViewMode, string> = {
 			code: 'Code',
-			preview: 'Preview',
+			monitorx: 'MonitorX',
 			graph: 'Graph'
 		};
 

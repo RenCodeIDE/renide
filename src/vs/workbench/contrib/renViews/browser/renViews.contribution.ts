@@ -13,6 +13,16 @@ import './styles/renViews.css';
 import { EnvOverlay } from './envOverlay.js';
 import { RenMainWindowOverlay } from './renMainWindowOverlay.js';
 import { ViewButtons } from './components/viewButtons.js';
+import { localize, localize2 } from '../../../../nls.js';
+import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
+import { Codicon } from '../../../../base/common/codicons.js';
+import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
+import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
+import { ViewContainerLocation, IViewContainersRegistry, IViewsRegistry, Extensions as ViewExtensions, ViewContainer } from '../../../common/views.js';
+import { MonitorXChangelogViewPane } from './views/monitorXChangelogViewPane.js';
+import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
+import { IRenWorkspaceStore, IMonitorXChangelogEntryInput } from '../common/renWorkspaceStore.js';
+import './renWorkspaceStore.js';
 
 export class RenViewsContribution implements IWorkbenchContribution {
 	static readonly ID = 'ren.views.contribution';
@@ -114,3 +124,61 @@ export class RenViewsContribution implements IWorkbenchContribution {
 // Register the contribution
 const workbenchRegistry = Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench);
 workbenchRegistry.registerWorkbenchContribution(RenViewsContribution, LifecyclePhase.Restored);
+
+const MONITORX_CHANGELOG_CONTAINER_ID = 'workbench.view.monitorxChangelog';
+const MONITORX_CHANGELOG_VIEW_ID = 'workbench.view.monitorxChangelog.entries';
+const monitorXChangelogIcon = registerIcon('monitorx-changelog-view-icon', Codicon.history, localize('monitorxChangelogIcon', "MonitorX changelog view icon."));
+
+const monitorXChangelogContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
+	id: MONITORX_CHANGELOG_CONTAINER_ID,
+	title: localize2('monitorxActivityTitle', "MonitorX"),
+	ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [MONITORX_CHANGELOG_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
+	icon: monitorXChangelogIcon,
+	hideIfEmpty: false
+}, ViewContainerLocation.Sidebar);
+
+Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([
+	{
+		id: MONITORX_CHANGELOG_VIEW_ID,
+		name: localize2('monitorxChangelogViewTitle', "MonitorX Changelog"),
+		ctorDescriptor: new SyncDescriptor(MonitorXChangelogViewPane),
+		canToggleVisibility: true,
+		canMoveView: true,
+		collapsed: false,
+		order: 10
+	}
+], monitorXChangelogContainer);
+
+const MONITORX_ADD_CHANGELOG_COMMAND = 'ren.monitorx.addChangelogEntry';
+const MONITORX_GET_CHANGELOG_COMMAND = 'ren.monitorx.getRecentChangelogEntries';
+
+if (!CommandsRegistry.getCommand(MONITORX_ADD_CHANGELOG_COMMAND)) {
+	CommandsRegistry.registerCommand({
+		id: MONITORX_ADD_CHANGELOG_COMMAND,
+		handler: async (accessor, args: Partial<IMonitorXChangelogEntryInput> | undefined) => {
+			const workspaceStore = accessor.get(IRenWorkspaceStore);
+			if (!args || typeof args.filePath !== 'string' || typeof args.diff !== 'string' || typeof args.reason !== 'string') {
+				throw new Error('monitorx.addChangelogEntry requires filePath, diff, and reason strings.');
+			}
+			const entry = await workspaceStore.addChangelogEntry({
+				filePath: args.filePath,
+				diff: args.diff,
+				reason: args.reason,
+				timestamp: typeof args.timestamp === 'number' ? args.timestamp : undefined
+			});
+			return { ...entry };
+		}
+	});
+}
+
+if (!CommandsRegistry.getCommand(MONITORX_GET_CHANGELOG_COMMAND)) {
+	CommandsRegistry.registerCommand({
+		id: MONITORX_GET_CHANGELOG_COMMAND,
+		handler: async (accessor, args: { limit?: number } | undefined) => {
+			const workspaceStore = accessor.get(IRenWorkspaceStore);
+			const limit = args && typeof args.limit === 'number' ? Math.max(1, Math.floor(args.limit)) : 10;
+			const entries = await workspaceStore.getRecentChangelogEntries(limit);
+			return entries.map(entry => ({ ...entry }));
+		}
+	});
+}

@@ -177,6 +177,12 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				background: var(--vscode-button-hoverBackground, #3c3c40);
 			}
 
+			#toolbar button.active {
+				background: var(--vscode-button-hoverBackground, #3c3c40);
+				border-color: var(--vscode-focusBorder, #007ACC);
+				box-shadow: 0 0 0 1px rgba(0, 122, 204, 0.35);
+			}
+
 			#status {
 				position: absolute;
 				left: 16px;
@@ -224,6 +230,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 		<div id="legend" aria-live="polite" aria-label="Architecture legend"></div>
 		<div id="toolbar" aria-label="Graph controls">
 			<button id="selectFile" title="Select a target to visualize">Select Target...</button>
+			<button id="toggleSelectMode" title="Highlight a node and its connections">Select Nodes</button>
 			<button id="zoomIn" title="Zoom in">+</button>
 			<button id="zoomOut" title="Zoom out">-</button>
 		</div>
@@ -236,6 +243,16 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			let autoClearHandle = undefined;
 			const statusEl = document.getElementById('status');
 			const legendEl = document.getElementById('legend');
+		const selectModeButton = document.getElementById('toggleSelectMode');
+		let selectionMode = false;
+		let highlightedNodeId = null;
+		const send = (type, payload) => {
+			try {
+				vscode.postMessage({ type, payload });
+			} catch (error) {
+				console.error('[graph-view] failed to post message', error);
+			}
+		};
 		const categoryState = new Map();
 		const CATEGORY_STYLES = {
 				application: { color: '#FFB300' },
@@ -294,6 +311,60 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					});
 				});
 			};
+
+		const updateSelectModeButton = () => {
+			if (!selectModeButton) {
+				return;
+			}
+			selectModeButton.classList.toggle('active', selectionMode);
+			selectModeButton.textContent = selectionMode ? 'Exit Select Mode' : 'Select Nodes';
+			selectModeButton.title = selectionMode
+				? 'Click to exit select mode and restore the full graph'
+				: 'Highlight a node and its immediate connections';
+		};
+
+		const clearSelectionHighlight = (notify = false) => {
+			const hadHighlight = highlightedNodeId !== null;
+			if (cy) {
+				cy.batch(() => {
+					cy.elements().removeClass('selected connected highlighted dimmed');
+				});
+			}
+			highlightedNodeId = null;
+			if (notify && hadHighlight) {
+				send('REN_GRAPH_EVT', { type: 'selection-cleared' });
+			}
+		};
+
+		const applySelectionHighlight = node => {
+			if (!node || !cy) {
+				return;
+			}
+			cy.batch(() => {
+				cy.elements().removeClass('selected connected highlighted dimmed');
+				const neighborhood = node.closedNeighborhood();
+				const connectedEdges = neighborhood.edges();
+				const connectedNodes = neighborhood.nodes();
+				const otherNodes = cy.nodes().not(connectedNodes);
+				const otherEdges = cy.edges().not(connectedEdges);
+				node.addClass('selected');
+				connectedNodes.not(node).addClass('connected');
+				connectedEdges.addClass('highlighted');
+				otherNodes.addClass('dimmed');
+				otherEdges.addClass('dimmed');
+			});
+			highlightedNodeId = node.id();
+		};
+
+		if (selectModeButton) {
+			selectModeButton.addEventListener('click', () => {
+				selectionMode = !selectionMode;
+				clearSelectionHighlight(!selectionMode);
+				updateSelectModeButton();
+				send('REN_GRAPH_EVT', { type: 'selection-mode-changed', data: { enabled: selectionMode } });
+			});
+			updateSelectModeButton();
+		}
 
 	const renderLegend = payload => {
 			if (!legendEl) {
@@ -476,14 +547,6 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			}
 		};
 
-			const send = (type, payload) => {
-				try {
-					vscode.postMessage({ type, payload });
-				} catch (error) {
-					console.error('[graph-view] failed to post message', error);
-				}
-			};
-
 			const clearStatus = () => {
 				if (autoClearHandle) {
 					clearTimeout(autoClearHandle);
@@ -638,6 +701,35 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 							'target-arrow-color': '#FFCC80',
 							'color': '#FFECB3'
 						}}
+				,
+				{ selector: 'node.selected', style: {
+					'border-color': '#FFEB3B',
+					'border-width': 4,
+					'background-color': '#FFD54F',
+					'color': '#1B1300',
+					'opacity': 1
+				}},
+				{ selector: 'node.connected', style: {
+					'border-color': '#FFF176',
+					'border-width': 3,
+					'opacity': 1
+				}},
+				{ selector: 'edge.highlighted', style: {
+					'line-color': '#FFEB3B',
+					'target-arrow-color': '#FFEB3B',
+					'width': 3,
+					'opacity': 1,
+					'text-opacity': 1,
+					'text-background-opacity': 1
+				}},
+				{ selector: 'node.dimmed', style: {
+					'opacity': 0.15,
+					'color': 'rgba(255, 255, 255, 0.35)'
+				}},
+				{ selector: 'edge.dimmed', style: {
+					'opacity': 0.1,
+					'text-opacity': 0.1
+				}}
 					],
 					wheelSensitivity: 0.2,
 					minZoom: 0.1,
@@ -645,10 +737,31 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				});
 
 				cy.on('tap', 'node', evt => {
+					if (selectionMode) {
+						const node = evt.target;
+						if (highlightedNodeId === node.id()) {
+							clearSelectionHighlight(true);
+						} else {
+							applySelectionHighlight(node);
+							send('REN_GRAPH_EVT', { type: 'selection-node', data: node.data() });
+						}
+						return;
+					}
 					send('REN_GRAPH_EVT', { type: 'node-tap', data: evt.target.data() });
 				});
 				cy.on('tap', 'edge', evt => {
+					if (selectionMode) {
+						return;
+					}
 					send('REN_GRAPH_EVT', { type: 'edge-tap', data: evt.target.data() });
+				});
+				cy.on('tap', evt => {
+					if (!selectionMode) {
+						return;
+					}
+					if (evt.target === cy) {
+						clearSelectionHighlight(true);
+					}
 				});
 			};
 
@@ -668,6 +781,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					return;
 				}
 				ensureCy();
+				clearSelectionHighlight();
 				cy.stop();
 				cy.elements().remove();
 				const selectButton = document.getElementById('selectFile');

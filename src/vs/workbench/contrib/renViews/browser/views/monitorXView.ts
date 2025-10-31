@@ -1,9 +1,16 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
 import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { IRenView } from './renView.interface.js';
+import { IRenWorkspaceStore, IMonitorXChangelogEntry } from '../../common/renWorkspaceStore.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { URI } from '../../../../../base/common/uri.js';
+import { renderMonitorXChangelog } from './monitorXChangelogRenderer.js';
 
 interface ReactProjectInfo {
 	isReactProject: boolean;
@@ -11,67 +18,87 @@ interface ReactProjectInfo {
 	devScriptPresent: boolean;
 	startScriptPresent: boolean;
 	buildScriptPresent: boolean;
-	devCommandRaw?: string; // the actual command string for dev (e.g., "vite", "next dev")
-	preferredPort?: number; // inferred dev server port
+	devCommandRaw?: string;
+	preferredPort?: number;
 	packageJsonPath?: string;
 }
 
-export class PreviewView extends Disposable implements IRenView {
+export class MonitorXView extends Disposable implements IRenView {
 	private _container: HTMLElement | null = null;
 
 	constructor(
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
 		@IFileService private readonly fileService: IFileService,
-		@ICommandService private readonly commandService: ICommandService
+		@ICommandService private readonly commandService: ICommandService,
+		@IRenWorkspaceStore private readonly workspaceStore: IRenWorkspaceStore
 	) {
 		super();
 	}
 
 	async show(contentArea: HTMLElement): Promise<void> {
-		// Clear existing content safely
 		contentArea.textContent = '';
 
-		// Create elements instead of using innerHTML
 		this._container = document.createElement('div');
-		this._container.className = 'ren-preview-container';
+		this._container.className = 'ren-monitorx-container';
 
 		const title = document.createElement('h2');
-		title.textContent = 'React Project Preview';
-		title.className = 'ren-preview-title';
+		title.textContent = 'MonitorX Dashboard';
+		title.className = 'ren-monitorx-title';
 
-		// Detect React project
 		const reactInfo = await this.detectReactProject();
 		if (reactInfo) {
 			const reactInfoDiv = document.createElement('div');
-			reactInfoDiv.className = 'ren-react-info';
+			reactInfoDiv.className = 'ren-monitorx-react-info';
 			const scriptsInfo = document.createElement('div');
-			scriptsInfo.className = 'ren-scripts-info';
+			scriptsInfo.className = 'ren-monitorx-scripts-info';
 
 			if (reactInfo.buildScriptPresent) {
 				const buildButton = document.createElement('button');
 				buildButton.textContent = 'Build Project';
-				buildButton.className = 'ren-build-button';
+				buildButton.className = 'ren-monitorx-build-button';
 				buildButton.onclick = () => this.runBuildScript(reactInfo);
-
 				scriptsInfo.appendChild(buildButton);
 			}
 
-			const previewButton = document.createElement('button');
-			previewButton.textContent = 'Open Browser Preview';
-			previewButton.className = 'ren-preview-button';
-			previewButton.onclick = () => this.openBrowserPreview(reactInfo);
-
-			scriptsInfo.appendChild(previewButton);
+			const monitorButton = document.createElement('button');
+			monitorButton.textContent = 'Open Browser Monitor';
+			monitorButton.className = 'ren-monitorx-button';
+			monitorButton.onclick = () => this.openBrowserPreview(reactInfo);
+			scriptsInfo.appendChild(monitorButton);
 
 			const helpText = document.createElement('p');
-			helpText.textContent = 'Make sure you have a package.json file with React dependencies (react, react-dom) and appropriate scripts (dev, start, or build).';
-			helpText.className = 'ren-help-text';
+			helpText.textContent = 'Ensure package.json includes React dependencies and scripts (dev, start, or build) to take full advantage of MonitorX.';
+			helpText.className = 'ren-monitorx-help-text';
 
 			reactInfoDiv.appendChild(scriptsInfo);
+			reactInfoDiv.appendChild(helpText);
 
 			this._container.appendChild(title);
 			this._container.appendChild(reactInfoDiv);
+		} else {
+			this._container.appendChild(title);
 		}
+
+		const changelogSection = document.createElement('section');
+		changelogSection.className = 'ren-monitorx-changelog-section';
+
+		const changelogTitle = document.createElement('h3');
+		changelogTitle.textContent = 'Recent Changes';
+		changelogTitle.className = 'ren-monitorx-changelog-title';
+
+		const changelogBody = document.createElement('div');
+		changelogBody.className = 'ren-monitorx-changelog-body';
+		changelogSection.appendChild(changelogTitle);
+		changelogSection.appendChild(changelogBody);
+		this._container.appendChild(changelogSection);
+
+		const updateChangelog = (entries: IMonitorXChangelogEntry[] | undefined) => {
+			const data = entries ?? [];
+			renderMonitorXChangelog(changelogBody, data, { emptyMessage: 'No MonitorX activity recorded yet.', limit: 10 });
+		};
+
+		updateChangelog(await this.workspaceStore.getRecentChangelogEntries(10));
+		this._register(this.workspaceStore.onDidChangeChangelog(entries => updateChangelog(entries)));
 
 		contentArea.appendChild(this._container);
 	}
@@ -123,15 +150,8 @@ export class PreviewView extends Disposable implements IRenView {
 		return null;
 	}
 
-
 	private async detectPackageManager(workspaceUri: URI): Promise<string> {
-		// Check for lock files to determine package manager
-		const lockFiles = [
-			'yarn.lock',
-			'pnpm-lock.yaml',
-			'bun.lockb',
-			'package-lock.json'
-		];
+		const lockFiles = ['yarn.lock', 'pnpm-lock.yaml', 'bun.lockb', 'package-lock.json'];
 
 		for (const lockFile of lockFiles) {
 			const lockFileUri = URI.joinPath(workspaceUri, lockFile);
@@ -148,11 +168,11 @@ export class PreviewView extends Disposable implements IRenView {
 						return 'npm';
 				}
 			} catch {
-				// File doesn't exist, continue
+				// ignore missing file
 			}
 		}
 
-		return 'npm'; // Default fallback
+		return 'npm';
 	}
 
 	private async runBuildScript(reactInfo: ReactProjectInfo): Promise<void> {
@@ -179,19 +199,16 @@ export class PreviewView extends Disposable implements IRenView {
 		const port = reactInfo.preferredPort ?? 3000;
 		const url = `http://localhost:${port}`;
 		try {
-			// Try to focus an existing right group (split). If none exists, this is a no-op.
 			await this.commandService.executeCommand('workbench.action.focusSecondEditorGroup');
-			// Open Simple Browser in the second column if available
 			await this.commandService.executeCommand('simpleBrowser.show', url, { viewColumn: 2, preserveFocus: false });
 			return;
 		} catch {
-			// If focusing the group or opening failed, try creating a right split and open again
 			try {
 				await this.commandService.executeCommand('workbench.action.newGroupRight');
 				await this.commandService.executeCommand('simpleBrowser.show', url, { viewColumn: 2, preserveFocus: false });
 				return;
 			} catch {
-				// continue to fallbacks below
+				// continue to fallbacks
 			}
 		}
 		try {
@@ -203,7 +220,7 @@ export class PreviewView extends Disposable implements IRenView {
 		try {
 			await this.commandService.executeCommand('vscode.open', URI.parse(url));
 		} catch (finalError) {
-			console.error('Failed to open browser preview:', finalError);
+			console.error('Failed to open browser monitor:', finalError);
 		}
 	}
 
@@ -236,8 +253,6 @@ export class PreviewView extends Disposable implements IRenView {
 		return undefined;
 	}
 
-	// Note: Avoid polling localhost from workbench due to CSP; simpleBrowser handles loading state
-
 	hide(): void {
 		if (this._container) {
 			this._container.remove();
@@ -245,3 +260,4 @@ export class PreviewView extends Disposable implements IRenView {
 		}
 	}
 }
+

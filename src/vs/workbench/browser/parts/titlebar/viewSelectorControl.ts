@@ -6,7 +6,7 @@
 import { getWindow } from '../../../../base/browser/dom.js';
 import { DisposableStore, IDisposable } from '../../../../base/common/lifecycle.js';
 
-export type ViewMode = 'code' | 'preview' | 'graph';
+export type ViewMode = 'code' | 'monitorx' | 'graph';
 
 export class ViewSelectorControl implements IDisposable {
 	private readonly _disposables = new DisposableStore();
@@ -53,10 +53,10 @@ export class ViewSelectorControl implements IDisposable {
 		viewSelect.style.flex = '1';
 		viewSelect.style.minWidth = '0';
 
-		const views: ViewMode[] = ['code', 'preview', 'graph'];
+		const views: ViewMode[] = ['code', 'monitorx', 'graph'];
 		const viewLabels: Record<ViewMode, string> = {
 			code: 'Code',
-			preview: 'Preview',
+			monitorx: 'MonitorX',
 			graph: 'Graph'
 		};
 

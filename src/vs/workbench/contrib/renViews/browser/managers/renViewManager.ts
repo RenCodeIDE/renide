@@ -1,11 +1,11 @@
 import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { IRenView } from '../views/renView.interface.js';
 import { CodeView } from '../views/codeView.js';
-import { PreviewView } from '../views/previewView.js';
+import { MonitorXView } from '../views/monitorXView.js';
 import { GraphView } from '../views/graphView.js';
 import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
 
-export type RenViewMode = 'code' | 'preview' | 'graph';
+export type RenViewMode = 'code' | 'monitorx' | 'graph';
 
 export class RenViewManager extends Disposable {
 	private readonly _views = new Map<RenViewMode, IRenView>();
@@ -21,7 +21,7 @@ export class RenViewManager extends Disposable {
 
 	private initializeViews(): void {
 		this._views.set('code', this._register(new CodeView()));
-		this._views.set('preview', this._register(this.instantiationService.createInstance(PreviewView)));
+		this._views.set('monitorx', this._register(this.instantiationService.createInstance(MonitorXView)));
 		this._views.set('graph', this._register(this.instantiationService.createInstance(GraphView)));
 	}
 

@@ -61,6 +61,7 @@ export class GraphView extends Disposable implements IRenView {
 		| undefined;
 	private _codeViewGroupId: GroupIdentifier | undefined;
 	private _viewButtons: ViewButtons | null = null;
+	private _selectionModeEnabled = false;
 
 	private readonly context: GraphWorkspaceContext;
 	private readonly dataBuilder: GraphDataBuilder;
@@ -239,6 +240,7 @@ export class GraphView extends Disposable implements IRenView {
 		this._graphReady = false;
 		this._promptInFlight = false;
 		this._currentGraph = undefined;
+		this._selectionModeEnabled = false;
 	}
 
 	private ensureToolbar(): HTMLElement {
@@ -568,10 +570,28 @@ export class GraphView extends Disposable implements IRenView {
 		}
 		const { type, data } = event as { type?: string; data?: unknown };
 		switch (type) {
+			case 'selection-mode-changed':
+				this._selectionModeEnabled = !!(data && typeof data === 'object' && (data as { enabled?: unknown }).enabled);
+				this.logService.debug('[GraphView] selection mode changed', this._selectionModeEnabled);
+				break;
+			case 'selection-node':
+				this.logService.debug('[GraphView] node highlighted', data ?? '');
+				break;
+			case 'selection-cleared':
+				this.logService.debug('[GraphView] selection cleared');
+				break;
 			case 'node-tap':
+				if (this._selectionModeEnabled) {
+					this.logService.debug('[GraphView] ignoring node tap while selection mode enabled');
+					break;
+				}
 				void this.onNodeTap(data);
 				break;
 			case 'edge-tap':
+				if (this._selectionModeEnabled) {
+					this.logService.debug('[GraphView] ignoring edge tap while selection mode enabled');
+					break;
+				}
 				void this.onEdgeTap(data);
 				break;
 			default:
