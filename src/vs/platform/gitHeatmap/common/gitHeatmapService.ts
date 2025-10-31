@@ -11,6 +11,7 @@ export const REN_GIT_HEATMAP_CHANNEL = 'renGitHeatmap';
 export interface IGitHeatmapService {
 	readonly _serviceBrand: undefined;
 	readGitLog(cwd: string, windowDays: number): Promise<string>;
+	filterIgnoredPaths(cwd: string, paths: string[]): Promise<string[]>;
 }
 
 export class NullGitHeatmapService implements IGitHeatmapService {
@@ -18,6 +19,10 @@ export class NullGitHeatmapService implements IGitHeatmapService {
 
 	async readGitLog(): Promise<string> {
 		throw new Error('Git heatmap is not supported in this environment.');
+	}
+
+	async filterIgnoredPaths(): Promise<string[]> {
+		return [];
 	}
 }
 

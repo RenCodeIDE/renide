@@ -248,7 +248,7 @@ export class GraphDataBuilder {
 		return commits;
 	}
 
-	private reduceCommits(commits: ParsedGitCommit[], granularity: GitHeatmapGranularity) {
+	private reduceCommits(commits: ParsedGitCommit[], granularity: GitHeatmapGranularity, ignoredPaths: Set<string>) {
 		const moduleChurnMap = new Map<string, number>();
 		const filteredCommits: ReducedHeatmapCommit[] = [];
 		let consideredCommits = 0;
@@ -260,6 +260,9 @@ export class GraphDataBuilder {
 			const processedFiles: Array<ParsedGitCommitFile & { module: string | null }> = [];
 			for (const file of commit.files) {
 				const normalizedPath = file.path.replace(/\\/g, '/');
+				if (ignoredPaths.has(normalizedPath)) {
+					continue;
+				}
 				if (this.shouldIgnoreHeatmapPath(normalizedPath)) {
 					continue;
 				}
@@ -420,7 +423,7 @@ export class GraphDataBuilder {
 
 		const filters = [
 			'Skipped commits touching more than 40 files.',
-			'Ignored vendor, build, and lockfile paths.',
+			'Ignored hidden folders, package managers, Docker/config artifacts, and .gitignored paths.',
 			`Applied exponential time decay (half-life ${DECAY_HALF_LIFE} days).`,
 		];
 
@@ -463,6 +466,26 @@ export class GraphDataBuilder {
 
 	private shouldIgnoreHeatmapPath(path: string): boolean {
 		const lower = path.toLowerCase();
+		const segments = path.split('/');
+		if (segments.some(segment => segment.length > 1 && segment.startsWith('.'))) {
+			return true;
+		}
+		const filename = segments[segments.length - 1] ?? '';
+		const filenameLower = filename.toLowerCase();
+		if (
+			filenameLower === 'package.json' ||
+			filenameLower === 'package-lock.json' ||
+			filenameLower === 'yarn.lock' ||
+			filenameLower === 'pnpm-lock.yaml' ||
+			filenameLower === 'composer.lock' ||
+			filenameLower === 'cargo.lock' ||
+			/^dockerfile(?:\.|$)/.test(filenameLower) ||
+			/^docker-compose\./.test(filenameLower) ||
+			filenameLower === '.gitignore' ||
+			filenameLower === '.gitattributes'
+		) {
+			return true;
+		}
 		if (
 			lower.includes('node_modules/') ||
 			lower.includes('vendor/') ||
@@ -492,7 +515,24 @@ export class GraphDataBuilder {
 		const granularity = options.granularity ?? 'topLevel';
 
 		const commits = await this.readGitLog(workspaceRoot.fsPath, windowDays);
-		const { filteredCommits, moduleChurnMap, totalCommits, consideredCommits } = this.reduceCommits(commits, granularity);
+		const pathCandidates = new Set<string>();
+		for (const commit of commits) {
+			for (const file of commit.files) {
+				if (file?.path) {
+					pathCandidates.add(file.path.replace(/\\/g, '/'));
+				}
+			}
+		}
+		let ignoredPaths: Set<string> = new Set();
+		if (pathCandidates.size) {
+			try {
+				const ignoredList = await this.gitHeatmapService.filterIgnoredPaths(workspaceRoot.fsPath, Array.from(pathCandidates));
+				ignoredPaths = new Set(ignoredList.map(path => path.replace(/\\/g, '/')));
+			} catch (error) {
+				this.logService.error('[GraphDataBuilder] failed to evaluate gitignore entries', error);
+			}
+		}
+		const { filteredCommits, moduleChurnMap, totalCommits, consideredCommits } = this.reduceCommits(commits, granularity, ignoredPaths);
 		const heatmap = this.buildHeatmapFromCommits(filteredCommits, moduleChurnMap, {
 			granularity,
 			windowDays,

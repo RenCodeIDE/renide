@@ -41,5 +41,47 @@ export class GitHeatmapService implements IGitHeatmapService {
 			throw error;
 		}
 	}
+
+	async filterIgnoredPaths(cwd: string, paths: string[]): Promise<string[]> {
+		const ignored = new Set<string>();
+		if (!paths.length) {
+			return [];
+		}
+		const normalized = paths
+			.map(path => path.replace(/\\/g, '/').trim())
+			.filter(path => path.length > 0);
+		const chunkSize = 200;
+		for (let offset = 0; offset < normalized.length; offset += chunkSize) {
+			const chunk = normalized.slice(offset, offset + chunkSize);
+			await new Promise<void>((resolve, reject) => {
+				if (!chunk.length) {
+					resolve();
+					return;
+				}
+				const child = execFile('git', ['check-ignore', '--stdin'], { cwd }, (error, stdout) => {
+					const exitCodeRaw = (error as NodeJS.ErrnoException | undefined)?.code;
+					const exitCode = typeof exitCodeRaw === 'number' ? exitCodeRaw : typeof exitCodeRaw === 'string' ? Number(exitCodeRaw) : undefined;
+					if (error && exitCode !== 1) {
+						this.logService.error('[GitHeatmapService] git check-ignore failed', error);
+						reject(error);
+						return;
+					}
+					if (stdout) {
+						for (const line of stdout.split(/\r?\n/)) {
+							if (line.trim().length) {
+								ignored.add(line.trim().replace(/\\/g, '/'));
+							}
+						}
+					}
+					resolve();
+				});
+				if (child.stdin) {
+					child.stdin.write(chunk.join('\n'));
+					child.stdin.end('\n');
+				}
+			});
+		}
+		return Array.from(ignored);
+	}
 }
 
