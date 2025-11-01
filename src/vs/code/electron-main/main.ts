@@ -6,7 +6,7 @@
 import '../../platform/update/common/update.config.contribution.js';
 
 import { app, dialog } from 'electron';
-import { unlinkSync, promises } from 'fs';
+import { unlinkSync, promises, existsSync, readFileSync } from 'fs';
 import { URI } from '../../base/common/uri.js';
 import { coalesce, distinct } from '../../base/common/arrays.js';
 import { Promises } from '../../base/common/async.js';
@@ -16,10 +16,11 @@ import { IPathWithLineAndColumn, isValidBasename, parseLineAndColumnAware, sanit
 import { Event } from '../../base/common/event.js';
 import { getPathLabel } from '../../base/common/labels.js';
 import { Schemas } from '../../base/common/network.js';
-import { basename, resolve } from '../../base/common/path.js';
+import { basename, resolve, join } from '../../base/common/path.js';
 import { mark } from '../../base/common/performance.js';
 import { IProcessEnvironment, isLinux, isMacintosh, isWindows, OS } from '../../base/common/platform.js';
 import { cwd } from '../../base/common/process.js';
+import { parseEnvFile } from '../../base/common/envfile.js';
 import { rtrim, trim } from '../../base/common/strings.js';
 import { Promises as FSPromises } from '../../base/node/pfs.js';
 import { ProxyChannel } from '../../base/parts/ipc/common/ipc.js';
@@ -240,8 +241,36 @@ class CodeMain {
 	}
 
 	private patchEnvironment(environmentMainService: IEnvironmentMainService): IProcessEnvironment {
+		// Load .env file from app root if it exists
+		const envVarsFromFile: IProcessEnvironment = {};
+		try {
+			// Try app root first, then current working directory
+			const possiblePaths = [
+				join(environmentMainService.appRoot, '.env'),
+				join(cwd(), '.env')
+			];
+
+			for (const envFilePath of possiblePaths) {
+				if (existsSync(envFilePath)) {
+					const envFileContent = readFileSync(envFilePath, 'utf8');
+					const parsedVars = parseEnvFile(envFileContent);
+					for (const [key, value] of parsedVars) {
+						// Always include in envVarsFromFile so it gets passed to renderer
+						envVarsFromFile[key] = value;
+						if (!process.env[key]) { // Don't override existing env vars in main process
+							process.env[key] = value;
+						}
+					}
+					break; // Load only the first .env file found
+				}
+			}
+		} catch (error) {
+			// Silently ignore .env loading errors
+		}
+
 		const instanceEnvironment: IProcessEnvironment = {
-			VSCODE_IPC_HOOK: environmentMainService.mainIPCHandle
+			VSCODE_IPC_HOOK: environmentMainService.mainIPCHandle,
+			...envVarsFromFile // Include .env variables so they're passed to renderer processes
 		};
 
 		['VSCODE_NLS_CONFIG', 'VSCODE_PORTABLE'].forEach(key => {

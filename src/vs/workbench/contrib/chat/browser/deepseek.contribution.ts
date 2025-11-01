@@ -9,7 +9,6 @@ import { MarkdownString } from '../../../../base/common/htmlContent.js';
 import { Disposable, IReference, toDisposable } from '../../../../base/common/lifecycle.js';
 import { localize } from '../../../../nls.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
-import { asJson, asText, IRequestService } from '../../../../platform/request/common/request.js';
 import { ExtensionIdentifier } from '../../../../platform/extensions/common/extensions.js';
 import { registerWorkbenchContribution2, IWorkbenchContribution, WorkbenchPhase } from '../../../common/contributions.js';
 import { IChatAgentService, IChatAgentImplementation, IChatAgentHistoryEntry, IChatAgentRequest, IChatAgentResult } from '../common/chatAgents.js';
@@ -26,39 +25,58 @@ import { isLocation, Location } from '../../../../editor/common/languages.js';
 import { Range, IRange } from '../../../../editor/common/core/range.js';
 import { URI, UriComponents } from '../../../../base/common/uri.js';
 import { CancellationError } from '../../../../base/common/errors.js';
+import { env } from '../../../../base/common/process.js';
+import { IRequestService, asJson, isSuccess } from '../../../../platform/request/common/request.js';
+import { streamToBuffer } from '../../../../base/common/buffer.js';
 type LocalChatMessage = { role: string; content: string };
 
-async function sendLocalModelRequest(requestService: IRequestService, endpoint: string, model: string, messages: LocalChatMessage[], token: CancellationToken): Promise<string> {
-	const body = JSON.stringify({
-		model,
-		messages,
-		stream: false,
-		temperature: 0.2
-	});
+async function sendGeminiRequest(
+	requestService: IRequestService,
+	apiKey: string,
+	model: string,
+	messages: LocalChatMessage[],
+	token: CancellationToken
+): Promise<string> {
+	// Convert messages to Gemini API format
+	const contents = messages.map(msg => ({
+		role: msg.role === 'model' ? 'model' : 'user',
+		parts: [{ text: msg.content }]
+	}));
+
+	const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+	const body = JSON.stringify({ contents });
 
 	const context = await requestService.request({
 		type: 'POST',
-		url: endpoint,
+		url,
 		data: body,
-		disableCache: true,
 		headers: {
 			'Content-Type': 'application/json'
 		}
 	}, token);
 
-	const status = context.res.statusCode ?? 0;
-	if (status < 200 || status >= 300) {
-		const responseText = await asText(context);
-		throw new Error(responseText || `HTTP ${status}`);
+	if (!isSuccess(context)) {
+		// Read error response text
+		const buffer = await streamToBuffer(context.stream);
+		const errorText = buffer.toString();
+		throw new Error(`Gemini API error: ${context.res.statusCode} - ${errorText || 'Unknown error'}`);
 	}
 
-	const json = await asJson<{ choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } }>(context);
-	const text = json?.choices?.[0]?.message?.content;
-	if (!text) {
-		throw new Error(json?.error?.message || localize('deepseek.invalidResponse', "Model returned an empty response."));
+	const response = await asJson<{
+		candidates?: Array<{
+			content?: {
+				parts?: Array<{
+					text?: string;
+				}>;
+			};
+		}>;
+	}>(context);
+
+	if (!response?.candidates?.[0]?.content?.parts?.[0]?.text) {
+		throw new Error(localize('gemini.invalidResponse', "Model returned an empty response."));
 	}
 
-	return text.trim();
+	return response.candidates[0].content.parts[0].text.trim();
 }
 
 function reduceMessageParts(message: IChatMessage): string {
@@ -76,8 +94,8 @@ function toLocalMessages(messages: IChatMessage[]): LocalChatMessage[] {
 	return messages.map(entry => {
 		let role: string = 'user';
 		switch (entry.role) {
-			case ChatMessageRole.System: role = 'system'; break;
-			case ChatMessageRole.Assistant: role = 'assistant'; break;
+			case ChatMessageRole.System: role = 'user'; break;
+			case ChatMessageRole.Assistant: role = 'model'; break;
 			case ChatMessageRole.User: role = 'user'; break;
 		}
 		return { role, content: reduceMessageParts(entry) };
@@ -88,9 +106,9 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 
 	constructor(
 		private readonly requestService: IRequestService,
+		private readonly apiKey: string,
 		private readonly logService: ILogService,
 		private readonly textModelService: ITextModelService,
-		private readonly endpoint: string,
 		private readonly model: string
 	) { }
 
@@ -110,16 +128,16 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 			progress([{ kind: 'markdownContent', content: markdown }]);
 
 			return {
-				details: 'deepseek-response',
+				details: 'gemini-response',
 				metadata: {
 					model: this.model
 				}
 			};
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			this.logService.error(`[deepseek] ${message}`);
+			this.logService.error(`[gemini] ${message}`);
 
-			const markdown = new MarkdownString(localize('deepseek.error', "DeepSeek request failed: {0}", message));
+			const markdown = new MarkdownString(localize('gemini.error', "Gemini request failed: {0}", message));
 			markdown.isTrusted = true;
 			progress([{ kind: 'markdownContent', content: markdown }]);
 
@@ -145,36 +163,7 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 	}
 
 	private async performRequest(messages: Array<{ role: string; content: string }>, token: CancellationToken): Promise<string> {
-		const body = JSON.stringify({
-			model: this.model,
-			messages,
-			stream: false,
-			temperature: 0.2
-		});
-
-		const context = await this.requestService.request({
-			type: 'POST',
-			url: this.endpoint,
-			data: body,
-			disableCache: true,
-			headers: {
-				'Content-Type': 'application/json'
-			}
-		}, token);
-
-		const status = context.res.statusCode ?? 0;
-		if (status < 200 || status >= 300) {
-			const responseText = await asText(context);
-			throw new Error(responseText || `HTTP ${status}`);
-		}
-
-		const json = await asJson<{ choices?: Array<{ message?: { content?: string } }>; error?: { message?: string } }>(context);
-		const text = json?.choices?.[0]?.message?.content;
-		if (!text) {
-			throw new Error(json?.error?.message || localize('deepseek.invalidResponse', "Model returned an empty response."));
-		}
-
-		return text.trim();
+		return sendGeminiRequest(this.requestService, this.apiKey, this.model, messages, token);
 	}
 
 	private async buildMessages(request: IChatAgentRequest, history: IChatAgentHistoryEntry[], token: CancellationToken): Promise<Array<{ role: string; content: string }>> {
@@ -209,7 +198,7 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 
 	private async buildContextPrompt(request: IChatAgentRequest, token: CancellationToken): Promise<string | undefined> {
 		const variables = request.variables?.variables ?? [];
-		this.logService.debug(`[qwen] preparing context: ${variables.length} entries`);
+		this.logService.debug(`[gemini] preparing context: ${variables.length} entries`);
 		if (!variables.length) {
 			return undefined;
 		}
@@ -251,7 +240,7 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 			return undefined;
 		}
 
-		this.logService.debug(`[qwen] including ${blocks.length} context blocks`);
+		this.logService.debug(`[gemini] including ${blocks.length} context blocks`);
 		return [
 			'You are an expert coding assistant embedded in the IDE. The code blocks below are the exact context the user means -- even if they refer to them with vague terms like "this", "the file", or "the function".',
 			'Ground every response in those blocks: explain behaviour, data structures, and error cases using only the provided code. Mention the relevant file or block when helpful, and if the answer cannot be derived from this context, say so explicitly before offering any speculation.',
@@ -286,7 +275,7 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 			if (error instanceof CancellationError) {
 				throw error;
 			}
-			this.logService.warn(`[qwen] Failed to load context for ${entry.id}: ${error instanceof Error ? error.message : String(error)}`);
+			this.logService.warn(`[gemini] Failed to load context for ${entry.id}: ${error instanceof Error ? error.message : String(error)}`);
 			return undefined;
 		} finally {
 			reference?.dispose();
@@ -312,7 +301,7 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 				}
 			}
 		} catch (error) {
-			this.logService.warn(`[qwen] Unable to resolve URI for ${entry.id}: ${error instanceof Error ? error.message : String(error)}`);
+			this.logService.warn(`[gemini] Unable to resolve URI for ${entry.id}: ${error instanceof Error ? error.message : String(error)}`);
 		}
 		return undefined;
 	}
@@ -367,7 +356,7 @@ class DeepSeekAgentContribution extends Disposable implements IWorkbenchContribu
 
 	constructor(
 		@IChatAgentService private readonly chatAgentService: IChatAgentService,
-		@IRequestService requestService: IRequestService,
+		@IRequestService private readonly requestService: IRequestService,
 		@ILogService logService: ILogService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@ILanguageModelsService languageModelsService: ILanguageModelsService,
@@ -375,38 +364,45 @@ class DeepSeekAgentContribution extends Disposable implements IWorkbenchContribu
 	) {
 		super();
 
-		const globals = globalThis as { DEEPSEEK_ENDPOINT?: string; DEEPSEEK_MODEL?: string } | undefined;
-		const endpoint = globals?.DEEPSEEK_ENDPOINT ?? 'http://localhost:11434/v1/chat/completions';
-		const model = globals?.DEEPSEEK_MODEL ?? 'qwen2.5-coder:7b';
-		logService.info(`[qwen] registering local agent using ${endpoint} (${model})`);
+		// Read API key from env (which gets userEnv from preload script)
+		const apiKey = env['GEMINI_API_KEY'];
+		const model = 'gemini-2.5-flash';
 
-		const agentId = 'qwen.local';
+		if (!apiKey) {
+			logService.warn('[gemini] No API key configured. Set GEMINI_API_KEY environment variable.');
+			// Don't register if no API key to avoid "No default agent" errors
+			return;
+		}
+
+		logService.info(`[gemini] registering online agent using Gemini 2.5 Flash`);
+
+		const agentId = 'gemini.local';
 		const registration = this.chatAgentService.registerAgent(agentId, {
 			id: agentId,
-			name: 'qwen',
-			fullName: localize('deepseek.agent.name', "Qwen 2.5"),
-			description: localize('deepseek.agent.description', "Use a local Qwen 2.5 Coder model served through Ollama."),
+			name: 'gemini',
+			fullName: localize('gemini.agent.name', "Gemini 2.5 Flash"),
+			description: localize('gemini.agent.description', "Use Gemini 2.5 Flash online model."),
 			isCore: true,
 			isDefault: true,
-			locations: [ChatAgentLocation.Chat],
+			locations: [ChatAgentLocation.Chat, ChatAgentLocation.EditorInline],
 			modes: [ChatModeKind.Agent, ChatModeKind.Ask, ChatModeKind.Edit],
 			slashCommands: [
-				{ name: 'explain', description: localize('deepseek.command.explain', "Explain the current selection."), when: undefined },
-				{ name: 'review', description: localize('deepseek.command.review', "Review the shown changes."), when: undefined }
+				{ name: 'explain', description: localize('gemini.command.explain', "Explain the current selection."), when: undefined },
+				{ name: 'review', description: localize('gemini.command.review', "Review the shown changes."), when: undefined }
 			],
 			metadata: {
-				followupPlaceholder: localize('deepseek.followup.placeholder', "Ask Qwen 2.5..."),
-				additionalWelcomeMessage: localize('deepseek.welcome', "Qwen 2.5 Coder is ready. Ensure Ollama is running and the '{0}' model is installed.", model)
+				followupPlaceholder: localize('gemini.followup.placeholder', "Ask Gemini..."),
+				additionalWelcomeMessage: localize('gemini.welcome', "Gemini 2.5 Flash is ready.")
 			},
 			disambiguation: [],
-			extensionId: new ExtensionIdentifier('core.qwen'),
+			extensionId: new ExtensionIdentifier('core.gemini'),
 			extensionVersion: '0.0.0',
 			extensionPublisherId: 'core',
 			extensionDisplayName: 'Core'
 		});
 		this._register(registration);
 
-		const implementation = new DeepSeekAgentImplementation(requestService, logService, textModelService, endpoint, model);
+		const implementation = new DeepSeekAgentImplementation(this.requestService, apiKey, logService, textModelService, model);
 		this._register(this.chatAgentService.registerAgentImplementation(agentId, implementation));
 
 		const enabledKey = contextKeyService.createKey(ChatContextKeys.enabled.key, true);
@@ -417,39 +413,40 @@ class DeepSeekAgentContribution extends Disposable implements IWorkbenchContribu
 			panelRegisteredKey.reset();
 			extensionRegisteredKey.reset();
 		}));
-		const vendor = 'local';
-		const modelIdentifier = `${vendor}/${model}`;
+
+		const vendor = 'google';
+		const modelIdentifier = 'google/gemini-2.5-flash';
 		const provider: ILanguageModelChatProvider = {
 			onDidChange: Event.None,
 			async provideLanguageModelChatInfo(): Promise<ILanguageModelChatMetadataAndIdentifier[]> {
 				return [{
 					identifier: modelIdentifier,
 					metadata: {
-						extension: new ExtensionIdentifier('core.qwen'),
-						name: 'Qwen 2.5 Coder',
+						extension: new ExtensionIdentifier('core.gemini'),
+						name: 'Gemini 2.5 Flash',
 						id: modelIdentifier,
 						vendor,
 						version: '1.0.0',
-						family: 'qwen',
-						detail: localize('deepseek.model.detail', "Local Qwen 2.5 Coder served via Ollama."),
+						family: 'gemini',
+						detail: localize('gemini.model.detail', "Google Gemini 2.5 Flash online model."),
 						maxInputTokens: 128000,
 						maxOutputTokens: 8192,
-						modelPickerCategory: { label: 'Local Models', order: 1 },
+						modelPickerCategory: { label: 'Google Models', order: 1 },
 						isDefault: true,
-						isUserSelectable: false,
-						capabilities: { agentMode: true, toolCalling: false }
+						isUserSelectable: true,
+						capabilities: { agentMode: true, toolCalling: true }
 					}
 				}];
 			},
 			async sendChatRequest(_modelId, messages, _from, _options, token) {
-				const responseText = await sendLocalModelRequest(requestService, endpoint, model, toLocalMessages(messages), token);
+				const responseText = await sendGeminiRequest(requestService, apiKey, model, toLocalMessages(messages), token);
 				const stream = (async function* (): AsyncIterable<IChatResponsePart> {
 					yield { type: 'text', value: responseText };
 				})();
 				return {
 					stream,
 					result: Promise.resolve<IChatAgentResult>({
-						details: 'qwen-response',
+						details: 'gemini-response',
 						metadata: { model }
 					})
 				};
