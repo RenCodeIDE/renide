@@ -200,15 +200,20 @@ export async function getShellIntegrationInjection(
 			return { type, newArgs, envMixin };
 		}
 		case 'zsh': {
+			logService.debug(`getShellIntegrationInjection: Processing zsh shell integration`);
 			if (!originalArgs || originalArgs.length === 0) {
 				newArgs = shellIntegrationArgs.get(ShellIntegrationExecutable.Zsh);
+				logService.debug(`getShellIntegrationInjection: Using default zsh args`);
 			} else if (areZshBashFishLoginArgs(originalArgs)) {
 				newArgs = shellIntegrationArgs.get(ShellIntegrationExecutable.ZshLogin);
+				logService.debug(`getShellIntegrationInjection: Using zsh login args`);
 				addEnvMixinPathPrefix(options, envMixin, shell);
 			} else if (originalArgs === shellIntegrationArgs.get(ShellIntegrationExecutable.Zsh) || originalArgs === shellIntegrationArgs.get(ShellIntegrationExecutable.ZshLogin)) {
 				newArgs = originalArgs;
+				logService.debug(`getShellIntegrationInjection: Using existing zsh integration args`);
 			}
 			if (!newArgs) {
+				logService.warn(`getShellIntegrationInjection: Unsupported zsh args: ${JSON.stringify(originalArgs)}`);
 				return { type: 'failure', reason: ShellIntegrationInjectionFailureReason.UnsupportedArgs };
 			}
 			newArgs = [...newArgs]; // Shallow clone the array to avoid setting the default array
@@ -225,6 +230,7 @@ export async function getShellIntegrationInjection(
 			// Resolve the actual tmp directory so we can set the sticky bit
 			const realTmpDir = realpathSync(os.tmpdir());
 			const zdotdir = path.join(realTmpDir, `${username}-${productService.applicationName}-zsh`);
+			logService.debug(`getShellIntegrationInjection: zsh ZDOTDIR will be: ${zdotdir}`);
 
 			// Set directory permissions using octal notation:
 			// - 0o1700:
@@ -236,47 +242,59 @@ export async function getShellIntegrationInjection(
 				// skip for tests
 				try {
 					const chmodAsync = promisify(chmod);
+					logService.debug(`getShellIntegrationInjection: Attempting to set permissions on existing zdotdir: ${zdotdir}`);
 					await chmodAsync(zdotdir, 0o1700);
-				} catch (err) {
-					if (err.message.includes('ENOENT')) {
+					logService.debug(`getShellIntegrationInjection: Successfully set permissions on zdotdir`);
+				} catch (err: unknown) {
+					const errorMessage = (err instanceof Error ? err.message : String(err)) || String(err);
+					if (errorMessage.includes('ENOENT')) {
+						logService.debug(`getShellIntegrationInjection: zdotdir does not exist, creating: ${zdotdir}`);
 						try {
-							mkdirSync(zdotdir);
-						} catch (err) {
-							logService.error(`Failed to create zdotdir at ${zdotdir}: ${err}`);
+							mkdirSync(zdotdir, { recursive: true });
+							logService.debug(`getShellIntegrationInjection: Successfully created zdotdir`);
+						} catch (mkdirErr: unknown) {
+							const mkdirErrorMessage = (mkdirErr instanceof Error ? mkdirErr.message : String(mkdirErr)) || String(mkdirErr);
+							logService.error(`getShellIntegrationInjection: Failed to create zdotdir at ${zdotdir}: ${mkdirErrorMessage}`);
 							return { type: 'failure', reason: ShellIntegrationInjectionFailureReason.FailedToCreateTmpDir };
 						}
 						try {
 							const chmodAsync = promisify(chmod);
+							logService.debug(`getShellIntegrationInjection: Setting sticky bit on newly created zdotdir`);
 							await chmodAsync(zdotdir, 0o1700);
-						} catch {
-							logService.error(`Failed to set sticky bit on ${zdotdir}: ${err}`);
+							logService.debug(`getShellIntegrationInjection: Successfully set sticky bit`);
+						} catch (chmodErr: unknown) {
+							const chmodErrorMessage = (chmodErr instanceof Error ? chmodErr.message : String(chmodErr)) || String(chmodErr);
+							logService.error(`getShellIntegrationInjection: Failed to set sticky bit on ${zdotdir}: ${chmodErrorMessage}`);
 							return { type: 'failure', reason: ShellIntegrationInjectionFailureReason.FailedToSetStickyBit };
 						}
+					} else {
+						logService.error(`getShellIntegrationInjection: Failed to set sticky bit on ${zdotdir}: ${errorMessage}`);
+						return { type: 'failure', reason: ShellIntegrationInjectionFailureReason.FailedToSetStickyBit };
 					}
-					logService.error(`Failed to set sticky bit on ${zdotdir}: ${err}`);
-					return { type: 'failure', reason: ShellIntegrationInjectionFailureReason.FailedToSetStickyBit };
 				}
 			}
 			envMixin['ZDOTDIR'] = zdotdir;
 			const userZdotdir = env?.ZDOTDIR ?? os.homedir() ?? `~`;
 			envMixin['USER_ZDOTDIR'] = userZdotdir;
+			logService.debug(`getShellIntegrationInjection: zsh env vars - ZDOTDIR: ${zdotdir}, USER_ZDOTDIR: ${userZdotdir}`);
+
 			const filesToCopy: IShellIntegrationConfigInjection['filesToCopy'] = [];
-			filesToCopy.push({
-				source: path.join(appRoot, 'out/vs/workbench/contrib/terminal/common/scripts/shellIntegration-rc.zsh'),
-				dest: path.join(zdotdir, '.zshrc')
-			});
-			filesToCopy.push({
-				source: path.join(appRoot, 'out/vs/workbench/contrib/terminal/common/scripts/shellIntegration-profile.zsh'),
-				dest: path.join(zdotdir, '.zprofile')
-			});
-			filesToCopy.push({
-				source: path.join(appRoot, 'out/vs/workbench/contrib/terminal/common/scripts/shellIntegration-env.zsh'),
-				dest: path.join(zdotdir, '.zshenv')
-			});
-			filesToCopy.push({
-				source: path.join(appRoot, 'out/vs/workbench/contrib/terminal/common/scripts/shellIntegration-login.zsh'),
-				dest: path.join(zdotdir, '.zlogin')
-			});
+			const scriptFiles = [
+				{ source: 'shellIntegration-rc.zsh', dest: '.zshrc' },
+				{ source: 'shellIntegration-profile.zsh', dest: '.zprofile' },
+				{ source: 'shellIntegration-env.zsh', dest: '.zshenv' },
+				{ source: 'shellIntegration-login.zsh', dest: '.zlogin' }
+			];
+
+			for (const file of scriptFiles) {
+				filesToCopy.push({
+					source: path.join(appRoot, 'out/vs/workbench/contrib/terminal/common/scripts', file.source),
+					dest: path.join(zdotdir, file.dest)
+				});
+				logService.debug(`getShellIntegrationInjection: Will copy ${file.source} to ${file.dest}`);
+			}
+
+			logService.info(`getShellIntegrationInjection: zsh shell integration configured successfully with ${filesToCopy.length} files to copy`);
 			return { type, newArgs, envMixin, filesToCopy };
 		}
 	}

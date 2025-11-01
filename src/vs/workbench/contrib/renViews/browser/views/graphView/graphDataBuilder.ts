@@ -926,18 +926,18 @@ export class GraphDataBuilder {
 					edgeKind = descriptor.isSideEffectOnly ? 'sideEffect' : 'external';
 				}
 
-				const edgeKey = `${sourceNode.id}->${targetId}`;
+				const edgeKey = `${targetId}->${sourceNode.id}`;
 				let entry = edges.get(edgeKey);
 				if (!entry) {
 					const payload: GraphEdgePayload = {
 						id: this.toNodeId(`edge:${edgeKey}`),
-						source: sourceNode.id,
-						target: targetId,
+						source: targetId,
+						target: sourceNode.id,
 						label: '',
 						specifier: descriptor.specifier,
 						kind: edgeKind,
-						sourcePath: sourceNode.path,
-						targetPath: targetNode.path,
+						sourcePath: targetNode.path,
+						targetPath: sourceNode.path,
 						symbols: [],
 					};
 					entry = {
@@ -961,8 +961,8 @@ export class GraphDataBuilder {
 					entry.payload.kind = edgeKind;
 				}
 
-				targetNode.fanIn += 1;
-				sourceNode.fanOut += 1;
+				targetNode.fanOut += 1;
+				sourceNode.fanIn += 1;
 				sourceNode.weight = Math.max(
 					sourceNode.weight,
 					sourceNode.fanIn + sourceNode.fanOut,

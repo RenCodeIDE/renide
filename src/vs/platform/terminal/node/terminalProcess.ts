@@ -209,29 +209,37 @@ export class TerminalProcess extends Disposable implements ITerminalChildProcess
 			return firstError;
 		}
 
+		this._logService.debug(`TerminalProcess#start: Attempting shell integration injection for executable: ${this.shellLaunchConfig.executable}, args: ${JSON.stringify(this.shellLaunchConfig.args)}`);
 		const injection = await getShellIntegrationInjection(this.shellLaunchConfig, this._options, this._ptyOptions.env, this._logService, this._productService);
 		if (injection.type === 'injection') {
+			this._logService.info(`TerminalProcess#start: Shell integration injection successful`);
 			this._onDidChangeProperty.fire({ type: ProcessPropertyType.UsedShellIntegrationInjection, value: true });
 			if (injection.envMixin) {
+				this._logService.debug(`TerminalProcess#start: Setting env mixin: ${Object.keys(injection.envMixin).join(', ')}`);
 				for (const [key, value] of Object.entries(injection.envMixin)) {
 					this._ptyOptions.env ||= {};
 					this._ptyOptions.env[key] = value;
 				}
 			}
 			if (injection.filesToCopy) {
+				this._logService.debug(`TerminalProcess#start: Copying ${injection.filesToCopy.length} shell integration files`);
 				for (const f of injection.filesToCopy) {
 					try {
+						this._logService.debug(`TerminalProcess#start: Copying shell integration file: ${f.source} -> ${f.dest}`);
 						await fs.promises.mkdir(path.dirname(f.dest), { recursive: true });
 						await fs.promises.copyFile(f.source, f.dest);
-					} catch {
+						this._logService.debug(`TerminalProcess#start: Successfully copied file: ${f.dest}`);
+					} catch (err) {
 						// Swallow error, this should only happen when multiple users are on the same
 						// machine. Since the shell integration scripts rarely change, plus the other user
 						// should be using the same version of the server in this case, assume the script is
 						// fine if copy fails and swallow the error.
+						this._logService.warn(`TerminalProcess#start: Failed to copy shell integration file ${f.source} to ${f.dest}: ${err}`);
 					}
 				}
 			}
 		} else {
+			this._logService.warn(`TerminalProcess#start: Shell integration injection failed, reason: ${injection.reason}`);
 			this._onDidChangeProperty.fire({ type: ProcessPropertyType.FailedShellIntegrationActivation, value: true });
 			this._onDidChangeProperty.fire({ type: ProcessPropertyType.ShellIntegrationInjectionFailureReason, value: injection.reason });
 			// Even if shell integration injection failed, still set the nonce if one was provided
@@ -239,6 +247,7 @@ export class TerminalProcess extends Disposable implements ITerminalChildProcess
 			if (this._options.shellIntegration.nonce) {
 				this._ptyOptions.env ||= {};
 				this._ptyOptions.env['VSCODE_NONCE'] = this._options.shellIntegration.nonce;
+				this._logService.debug(`TerminalProcess#start: Setting VSCODE_NONCE even though injection failed`);
 			}
 		}
 

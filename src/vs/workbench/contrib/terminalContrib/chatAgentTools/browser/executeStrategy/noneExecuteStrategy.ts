@@ -93,10 +93,24 @@ export class NoneExecuteStrategy implements ITerminalExecuteStrategy {
 			try {
 				output = xterm.getContentsAsText(this._startMarker.value, endMarker);
 				this._log('Fetched output via markers');
-			} catch {
-				this._log('Failed to fetch output via markers');
-				additionalInformationLines.push('Failed to retrieve command output');
+				// Clean up the output by removing the command itself if present
+				if (output && commandLine) {
+					const lines = output.split('\n');
+					// Remove the command line from output if it appears at the start
+					if (lines[0]?.trim().endsWith(commandLine.trim())) {
+						output = lines.slice(1).join('\n');
+						this._log('Removed command line from output');
+					}
+				}
+			} catch (err) {
+				this._log(`Failed to fetch output via markers: ${err}`);
+				additionalInformationLines.push('Note: Shell integration is not enabled, so command detection may be less accurate. Enable shell integration for better command tracking and output capture.');
 			}
+
+			if (output === undefined || output.trim().length === 0) {
+				additionalInformationLines.push('No output was captured. This may be normal if the command produced no output or if shell integration is not fully initialized.');
+			}
+
 			return {
 				output,
 				additionalInformation: additionalInformationLines.length > 0 ? additionalInformationLines.join('\n') : undefined,

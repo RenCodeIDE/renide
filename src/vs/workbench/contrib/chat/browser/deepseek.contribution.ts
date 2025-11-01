@@ -5,19 +5,21 @@
 
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Event } from '../../../../base/common/event.js';
-import { MarkdownString } from '../../../../base/common/htmlContent.js';
+import { IMarkdownString, MarkdownString } from '../../../../base/common/htmlContent.js';
 import { Disposable, IReference, toDisposable } from '../../../../base/common/lifecycle.js';
+import { hasKey } from '../../../../base/common/types.js';
 import { localize } from '../../../../nls.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { ExtensionIdentifier } from '../../../../platform/extensions/common/extensions.js';
 import { registerWorkbenchContribution2, IWorkbenchContribution, WorkbenchPhase } from '../../../common/contributions.js';
-import { IChatAgentService, IChatAgentImplementation, IChatAgentHistoryEntry, IChatAgentRequest, IChatAgentResult } from '../common/chatAgents.js';
+import { IChatAgentService, IChatAgentImplementation, IChatAgentHistoryEntry, IChatAgentRequest, IChatAgentResult, UserSelectedTools } from '../common/chatAgents.js';
 import { ChatAgentLocation, ChatModeKind } from '../common/constants.js';
 import { IChatProgressHistoryResponseContent } from '../common/chatModel.js';
 import { ChatErrorLevel, IChatProgress, IChatTaskDto } from '../common/chatService.js';
 import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { ChatContextKeys } from '../common/chatContextKeys.js';
-import { ILanguageModelChatMetadataAndIdentifier, ILanguageModelChatProvider, ILanguageModelsService, IChatMessage, IChatResponsePart, ChatMessageRole } from '../common/languageModels.js';
+import { ILanguageModelChatMetadataAndIdentifier, ILanguageModelChatProvider, ILanguageModelsService, IChatMessage, IChatResponsePart, IChatResponseTextPart, ChatMessageRole } from '../common/languageModels.js';
+import { ILanguageModelToolsService, IToolData, CountTokensCallback, IToolInvocation, IToolResult, IToolResultTextPart } from '../common/languageModelToolsService.js';
 import { ITextModelService, IResolvedTextEditorModel } from '../../../../editor/common/services/resolverService.js';
 import { IChatRequestVariableEntry, isChatRequestFileEntry, isImplicitVariableEntry, isPasteVariableEntry } from '../common/chatVariableEntries.js';
 import { basename } from '../../../../base/common/resources.js';
@@ -28,7 +30,17 @@ import { CancellationError } from '../../../../base/common/errors.js';
 import { env } from '../../../../base/common/process.js';
 import { IRequestService, asJson, isSuccess } from '../../../../platform/request/common/request.js';
 import { streamToBuffer } from '../../../../base/common/buffer.js';
-type LocalChatMessage = { role: string; content: string };
+type GeminiRole = 'user' | 'model';
+
+type GeminiContentPart =
+	| { text: string }
+	| { functionCall: { name: string; args: Record<string, unknown> } }
+	| { functionResponse: { name: string; response: unknown } };
+
+interface GeminiContent {
+	readonly role: GeminiRole;
+	readonly parts: GeminiContentPart[];
+}
 
 interface IContextBlockMetadata {
 	readonly label: string;
@@ -48,21 +60,53 @@ interface IParsedCodeBlock {
 	readonly content: string;
 }
 
+interface GeminiFunctionDeclaration {
+	readonly name: string;
+	readonly description?: string;
+	readonly parameters?: unknown;
+}
+
+interface GeminiToolConfig {
+	readonly functionDeclarations: GeminiFunctionDeclaration[];
+}
+interface GeminiRequestOptions {
+	readonly tools?: GeminiToolConfig[];
+}
+interface GeminiResponse {
+	readonly parts: GeminiContentPart[];
+}
+
 async function sendGeminiRequest(
 	requestService: IRequestService,
 	apiKey: string,
 	model: string,
-	messages: LocalChatMessage[],
-	token: CancellationToken
-): Promise<string> {
-	// Convert messages to Gemini API format
+	messages: GeminiContent[],
+	token: CancellationToken,
+	options?: GeminiRequestOptions
+): Promise<GeminiResponse> {
 	const contents = messages.map(msg => ({
-		role: msg.role === 'model' ? 'model' : 'user',
-		parts: [{ text: msg.content }]
+		role: msg.role,
+		parts: msg.parts
 	}));
 
 	const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-	const body = JSON.stringify({ contents });
+	const payload: Record<string, unknown> = { contents };
+	if (options?.tools && options.tools.length) {
+		payload['tools'] = options.tools;
+	}
+
+	// Log payload structure for verification (sanitized - don't log full contents)
+	const toolCount = options?.tools?.flatMap(t => t.functionDeclarations ?? []).length ?? 0;
+	const payloadInfo = {
+		hasContents: !!payload.contents,
+		contentsCount: Array.isArray(payload.contents) ? (payload.contents as unknown[]).length : 0,
+		hasTools: !!payload.tools,
+		toolCount,
+		functionNames: options?.tools?.flatMap(t => t.functionDeclarations?.map(d => d.name) ?? []) ?? []
+	};
+	console.debug(`[gemini] request payload structure:`, payloadInfo);
+
+	const body = JSON.stringify(payload);
 
 	const context = await requestService.request({
 		type: 'POST',
@@ -74,7 +118,6 @@ async function sendGeminiRequest(
 	}, token);
 
 	if (!isSuccess(context)) {
-		// Read error response text
 		const buffer = await streamToBuffer(context.stream);
 		const errorText = buffer.toString();
 		throw new Error(`Gemini API error: ${context.res.statusCode} - ${errorText || 'Unknown error'}`);
@@ -85,16 +128,53 @@ async function sendGeminiRequest(
 			content?: {
 				parts?: Array<{
 					text?: string;
+					functionCall?: {
+						name: string;
+						args?: unknown;
+					};
 				}>;
 			};
 		}>;
 	}>(context);
 
-	if (!response?.candidates?.[0]?.content?.parts?.[0]?.text) {
+	const partsSource = response?.candidates?.[0]?.content?.parts;
+	if (!partsSource || !partsSource.length) {
 		throw new Error(localize('gemini.invalidResponse', "Model returned an empty response."));
 	}
 
-	return response.candidates[0].content.parts[0].text.trim();
+	const parts: GeminiContentPart[] = [];
+	for (const part of partsSource) {
+		if (typeof part.text === 'string') {
+			parts.push({ text: part.text });
+			continue;
+		}
+		if (part.functionCall) {
+			const args = normalizeFunctionCallArgs(part.functionCall.args);
+			parts.push({ functionCall: { name: part.functionCall.name, args } });
+		}
+	}
+
+	if (!parts.length) {
+		throw new Error(localize('gemini.emptyParts', "Gemini response did not include any usable parts."));
+	}
+
+	return { parts };
+}
+function normalizeFunctionCallArgs(args: unknown): Record<string, unknown> {
+	if (args && typeof args === 'object') {
+		return args as Record<string, unknown>;
+	}
+	if (typeof args === 'string') {
+		try {
+			const parsed = JSON.parse(args);
+			if (parsed && typeof parsed === 'object') {
+				return parsed as Record<string, unknown>;
+			}
+		} catch (error) {
+			console.warn('[gemini] Failed to parse function call arguments', error);
+		}
+	}
+	return {};
 }
 
 function reduceMessageParts(message: IChatMessage): string {
@@ -108,25 +188,72 @@ function reduceMessageParts(message: IChatMessage): string {
 	return segments.join('\n');
 }
 
-function toLocalMessages(messages: IChatMessage[]): LocalChatMessage[] {
+function toGeminiContents(messages: IChatMessage[]): GeminiContent[] {
 	return messages.map(entry => {
-		let role: string = 'user';
-		switch (entry.role) {
-			case ChatMessageRole.System: role = 'user'; break;
-			case ChatMessageRole.Assistant: role = 'model'; break;
-			case ChatMessageRole.User: role = 'user'; break;
+		const role: GeminiRole = entry.role === ChatMessageRole.Assistant ? 'model' : 'user';
+		const parts: GeminiContentPart[] = [];
+		const callIdToName = new Map<string, string>();
+
+		for (const part of entry.content ?? []) {
+			switch (part.type) {
+				case 'text': {
+					if (part.value.length) {
+						parts.push({ text: part.value });
+					}
+					break;
+				}
+				case 'tool_use': {
+					const parameters = typeof part.parameters === 'object' && part.parameters !== null ? part.parameters as Record<string, unknown> : { value: part.parameters };
+					parts.push({ functionCall: { name: part.name, args: parameters } });
+					callIdToName.set(part.toolCallId, part.name);
+					break;
+				}
+				case 'tool_result': {
+					const toolName = callIdToName.get(part.toolCallId) ?? part.toolCallId;
+					const response: Record<string, unknown> = {};
+					const textOutputs = part.value
+						.filter((valuePart): valuePart is IChatResponseTextPart => valuePart.type === 'text')
+						.map(valuePart => valuePart.value)
+						.join('\n');
+					if (textOutputs.length) {
+						response['text'] = textOutputs;
+					}
+					if (part.isError) {
+						response['isError'] = true;
+					}
+					if (!Object.keys(response).length) {
+						response['text'] = '';
+					}
+					parts.push({ functionResponse: { name: toolName, response } });
+					break;
+				}
+				default:
+					break;
+			}
 		}
-		return { role, content: reduceMessageParts(entry) };
-	}).filter(message => message.content.length > 0);
+
+		if (!parts.length) {
+			const text = reduceMessageParts(entry);
+			if (text.length) {
+				parts.push({ text });
+			}
+		}
+
+		return { role, parts };
+	}).filter(message => message.parts.length > 0);
 }
 
 class DeepSeekAgentImplementation implements IChatAgentImplementation {
+
+	private readonly requestTools = new Map<string, UserSelectedTools>();
+	private readonly fallbackCountTokens: CountTokensCallback = async (input: string, _token: CancellationToken) => input.length;
 
 	constructor(
 		private readonly requestService: IRequestService,
 		private readonly apiKey: string,
 		private readonly logService: ILogService,
 		private readonly textModelService: ITextModelService,
+		private readonly languageModelToolsService: ILanguageModelToolsService,
 		private readonly model: string
 	) { }
 
@@ -136,23 +263,97 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 			return { details: 'cancelled' };
 		}
 
+		// Read tools from request object first (setRequestTools() may not be called for initial value)
+		if (request.userSelectedTools) {
+			this.logService.debug(`[gemini] reading tools from request object for request ${request.requestId}: ${JSON.stringify(request.userSelectedTools)}`);
+			this.requestTools.set(request.requestId, request.userSelectedTools);
+		}
+
 		const { messages, contextEntries } = await this.buildMessages(request, history, token);
+		const { tools: toolConfigs, nameToToolId, summaries } = this.buildGeminiToolDeclarations(request.requestId);
+		if (summaries.length) {
+			messages.push({
+				role: 'user', parts: [{
+					text: `You can call the following tools by name when they would help:
+${summaries.map(summary => `- ${summary}`).join('\n')}
+Only call a tool if it is necessary; otherwise respond normally.` }]
+			});
+		}
+		const maxIterations = 10;
+		let iteration = 0;
 
 		try {
-			const responseText = await this.performRequest(messages, token);
-
-			await this.tryAutoApplyEdits(responseText, contextEntries, progress, token);
-
-			const markdown = new MarkdownString(responseText);
-			markdown.supportThemeIcons = true;
-			progress([{ kind: 'markdownContent', content: markdown }]);
-
-			return {
-				details: 'gemini-response',
-				metadata: {
-					model: this.model
+			while (iteration < maxIterations) {
+				if (token.isCancellationRequested) {
+					return { details: 'cancelled' };
 				}
-			};
+
+				const responseParts = await this.performRequest(messages, toolConfigs, token);
+				messages.push({ role: 'model', parts: responseParts });
+
+				const functionCalls = responseParts.filter((part): part is { functionCall: { name: string; args: Record<string, unknown> } } => hasKey(part, { functionCall: true }) && !!part.functionCall);
+				if (!functionCalls.length) {
+					const responseText = this.extractTextFromParts(responseParts) || localize('gemini.emptyTextResponse', "Gemini did not return any text.");
+
+					await this.tryAutoApplyEdits(responseText, contextEntries, progress, token);
+
+					const markdown = new MarkdownString(responseText);
+					markdown.supportThemeIcons = true;
+					progress([{ kind: 'markdownContent', content: markdown }]);
+
+					return {
+						details: 'gemini-response',
+						metadata: { model: this.model }
+					};
+				}
+
+				if (!toolConfigs.length) {
+					const errorMessage = localize('gemini.toolsNotAuthorized', "Gemini requested tool calls but none were authorized for this request.");
+					const errorParts = functionCalls.map(call => this.createFunctionResponseFromToolResult(call.functionCall.name, undefined, errorMessage));
+					messages.push({ role: 'user', parts: errorParts });
+					iteration++;
+					continue;
+				}
+
+				const toolResponseParts: GeminiContentPart[] = [];
+				for (const callPart of functionCalls) {
+					if (token.isCancellationRequested) {
+						return { details: 'cancelled' };
+					}
+
+					const toolName = callPart.functionCall.name;
+					const toolId = nameToToolId.get(toolName);
+					if (!toolId) {
+						this.logService.warn(`[gemini] model requested unknown tool name ${toolName}`);
+						toolResponseParts.push(this.createFunctionResponseFromToolResult(toolName, undefined, localize('gemini.unknownToolCall', "Gemini requested unknown tool {0}.", toolName)));
+						continue;
+					}
+
+					const parameters = callPart.functionCall.args ?? {};
+					const callId = `${request.requestId}:${iteration + 1}:${toolResponseParts.length + 1}`;
+					const invocation = this.createToolInvocation(callId, toolId, parameters, request);
+					this.logService.debug(`[gemini] invoking tool ${toolId} (${toolName}) with params keys: ${Object.keys(parameters).join(', ')}`);
+
+					try {
+						const result = await this.languageModelToolsService.invokeTool(invocation, this.fallbackCountTokens, token);
+						this.logService.debug(`[gemini] tool ${toolId} completed successfully`);
+						toolResponseParts.push(this.createFunctionResponseFromToolResult(toolName, result));
+					} catch (error) {
+						const message = error instanceof Error ? error.message : String(error);
+						this.logService.warn(`[gemini] tool ${toolId} failed: ${message}`);
+						toolResponseParts.push(this.createFunctionResponseFromToolResult(toolName, undefined, message));
+					}
+				}
+
+				if (toolResponseParts.length === 0) {
+					throw new Error(localize('gemini.noToolResponses', "Gemini requested tool calls but no responses were produced."));
+				}
+
+				messages.push({ role: 'user', parts: toolResponseParts });
+				iteration++;
+			}
+
+			throw new Error(localize('gemini.maxToolIterations', "Reached the maximum number of tool call iterations without producing an answer."));
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			this.logService.error(`[gemini] ${message}`);
@@ -168,7 +369,114 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 				},
 				details: message
 			};
+		} finally {
+			this.requestTools.delete(request.requestId);
+			this.languageModelToolsService.cancelToolCallsForRequest(request.requestId);
 		}
+	}
+
+	setRequestTools(requestId: string, tools: UserSelectedTools): void {
+		if (!tools) {
+			this.logService.debug(`[gemini] clearing tool selection for request ${requestId}`);
+			this.requestTools.delete(requestId);
+			return;
+		}
+		this.logService.debug(`[gemini] received tool selection for request ${requestId}: ${JSON.stringify(tools)}`);
+		this.requestTools.set(requestId, tools);
+	}
+
+	private getAllowedToolData(requestId: string): IToolData[] {
+		const selected = this.requestTools.get(requestId);
+		if (!selected) {
+			this.logService.debug(`[gemini] no tools selected for request ${requestId}`);
+			return [];
+		}
+		const allowedIds = Object.keys(selected).filter(id => selected[id] === true);
+		if (!allowedIds.length) {
+			this.logService.debug(`[gemini] tool selection for request ${requestId} contained no enabled entries`);
+			return [];
+		}
+		const allowedSet = new Set(allowedIds);
+		const allowedTools: IToolData[] = [];
+		for (const tool of this.languageModelToolsService.getTools()) {
+			if (allowedSet.has(tool.id)) {
+				allowedTools.push(tool);
+			}
+		}
+		this.logService.debug(`[gemini] resolved ${allowedTools.length} tools for request ${requestId}: ${allowedTools.map(tool => tool.id).join(', ')}`);
+		return allowedTools;
+	}
+
+	private buildGeminiToolDeclarations(requestId: string): { tools: GeminiToolConfig[]; nameToToolId: Map<string, string>; summaries: string[] } {
+		const allowedTools = this.getAllowedToolData(requestId);
+		if (!allowedTools.length) {
+			return { tools: [], nameToToolId: new Map(), summaries: [] };
+		}
+
+		const usedNames = new Set<string>();
+		const nameToToolId = new Map<string, string>();
+		const functionDeclarations: GeminiFunctionDeclaration[] = [];
+		const summaries: string[] = [];
+
+		for (let index = 0; index < allowedTools.length; index++) {
+			const tool = allowedTools[index];
+			const functionName = this.sanitizeToolName(tool, index, usedNames);
+			usedNames.add(functionName);
+			nameToToolId.set(functionName, tool.id);
+
+			const descriptionParts: string[] = [];
+			if (tool.displayName && tool.displayName !== tool.toolReferenceName) {
+				descriptionParts.push(tool.displayName);
+			}
+			if (tool.modelDescription) {
+				descriptionParts.push(tool.modelDescription);
+			}
+			if (tool.userDescription) {
+				descriptionParts.push(tool.userDescription);
+			}
+
+			const description = descriptionParts.length ? descriptionParts.join(' ') : undefined;
+
+			const parameters = tool.inputSchema ?? { type: 'object', properties: {} };
+			summaries.push(`${functionName}: ${description ?? tool.toolReferenceName ?? tool.id}`);
+
+			functionDeclarations.push({
+				name: functionName,
+				description,
+				parameters
+			});
+		}
+
+		return {
+			tools: [{ functionDeclarations }],
+			nameToToolId,
+			summaries
+		};
+	}
+
+	private sanitizeToolName(tool: IToolData, index: number, usedNames: Set<string>): string {
+		const rawBase = tool.toolReferenceName ?? tool.id;
+		let base = rawBase
+			.replace(/[^a-zA-Z0-9_]/g, '_')
+			.replace(/_{2,}/g, '_')
+			.replace(/^_+/, '')
+			.slice(0, 64);
+		if (!base || !/^[A-Za-z]/.test(base)) {
+			base = `tool_${index + 1}`;
+		}
+
+		let attempt = base;
+		let counter = 1;
+		while (usedNames.has(attempt)) {
+			counter++;
+			const suffix = `_${counter}`;
+			const baseLength = Math.max(1, 64 - suffix.length);
+			attempt = `${base.slice(0, baseLength)}${suffix}`;
+			if (!/^[A-Za-z]/.test(attempt)) {
+				attempt = `tool_${index + counter}`;
+			}
+		}
+		return attempt;
 	}
 
 	private extractResponseContent(part: IChatProgressHistoryResponseContent | IChatTaskDto): string | undefined {
@@ -182,16 +490,83 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 		}
 	}
 
-	private async performRequest(messages: Array<{ role: string; content: string }>, token: CancellationToken): Promise<string> {
-		return sendGeminiRequest(this.requestService, this.apiKey, this.model, messages, token);
+	private async performRequest(messages: GeminiContent[], tools: GeminiToolConfig[], token: CancellationToken): Promise<GeminiContentPart[]> {
+		const toolNames = tools.flatMap(config => config.functionDeclarations.map(decl => decl.name));
+		this.logService.debug(`[gemini] invoking model with ${messages.length} messages and tools: ${toolNames.join(', ') || 'none'}`);
+		const response = await sendGeminiRequest(this.requestService, this.apiKey, this.model, messages, token, { tools });
+		this.logService.debug(`[gemini] model returned parts: ${JSON.stringify(response.parts.map(part => hasKey(part, { functionCall: true }) ? { functionCall: { name: part.functionCall.name, argsKeys: Object.keys(part.functionCall.args ?? {}) } } : hasKey(part, { functionResponse: true }) ? { functionResponse: { name: part.functionResponse.name } } : { text: (part as { text?: string }).text ?? '' }))}`);
+		return response.parts;
 	}
 
-	private async buildMessages(request: IChatAgentRequest, history: IChatAgentHistoryEntry[], token: CancellationToken): Promise<{ messages: Array<{ role: string; content: string }>; contextEntries: IContextBlockMetadata[] }> {
-		const messages: Array<{ role: string; content: string }> = [];
+	private extractTextFromParts(parts: GeminiContentPart[]): string {
+		const segments: string[] = [];
+		for (const part of parts) {
+			if (hasKey(part, { text: true }) && typeof part.text === 'string') {
+				segments.push(part.text);
+			}
+		}
+		return segments.join('\n').trim();
+	}
+
+	private createToolInvocation(callId: string, toolId: string, parameters: Record<string, unknown>, request: IChatAgentRequest): IToolInvocation {
+		return {
+			callId,
+			toolId,
+			parameters,
+			context: { sessionId: request.sessionId },
+			chatRequestId: request.requestId
+		};
+	}
+
+	private createFunctionResponseFromToolResult(functionName: string, result?: IToolResult, errorMessage?: string): GeminiContentPart {
+		if (errorMessage) {
+			return { functionResponse: { name: functionName, response: { error: errorMessage } } };
+		}
+		if (!result) {
+			return { functionResponse: { name: functionName, response: { error: localize('gemini.toolNoResult', "Tool call produced no result.") } } };
+		}
+
+		const response: Record<string, unknown> = {};
+		const textOutput = (result.content ?? [])
+			.filter((part): part is IToolResultTextPart => part.kind === 'text')
+			.map(part => part.value)
+			.join('\n')
+			.trim();
+		if (textOutput.length) {
+			response['text'] = textOutput;
+		}
+		const messageText = this.stringifyToolMessage(result.toolResultMessage);
+		if (messageText) {
+			response['message'] = messageText;
+		}
+		if (result.toolResultError) {
+			response['toolError'] = result.toolResultError;
+		}
+		if (result.toolMetadata !== undefined) {
+			response['metadata'] = result.toolMetadata;
+		}
+		if (!Object.keys(response).length) {
+			response['text'] = '';
+		}
+		return { functionResponse: { name: functionName, response } };
+	}
+
+	private stringifyToolMessage(message: string | IMarkdownString | undefined): string | undefined {
+		if (!message) {
+			return undefined;
+		}
+		if (typeof message === 'string') {
+			return message;
+		}
+		return message.value ?? undefined;
+	}
+
+	private async buildMessages(request: IChatAgentRequest, history: IChatAgentHistoryEntry[], token: CancellationToken): Promise<{ messages: GeminiContent[]; contextEntries: IContextBlockMetadata[] }> {
+		const messages: GeminiContent[] = [];
 		const contextPrompt = await this.buildContextPrompt(request, token);
 		const contextEntries = contextPrompt?.entries ?? [];
 		if (contextPrompt) {
-			messages.push({ role: 'system', content: contextPrompt.prompt });
+			messages.push({ role: 'user', parts: [{ text: contextPrompt.prompt }] });
 		}
 
 		for (const entry of history) {
@@ -200,18 +575,18 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 			}
 			const userMessage = entry.request?.message;
 			if (userMessage) {
-				messages.push({ role: 'user', content: userMessage });
+				messages.push({ role: 'user', parts: [{ text: userMessage }] });
 			}
 			const assistantText = entry.response
 				?.map(part => this.extractResponseContent(part))
 				.filter((value): value is string => typeof value === 'string' && value.length > 0)
 				.join('\n');
 			if (assistantText) {
-				messages.push({ role: 'assistant', content: assistantText });
+				messages.push({ role: 'model', parts: [{ text: assistantText }] });
 			}
 		}
 
-		messages.push({ role: 'user', content: request.message });
+		messages.push({ role: 'user', parts: [{ text: request.message }] });
 
 		return { messages, contextEntries };
 	}
@@ -500,7 +875,8 @@ class DeepSeekAgentContribution extends Disposable implements IWorkbenchContribu
 		@ILogService logService: ILogService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@ILanguageModelsService languageModelsService: ILanguageModelsService,
-		@ITextModelService textModelService: ITextModelService
+		@ITextModelService textModelService: ITextModelService,
+		@ILanguageModelToolsService languageModelToolsService: ILanguageModelToolsService
 	) {
 		super();
 
@@ -542,7 +918,7 @@ class DeepSeekAgentContribution extends Disposable implements IWorkbenchContribu
 		});
 		this._register(registration);
 
-		const implementation = new DeepSeekAgentImplementation(this.requestService, apiKey, logService, textModelService, model);
+		const implementation = new DeepSeekAgentImplementation(this.requestService, apiKey, logService, textModelService, languageModelToolsService, model);
 		this._register(this.chatAgentService.registerAgentImplementation(agentId, implementation));
 
 		const enabledKey = contextKeyService.createKey(ChatContextKeys.enabled.key, true);
@@ -579,7 +955,14 @@ class DeepSeekAgentContribution extends Disposable implements IWorkbenchContribu
 				}];
 			},
 			async sendChatRequest(_modelId, messages, _from, _options, token) {
-				const responseText = await sendGeminiRequest(requestService, apiKey, model, toLocalMessages(messages), token);
+				const response = await sendGeminiRequest(requestService, apiKey, model, toGeminiContents(messages), token);
+				const text = response.parts
+					.filter((part): part is { text: string } => hasKey(part, { text: true }) && typeof part.text === 'string')
+					.map(part => part.text)
+					.join('\n')
+					.trim();
+				const functionCallPart = response.parts.find((part): part is { functionCall: { name: string; args: Record<string, unknown> } } => hasKey(part, { functionCall: true }) && !!part.functionCall);
+				const responseText = text.length ? text : functionCallPart ? localize('gemini.provider.functionCall', "Gemini wants to run tool {0}, but tools are only available in agent mode. Retry there or disable tool usage.", functionCallPart.functionCall.name) : '';
 				const stream = (async function* (): AsyncIterable<IChatResponsePart> {
 					yield { type: 'text', value: responseText };
 				})();

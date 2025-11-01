@@ -467,21 +467,27 @@ export class ShellIntegrationAddon extends Disposable implements IShellIntegrati
 		const argsIndex = data.indexOf(';');
 		const command = argsIndex === -1 ? data : data.substring(0, argsIndex);
 		this._markSequenceSeen(command);
+		this._logService.debug(`ShellIntegrationAddon#_doHandleVSCodeSequence: Received sequence command '${command}', full data: '${data.substring(0, 100)}${data.length > 100 ? '...' : ''}'`);
+
 		// Cast to strict checked index access
 		const args: (string | undefined)[] = argsIndex === -1 ? [] : data.substring(argsIndex + 1).split(';');
 		switch (command) {
 			case VSCodeOscPt.PromptStart:
+				this._logService.debug(`ShellIntegrationAddon#_doHandleVSCodeSequence: Processing PromptStart`);
 				this._createOrGetCommandDetection(this._terminal).handlePromptStart();
 				return true;
 			case VSCodeOscPt.CommandStart:
+				this._logService.debug(`ShellIntegrationAddon#_doHandleVSCodeSequence: Processing CommandStart`);
 				this._createOrGetCommandDetection(this._terminal).handleCommandStart();
 				return true;
 			case VSCodeOscPt.CommandExecuted:
+				this._logService.debug(`ShellIntegrationAddon#_doHandleVSCodeSequence: Processing CommandExecuted`);
 				this._createOrGetCommandDetection(this._terminal).handleCommandExecuted();
 				return true;
 			case VSCodeOscPt.CommandFinished: {
 				const arg0 = args[0];
 				const exitCode = arg0 !== undefined ? parseInt(arg0) : undefined;
+				this._logService.debug(`ShellIntegrationAddon#_doHandleVSCodeSequence: Processing CommandFinished, exitCode: ${exitCode}`);
 				this._createOrGetCommandDetection(this._terminal).handleCommandFinished(exitCode);
 				return true;
 			}
@@ -576,7 +582,9 @@ export class ShellIntegrationAddon extends Disposable implements IShellIntegrati
 						return true;
 					}
 					case 'HasRichCommandDetection': {
-						this._createOrGetCommandDetection(this._terminal).setHasRichCommandDetection(value === 'True' ? true : false);
+						const hasRich = value === 'True' ? true : false;
+						this._logService.info(`ShellIntegrationAddon#_doHandleVSCodeSequence: Received HasRichCommandDetection=${hasRich}`);
+						this._createOrGetCommandDetection(this._terminal).setHasRichCommandDetection(hasRich);
 						return true;
 					}
 					case 'Prompt': {
