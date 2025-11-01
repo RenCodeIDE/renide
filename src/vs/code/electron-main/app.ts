@@ -553,6 +553,17 @@ export class CodeApplication extends Disposable {
 			this.logService.error(error);
 		}
 
+		// Set dock icon when running in development mode (not built) on macOS
+		if (isMacintosh && !this.environmentMainService.isBuilt && app.dock) {
+			try {
+				const iconPath = join(this.environmentMainService.appRoot, 'resources/darwin/code.icns');
+				app.dock.setIcon(iconPath);
+			} catch (error) {
+				// Silently fail if icon cannot be set - this is development mode only
+				this.logService.debug('Failed to set dock icon in development mode', error);
+			}
+		}
+
 		// Main process server (electron IPC based)
 		const mainProcessElectronServer = new ElectronIPCServer();
 		Event.once(this.lifecycleMainService.onWillShutdown)(e => {
