@@ -13,6 +13,7 @@ export enum ChatConfiguration {
 	ExtensionToolsEnabled = 'chat.extensionTools.enabled',
 	EditRequests = 'chat.editRequests',
 	GlobalAutoApprove = 'chat.tools.global.autoApprove',
+	ToolPermissionPreference = 'chat.tools.permissionPreference',
 	AutoApproveEdits = 'chat.tools.edits.autoApprove',
 	EnableMath = 'chat.math.enabled',
 	CheckpointsEnabled = 'chat.checkpoints.enabled',

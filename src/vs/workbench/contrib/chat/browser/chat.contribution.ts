@@ -261,6 +261,17 @@ configurationRegistry.registerConfiguration({
 				},
 			}
 		},
+		[ChatConfiguration.ToolPermissionPreference]: {
+			type: 'string',
+			enum: ['ask', 'always'],
+			enumDescriptions: [
+				nls.localize('toolPermissionPreference.ask', 'Ask for permission before running each tool'),
+				nls.localize('toolPermissionPreference.always', 'Always allow tools to run without asking')
+			],
+			default: 'ask',
+			markdownDescription: nls.localize('toolPermissionPreference.description', 'Controls whether the IDE should ask for permission before running each tool, or always allow tools to run automatically. Set to `ask` to be prompted each time, or `always` to automatically approve all tool executions.'),
+			scope: ConfigurationScope.APPLICATION
+		},
 		[ChatConfiguration.AutoApproveEdits]: {
 			default: {
 				'**/*': true,

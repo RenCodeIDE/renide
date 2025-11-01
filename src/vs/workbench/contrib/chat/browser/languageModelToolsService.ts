@@ -24,7 +24,7 @@ import { ThemeIcon } from '../../../../base/common/themables.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { IAccessibilityService } from '../../../../platform/accessibility/common/accessibility.js';
 import { AccessibilitySignal, IAccessibilitySignalService } from '../../../../platform/accessibilitySignal/browser/accessibilitySignalService.js';
-import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+import { ConfigurationTarget, IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { IContextKey, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
@@ -358,9 +358,20 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 				preparedInvocation = await this.prepareToolInvocation(tool, dto, token);
 				prepareTimeWatch.stop();
 				if (preparedInvocation?.confirmationMessages?.title && !(await this.shouldAutoConfirm(tool.data.id, tool.data.runsInWorkspace))) {
-					const result = await this._dialogService.confirm({ message: renderAsPlaintext(preparedInvocation.confirmationMessages.title), detail: renderAsPlaintext(preparedInvocation.confirmationMessages.message!) });
+					const result = await this._dialogService.confirm({
+						message: renderAsPlaintext(preparedInvocation.confirmationMessages.title),
+						detail: renderAsPlaintext(preparedInvocation.confirmationMessages.message!),
+						checkbox: {
+							label: localize('toolPermissionPreference.checkbox', "Always allow tools without asking"),
+							checked: false
+						}
+					});
 					if (!result.confirmed) {
 						throw new CancellationError();
+					}
+					// If user checked the box, update the preference to 'always'
+					if (result.checkboxChecked) {
+						await this._configurationService.updateValue(ChatConfiguration.ToolPermissionPreference, 'always', ConfigurationTarget.USER);
 					}
 				}
 
@@ -529,6 +540,12 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 	}
 
 	private async shouldAutoConfirm(toolId: string, runsInWorkspace: boolean | undefined): Promise<ConfirmedReason | undefined> {
+		// Check global permission preference first
+		const permissionPreference = this._configurationService.getValue<string>(ChatConfiguration.ToolPermissionPreference);
+		if (permissionPreference === 'always') {
+			return { type: ToolConfirmKind.Setting, id: ChatConfiguration.ToolPermissionPreference };
+		}
+
 		const reason = this._preExecutionConfirmStore.checkAutoConfirmation(toolId);
 		if (reason) {
 			return reason;
