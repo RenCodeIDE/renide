@@ -8,6 +8,8 @@ import { MarkdownString } from '../../../../../base/common/htmlContent.js';
 import { IDisposable } from '../../../../../base/common/lifecycle.js';
 import { autorun } from '../../../../../base/common/observable.js';
 import { URI, UriComponents } from '../../../../../base/common/uri.js';
+import { Range } from '../../../../../editor/common/core/range.js';
+import { TextEdit } from '../../../../../editor/common/languages.js';
 import { CellUri } from '../../../notebook/common/notebookCommon.js';
 import { INotebookService } from '../../../notebook/common/notebookService.js';
 import { ICodeMapperService } from '../../common/chatCodeMapperService.js';
@@ -83,30 +85,52 @@ export class EditTool implements IToolImpl {
 			throw new Error('This tool must be called from within an editing session');
 		}
 
-		const result = await this.codeMapperService.mapCode({
-			codeBlocks: [{ code: parameters.code, resource: uri, markdownBeforeBlock: parameters.explanation }],
-			location: 'tool',
-			chatRequestId: invocation.chatRequestId,
-			chatRequestModel: invocation.modelId,
-			chatSessionId: invocation.context.sessionId,
-		}, {
-			textEdit: (target, edits) => {
-				model.acceptResponseProgress(request, { kind: 'textEdit', uri: target, edits });
-			},
-			notebookEdit(target, edits) {
-				model.acceptResponseProgress(request, { kind: 'notebookEdit', uri: target, edits });
-			},
-		}, token);
+		const codeMapper = this.codeMapperService.providers[0];
+		if (!codeMapper) {
+			// Fallback to direct insertion when no code mapper is available
+			// Create a text edit that replaces the entire file content with the new code
+			const textEdit: TextEdit = {
+				range: new Range(1, 1, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
+				text: parameters.code
+			};
 
-		// Signal end.
-		if (this.notebookService.hasSupportedNotebooks(uri) && (this.notebookService.getNotebookTextModel(uri))) {
-			model.acceptResponseProgress(request, { kind: 'notebookEdit', uri, edits: [], done: true });
+			if (this.notebookService.hasSupportedNotebooks(uri) && (this.notebookService.getNotebookTextModel(uri))) {
+				// For notebooks, we need to handle differently - but for now, just send as text edit
+				// The notebook handling will be done by the editing session
+				model.acceptResponseProgress(request, { kind: 'notebookEdit', uri, edits: [], done: false });
+				model.acceptResponseProgress(request, { kind: 'textEdit', uri: uri, edits: [textEdit], done: false });
+				model.acceptResponseProgress(request, { kind: 'notebookEdit', uri, edits: [], done: true });
+			} else {
+				model.acceptResponseProgress(request, { kind: 'textEdit', uri, edits: [textEdit], done: false });
+				model.acceptResponseProgress(request, { kind: 'textEdit', uri, edits: [], done: true });
+			}
 		} else {
-			model.acceptResponseProgress(request, { kind: 'textEdit', uri, edits: [], done: true });
-		}
+			// Use code mapper when available
+			const result = await this.codeMapperService.mapCode({
+				codeBlocks: [{ code: parameters.code, resource: uri, markdownBeforeBlock: parameters.explanation }],
+				location: 'tool',
+				chatRequestId: invocation.chatRequestId,
+				chatRequestModel: invocation.modelId,
+				chatSessionId: invocation.context.sessionId,
+			}, {
+				textEdit: (target, edits) => {
+					model.acceptResponseProgress(request, { kind: 'textEdit', uri: target, edits });
+				},
+				notebookEdit(target, edits) {
+					model.acceptResponseProgress(request, { kind: 'notebookEdit', uri: target, edits });
+				},
+			}, token);
 
-		if (result?.errorMessage) {
-			throw new Error(result.errorMessage);
+			// Signal end.
+			if (this.notebookService.hasSupportedNotebooks(uri) && (this.notebookService.getNotebookTextModel(uri))) {
+				model.acceptResponseProgress(request, { kind: 'notebookEdit', uri, edits: [], done: true });
+			} else {
+				model.acceptResponseProgress(request, { kind: 'textEdit', uri, edits: [], done: true });
+			}
+
+			if (result?.errorMessage) {
+				throw new Error(result.errorMessage);
+			}
 		}
 
 		let dispose: IDisposable;

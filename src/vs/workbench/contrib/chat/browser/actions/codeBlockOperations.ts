@@ -144,6 +144,8 @@ export class ApplyCodeBlockOperation {
 		@ILabelService private readonly labelService: ILabelService,
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@INotebookService private readonly notebookService: INotebookService,
+		@IBulkEditService private readonly bulkEditService: IBulkEditService,
+		@ILanguageService private readonly languageService: ILanguageService,
 	) {
 	}
 
@@ -219,6 +221,11 @@ export class ApplyCodeBlockOperation {
 		const activeEditorOption = activeEditorControl?.getModel().uri ? { label: localize('activeEditor', "Active editor '{0}'", this.labelService.getUriLabel(activeEditorControl.getModel().uri, { relative: true })), id: 'activeEditor' } : undefined;
 		const untitledEditorOption = { label: localize('newUntitledFile', "New untitled editor"), id: 'newUntitledFile' };
 
+		// Auto-select active editor when no resource is provided and active editor exists
+		if (!resource && activeEditorOption) {
+			return activeEditorControl?.getModel().uri;
+		}
+
 		const options = [];
 		if (resource) {
 			// code block had an URI, but it doesn't exist
@@ -228,7 +235,7 @@ export class ApplyCodeBlockOperation {
 				options.push(activeEditorOption);
 			}
 		} else {
-			// code block had no URI
+			// code block had no URI (should not reach here due to early return above, but kept for safety)
 			if (activeEditorOption) {
 				options.push(activeEditorOption);
 			}
@@ -262,13 +269,19 @@ export class ApplyCodeBlockOperation {
 			this.notify(localize('applyCodeBlock.readonlyNotebook', "Cannot apply code block to read-only notebook editor."));
 			return undefined;
 		}
-		const uri = notebookEditor.textModel.uri;
-		const codeBlock = { code, resource: uri, markdownBeforeBlock: undefined };
 		const codeMapper = this.codeMapperService.providers[0]?.displayName;
 		if (!codeMapper) {
-			this.notify(localize('applyCodeBlock.noCodeMapper', "No code mapper available."));
-			return undefined;
+			// Fallback to direct insertion when no code mapper is available
+			const focusRange = notebookEditor.getFocus();
+			const next = Math.max(focusRange.end - 1, 0);
+			insertCell(this.languageService, notebookEditor, next, CellKind.Code, 'below', code, true);
+			return {
+				editsProposed: true,
+				codeMapper: undefined
+			};
 		}
+		const uri = notebookEditor.textModel.uri;
+		const codeBlock = { code, resource: uri, markdownBeforeBlock: undefined };
 		let editsProposed = false;
 		const cancellationTokenSource = new CancellationTokenSource();
 		try {
@@ -303,13 +316,20 @@ export class ApplyCodeBlockOperation {
 			return undefined;
 		}
 
-		const codeBlock = { code, resource: activeModel.uri, chatSessionId, markdownBeforeBlock: undefined };
-
 		const codeMapper = this.codeMapperService.providers[0]?.displayName;
 		if (!codeMapper) {
-			this.notify(localize('applyCodeBlock.noCodeMapper', "No code mapper available."));
-			return undefined;
+			// Fallback to direct insertion when no code mapper is available
+			const range = codeEditor.getSelection() ?? new Range(activeModel.getLineCount(), 1, activeModel.getLineCount(), 1);
+			const text = reindent(code, activeModel, range.startLineNumber);
+			const edits = [new ResourceTextEdit(activeModel.uri, { range, text })];
+			await this.bulkEditService.apply(edits);
+			return {
+				editsProposed: true,
+				codeMapper: undefined
+			};
 		}
+
+		const codeBlock = { code, resource: activeModel.uri, chatSessionId, markdownBeforeBlock: undefined };
 		let editsProposed = false;
 		const cancellationTokenSource = new CancellationTokenSource();
 		try {
