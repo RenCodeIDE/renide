@@ -330,10 +330,11 @@ export class ApplyCodeBlockOperation {
 		}
 
 		const codeBlock = { code, resource: activeModel.uri, chatSessionId, markdownBeforeBlock: undefined };
+		this.logService.debug(`[ApplyCodeBlockOperation] Invoking code mapper for URI: ${activeModel.uri.toString()}`);
 		let editsProposed = false;
 		const cancellationTokenSource = new CancellationTokenSource();
 		try {
-			const iterable = await this.progressService.withProgress<AsyncIterable<TextEdit[]>>(
+			const iterable = await this.progressService.withProgress<AsyncIterable<[URI, TextEdit[]]>>(
 				{ location: ProgressLocation.Notification, delay: 500, sticky: true, cancellable: true },
 				async progress => {
 					progress.report({ message: localize('applyCodeBlock.progress', "Applying code block using {0}...", codeMapper) });
@@ -357,15 +358,18 @@ export class ApplyCodeBlockOperation {
 		};
 	}
 
-	private getTextEdits(codeBlock: ICodeMapperCodeBlock, chatSessionId: string | undefined, token: CancellationToken): AsyncIterable<TextEdit[]> {
-		return new AsyncIterableObject<TextEdit[]>(async executor => {
+	private getTextEdits(codeBlock: ICodeMapperCodeBlock, chatSessionId: string | undefined, token: CancellationToken): AsyncIterable<[URI, TextEdit[]]> {
+		const logService = this.logService;
+		return new AsyncIterableObject<[URI, TextEdit[]]>(async executor => {
 			const request: ICodeMapperRequest = {
 				codeBlocks: [codeBlock],
 				chatSessionId
 			};
 			const response: ICodeMapperResponse = {
 				textEdit: (target: URI, edit: TextEdit[]) => {
-					executor.emitOne(edit);
+					// Preserve the target URI from code mapper - this ensures edits apply to the correct file
+					logService.debug(`[ApplyCodeBlockOperation] Code mapper returned edits for URI: ${target.toString()}, edit count: ${edit.length}`);
+					executor.emitOne([target, edit]);
 				},
 				notebookEdit(_resource, _edit) {
 					//
@@ -422,8 +426,23 @@ export class ApplyCodeBlockOperation {
 		};
 	}
 
-	private async applyWithInlinePreview(edits: AsyncIterable<TextEdit[]>, codeEditor: IActiveCodeEditor, tokenSource: CancellationTokenSource, applyCodeBlockSuggestionId: EditSuggestionId | undefined): Promise<boolean> {
-		return this.instantiationService.invokeFunction(reviewEdits, codeEditor, edits, tokenSource.token, applyCodeBlockSuggestionId);
+	private async applyWithInlinePreview(edits: AsyncIterable<[URI, TextEdit[]]>, codeEditor: IActiveCodeEditor, tokenSource: CancellationTokenSource, applyCodeBlockSuggestionId: EditSuggestionId | undefined): Promise<boolean> {
+		// Extract URI and TextEdit[] tuples, verify URI matches editor, and convert to TextEdit[] stream
+		const editorUri = codeEditor.getModel().uri;
+		const logService = this.logService;
+		const editsStream: AsyncIterable<TextEdit[]> = {
+			async *[Symbol.asyncIterator]() {
+				for await (const [targetUri, editsArray] of edits) {
+					// Verify the target URI matches the editor URI
+					if (!isEqual(targetUri, editorUri)) {
+						logService.warn(`[ApplyCodeBlockOperation] Code mapper returned edits for different URI: expected ${editorUri.toString()}, got ${targetUri.toString()}`);
+						// Still apply edits - the code mapper knows best, but log the mismatch
+					}
+					yield editsArray;
+				}
+			}
+		};
+		return this.instantiationService.invokeFunction(reviewEdits, codeEditor, editsStream, tokenSource.token, applyCodeBlockSuggestionId);
 	}
 
 	private async applyNotebookEditsWithInlinePreview(edits: AsyncIterable<[URI, TextEdit[]] | ICellEditOperation[]>, uri: URI, tokenSource: CancellationTokenSource): Promise<boolean> {

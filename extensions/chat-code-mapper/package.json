@@ -1,0 +1,21 @@
+{
+	"name": "chat-code-mapper",
+	"displayName": "%displayName%",
+	"description": "%description%",
+	"version": "0.0.1",
+	"publisher": "vscode",
+	"license": "MIT",
+	"engines": {
+		"vscode": "^1.42.0"
+	},
+	"enabledApiProposals": [
+		"mappedEditsProvider"
+	],
+	"activationEvents": [],
+	"main": "./out/extension",
+	"scripts": {
+		"compile": "gulp compile-extension:chat-code-mapper",
+		"watch": "gulp watch-extension:chat-code-mapper"
+	}
+}
+

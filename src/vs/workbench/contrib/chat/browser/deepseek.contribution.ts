@@ -21,7 +21,7 @@ import { ILanguageModelChatMetadataAndIdentifier, ILanguageModelChatProvider, IL
 import { ITextModelService, IResolvedTextEditorModel } from '../../../../editor/common/services/resolverService.js';
 import { IChatRequestVariableEntry, isChatRequestFileEntry, isImplicitVariableEntry, isPasteVariableEntry } from '../common/chatVariableEntries.js';
 import { basename } from '../../../../base/common/resources.js';
-import { isLocation, Location } from '../../../../editor/common/languages.js';
+import { isLocation, Location, TextEdit } from '../../../../editor/common/languages.js';
 import { Range, IRange } from '../../../../editor/common/core/range.js';
 import { URI, UriComponents } from '../../../../base/common/uri.js';
 import { CancellationError } from '../../../../base/common/errors.js';
@@ -29,6 +29,24 @@ import { env } from '../../../../base/common/process.js';
 import { IRequestService, asJson, isSuccess } from '../../../../platform/request/common/request.js';
 import { streamToBuffer } from '../../../../base/common/buffer.js';
 type LocalChatMessage = { role: string; content: string };
+
+interface IContextBlockMetadata {
+	readonly label: string;
+	readonly uri: URI;
+	readonly range: Range | undefined;
+	readonly language: string;
+	readonly content: string;
+}
+
+interface IContextPromptResult {
+	readonly prompt: string;
+	readonly entries: IContextBlockMetadata[];
+}
+
+interface IParsedCodeBlock {
+	readonly language: string;
+	readonly content: string;
+}
 
 async function sendGeminiRequest(
 	requestService: IRequestService,
@@ -118,10 +136,12 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 			return { details: 'cancelled' };
 		}
 
-		const messages = await this.buildMessages(request, history, token);
+		const { messages, contextEntries } = await this.buildMessages(request, history, token);
 
 		try {
 			const responseText = await this.performRequest(messages, token);
+
+			await this.tryAutoApplyEdits(responseText, contextEntries, progress, token);
 
 			const markdown = new MarkdownString(responseText);
 			markdown.supportThemeIcons = true;
@@ -166,12 +186,12 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 		return sendGeminiRequest(this.requestService, this.apiKey, this.model, messages, token);
 	}
 
-	private async buildMessages(request: IChatAgentRequest, history: IChatAgentHistoryEntry[], token: CancellationToken): Promise<Array<{ role: string; content: string }>> {
+	private async buildMessages(request: IChatAgentRequest, history: IChatAgentHistoryEntry[], token: CancellationToken): Promise<{ messages: Array<{ role: string; content: string }>; contextEntries: IContextBlockMetadata[] }> {
 		const messages: Array<{ role: string; content: string }> = [];
-
 		const contextPrompt = await this.buildContextPrompt(request, token);
+		const contextEntries = contextPrompt?.entries ?? [];
 		if (contextPrompt) {
-			messages.push({ role: 'system', content: contextPrompt });
+			messages.push({ role: 'system', content: contextPrompt.prompt });
 		}
 
 		for (const entry of history) {
@@ -193,10 +213,10 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 
 		messages.push({ role: 'user', content: request.message });
 
-		return messages;
+		return { messages, contextEntries };
 	}
 
-	private async buildContextPrompt(request: IChatAgentRequest, token: CancellationToken): Promise<string | undefined> {
+	private async buildContextPrompt(request: IChatAgentRequest, token: CancellationToken): Promise<IContextPromptResult | undefined> {
 		const variables = request.variables?.variables ?? [];
 		this.logService.debug(`[gemini] preparing context: ${variables.length} entries`);
 		if (!variables.length) {
@@ -204,6 +224,7 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 		}
 
 		const blocks: string[] = [];
+		const metadata: IContextBlockMetadata[] = [];
 		const seen = new Set<string>();
 
 		for (const entry of variables) {
@@ -231,7 +252,10 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 			if (isImplicitVariableEntry(entry) || isChatRequestFileEntry(entry)) {
 				const contextBlock = await this.loadEntryContent(entry, token);
 				if (contextBlock) {
-					blocks.push(contextBlock);
+					blocks.push(contextBlock.block);
+					if (contextBlock.metadata) {
+						metadata.push(contextBlock.metadata);
+					}
 				}
 			}
 		}
@@ -241,14 +265,15 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 		}
 
 		this.logService.debug(`[gemini] including ${blocks.length} context blocks`);
-		return [
+		const prompt = [
 			'You are an expert coding assistant embedded in the IDE. The code blocks below are the exact context the user means -- even if they refer to them with vague terms like "this", "the file", or "the function".',
 			'Ground every response in those blocks: explain behaviour, data structures, and error cases using only the provided code. Mention the relevant file or block when helpful, and if the answer cannot be derived from this context, say so explicitly before offering any speculation.',
 			...blocks
 		].join('\n\n');
+		return { prompt, entries: metadata };
 	}
 
-	private async loadEntryContent(entry: IChatRequestVariableEntry, token: CancellationToken): Promise<string | undefined> {
+	private async loadEntryContent(entry: IChatRequestVariableEntry, token: CancellationToken): Promise<{ block: string; metadata?: IContextBlockMetadata } | undefined> {
 		const location = this.getLocation(entry);
 		const uri = location?.uri ?? this.getUri(entry);
 		if (!uri) {
@@ -270,7 +295,16 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 			}
 			const language = model.getLanguageId() ?? '';
 			const label = this.getContextLabel(uri, range, entry);
-			return this.formatCodeBlock(label, text, language);
+			return {
+				block: this.formatCodeBlock(label, text, language),
+				metadata: {
+					label,
+					uri,
+					range,
+					language,
+					content: text
+				}
+			};
 		} catch (error) {
 			if (error instanceof CancellationError) {
 				throw error;
@@ -348,6 +382,112 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 			return text.trimEnd();
 		}
 		return `${text.slice(0, maxLength)}\n...[truncated]`;
+	}
+
+	private parseCodeBlocks(markdown: string): IParsedCodeBlock[] {
+		const blocks: IParsedCodeBlock[] = [];
+		const regex = /```([^\n]*)\n([\s\S]*?)```/g;
+		let match: RegExpExecArray | null;
+		while ((match = regex.exec(markdown)) !== null) {
+			const language = match[1]?.trim() ?? '';
+			const content = match[2] ?? '';
+			blocks.push({ language, content });
+		}
+		return blocks;
+	}
+
+	private findMatchingCodeBlock(entry: IContextBlockMetadata, blocks: IParsedCodeBlock[], used: Set<number>): { block: IParsedCodeBlock; index: number } | undefined {
+		let bestScore = 0;
+		let bestIndex = -1;
+
+		const anchor = entry.content.split('\n').map(line => line.trim()).find(line => line.length > 0) ?? '';
+
+		for (let i = 0; i < blocks.length; i++) {
+			if (used.has(i)) {
+				continue;
+			}
+			const candidate = blocks[i];
+			const candidateContent = candidate.content.trim();
+			if (!candidateContent.length) {
+				continue;
+			}
+			let score = 0;
+			if (!entry.language || !candidate.language || entry.language === candidate.language) {
+				score += 2;
+			}
+			if (anchor && candidateContent.includes(anchor)) {
+				score += 5;
+			}
+			const entryFirstLine = entry.content.split('\n')[0]?.trim() ?? '';
+			if (entryFirstLine && candidateContent.startsWith(entryFirstLine)) {
+				score += 3;
+			}
+			if (score > bestScore) {
+				bestScore = score;
+				bestIndex = i;
+			}
+		}
+
+		if (bestIndex === -1 && blocks.length === 1 && !used.has(0)) {
+			bestIndex = 0;
+		}
+
+		if (bestIndex === -1) {
+			return undefined;
+		}
+
+		used.add(bestIndex);
+		return { block: blocks[bestIndex], index: bestIndex };
+	}
+
+	private async tryAutoApplyEdits(responseText: string, contextEntries: IContextBlockMetadata[], progress: (parts: IChatProgress[]) => void, token: CancellationToken): Promise<void> {
+		if (!contextEntries.length || token.isCancellationRequested) {
+			return;
+		}
+
+		const codeBlocks = this.parseCodeBlocks(responseText);
+		if (!codeBlocks.length) {
+			return;
+		}
+
+		const usedBlocks = new Set<number>();
+
+		for (const entry of contextEntries) {
+			if (token.isCancellationRequested) {
+				return;
+			}
+
+			try {
+				const match = this.findMatchingCodeBlock(entry, codeBlocks, usedBlocks);
+				if (!match) {
+					continue;
+				}
+
+				const newTextRaw = match.block.content;
+				if (!newTextRaw.trim().length) {
+					continue;
+				}
+
+				const originalTrimmed = entry.content.trim();
+				const newTrimmed = newTextRaw.trim();
+				if (originalTrimmed === newTrimmed) {
+					continue;
+				}
+
+				const reference = await this.textModelService.createModelReference(entry.uri);
+				try {
+					const model = reference.object.textEditorModel;
+					const editRange = entry.range ?? model.getFullModelRange();
+					const edit: TextEdit = { range: editRange, text: newTextRaw };
+					progress([{ kind: 'textEdit', uri: entry.uri, edits: [edit], done: false }]);
+					progress([{ kind: 'textEdit', uri: entry.uri, edits: [], done: true }]);
+				} finally {
+					reference.dispose();
+				}
+			} catch (error) {
+				this.logService.warn(`[gemini] Failed to auto-apply edit for ${entry.label}: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
 	}
 }
 

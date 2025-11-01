@@ -1,3 +1,4 @@
+// renViewManager.ts
 import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { IRenView } from '../views/renView.interface.js';
 import { CodeView } from '../views/codeView.js';
