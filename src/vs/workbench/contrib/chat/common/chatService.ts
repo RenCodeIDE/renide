@@ -891,6 +891,7 @@ export interface IChatService {
 	transferredSessionData: IChatTransferredSessionData | undefined;
 
 	readonly onDidSubmitRequest: Event<{ chatSessionId: string }>;
+	readonly onDidCompleteAgentRequest: Event<{ agentName: string; success: boolean }>;
 
 	isEnabled(location: ChatAgentLocation): boolean;
 	hasSessions(): boolean;

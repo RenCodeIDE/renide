@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { triggerNotification } from '../../../../base/browser/dom.js';
 import { timeout } from '../../../../base/common/async.js';
 import { Event } from '../../../../base/common/event.js';
 import { MarkdownString, isMarkdownString } from '../../../../base/common/htmlContent.js';
@@ -1037,6 +1038,22 @@ registerEditorFeature(ChatPasteProvidersFeature);
 
 
 registerSingleton(IChatTransferService, ChatTransferService, InstantiationType.Delayed);
+class ChatAgentNotificationContribution extends Disposable implements IWorkbenchContribution {
+	static readonly ID = 'workbench.contrib.chatAgentNotification';
+
+	constructor(@IChatService private readonly chatService: IChatService) {
+		super();
+		this._register(this.chatService.onDidCompleteAgentRequest(async (event) => {
+			const message = event.success
+				? nls.localize('agentFinished', 'Agent {0} finished its work', event.agentName)
+				: nls.localize('agentFinishedError', 'Agent {0} finished with an error', event.agentName);
+			await triggerNotification(message);
+		}));
+	}
+}
+
+registerWorkbenchContribution2(ChatAgentNotificationContribution.ID, ChatAgentNotificationContribution, WorkbenchPhase.Eventually);
+
 registerSingleton(IChatService, ChatService, InstantiationType.Delayed);
 registerSingleton(IChatWidgetService, ChatWidgetService, InstantiationType.Delayed);
 registerSingleton(IQuickChatService, QuickChatService, InstantiationType.Delayed);

@@ -90,6 +90,9 @@ export class ChatService extends Disposable implements IChatService {
 	private readonly _onDidDisposeSession = this._register(new Emitter<{ sessionId: string; reason: 'cleared' }>());
 	public readonly onDidDisposeSession = this._onDidDisposeSession.event;
 
+	private readonly _onDidCompleteAgentRequest = this._register(new Emitter<{ agentName: string; success: boolean }>());
+	public readonly onDidCompleteAgentRequest = this._onDidCompleteAgentRequest.event;
+
 	private readonly _sessionFollowupCancelTokens = this._register(new DisposableMap<string, CancellationTokenSource>());
 	private readonly _chatServiceTelemetry: ChatServiceTelemetry;
 	private readonly _chatSessionStore: ChatSessionStore;
@@ -938,6 +941,11 @@ export class ChatService extends Disposable implements IChatService {
 					this.trace('sendRequest', `Provider returned response for session ${model.sessionId}`);
 
 					model.completeResponse(request);
+					// Only emit event for agent requests, not slash commands
+					if (agentPart || (defaultAgent && !commandPart)) {
+						const agentForNotification = detectedAgent ?? agentPart?.agent ?? defaultAgent;
+						this._onDidCompleteAgentRequest.fire({ agentName: agentForNotification.name, success: true });
+					}
 					if (agentOrCommandFollowups) {
 						agentOrCommandFollowups.then(followups => {
 							model.setFollowups(request, followups);
@@ -966,6 +974,11 @@ export class ChatService extends Disposable implements IChatService {
 					model.setResponse(request, rawResult);
 					completeResponseCreated();
 					model.completeResponse(request);
+					// Only emit event for agent requests, not slash commands
+					if (agentPart || (defaultAgent && !commandPart)) {
+						const agentForNotification = detectedAgent ?? agentPart?.agent ?? defaultAgent;
+						this._onDidCompleteAgentRequest.fire({ agentName: agentForNotification.name, success: false });
+					}
 				}
 			} finally {
 				store.dispose();
