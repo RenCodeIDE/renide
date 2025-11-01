@@ -4,9 +4,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { CancellationToken } from '../../../../base/common/cancellation.js';
+import { AsyncIterableSource, DeferredPromise } from '../../../../base/common/async.js';
 import { Event } from '../../../../base/common/event.js';
 import { IMarkdownString, MarkdownString } from '../../../../base/common/htmlContent.js';
-import { Disposable, IReference, toDisposable } from '../../../../base/common/lifecycle.js';
+import { Disposable, IDisposable, IReference, toDisposable } from '../../../../base/common/lifecycle.js';
+import { listenStream } from '../../../../base/common/stream.js';
 import { hasKey } from '../../../../base/common/types.js';
 import { localize } from '../../../../nls.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
@@ -28,14 +30,77 @@ import { Range, IRange } from '../../../../editor/common/core/range.js';
 import { URI, UriComponents } from '../../../../base/common/uri.js';
 import { CancellationError } from '../../../../base/common/errors.js';
 import { env } from '../../../../base/common/process.js';
-import { IRequestService, asJson, isSuccess } from '../../../../platform/request/common/request.js';
+import { SSEParser } from '../../../../base/common/sseParser.js';
+import { IRequestService, isSuccess } from '../../../../platform/request/common/request.js';
 import { streamToBuffer } from '../../../../base/common/buffer.js';
+
+interface GeminiModelConfig {
+	readonly id: string;
+	readonly identifier: string;
+	readonly name: string;
+	readonly description: string;
+	readonly maxInputTokens: number;
+	readonly maxOutputTokens: number;
+	readonly isDefault: boolean;
+}
+
+const GEMINI_MODELS: GeminiModelConfig[] = [
+	{
+		id: 'gemini-2.5-flash-lite',
+		identifier: 'google/gemini-2.5-flash-lite',
+		name: 'Gemini 2.5 Flash Lite',
+		description: 'Google Gemini 2.5 Flash Lite online model - fastest option.',
+		maxInputTokens: 128000,
+		maxOutputTokens: 8192,
+		isDefault: false
+	},
+	{
+		id: 'gemini-2.5-flash',
+		identifier: 'google/gemini-2.5-flash',
+		name: 'Gemini 2.5 Flash',
+		description: 'Google Gemini 2.5 Flash online model - balanced speed and capability.',
+		maxInputTokens: 128000,
+		maxOutputTokens: 8192,
+		isDefault: true
+	},
+	{
+		id: 'gemini-2.5-pro',
+		identifier: 'google/gemini-2.5-pro',
+		name: 'Gemini 2.5 Pro',
+		description: 'Google Gemini 2.5 Pro online model - most capable option.',
+		maxInputTokens: 128000,
+		maxOutputTokens: 8192,
+		isDefault: false
+	}
+];
+
 type GeminiRole = 'user' | 'model';
 
 type GeminiContentPart =
 	| { text: string }
 	| { functionCall: { name: string; args: Record<string, unknown> } }
 	| { functionResponse: { name: string; response: unknown } };
+
+interface GeminiApiChunk {
+	candidates?: Array<{
+		content?: {
+			parts?: Array<{
+				text?: string;
+				functionCall?: {
+					name: string;
+					args?: unknown;
+				};
+				functionResponse?: {
+					name: string;
+					response: unknown;
+				};
+			}>;
+		};
+		finishReason?: string;
+	}>;
+	usageMetadata?: unknown;
+	error?: { message?: string };
+}
 
 interface GeminiContent {
 	readonly role: GeminiRole;
@@ -74,6 +139,13 @@ interface GeminiRequestOptions {
 }
 interface GeminiResponse {
 	readonly parts: GeminiContentPart[];
+	readonly finishReason?: string;
+	readonly usageMetadata?: unknown;
+}
+
+interface GeminiStreamingResponse {
+	readonly stream: AsyncIterable<GeminiContentPart[]>;
+	readonly result: Promise<GeminiResponse>;
 }
 
 async function sendGeminiRequest(
@@ -83,19 +155,18 @@ async function sendGeminiRequest(
 	messages: GeminiContent[],
 	token: CancellationToken,
 	options?: GeminiRequestOptions
-): Promise<GeminiResponse> {
+): Promise<GeminiStreamingResponse> {
 	const contents = messages.map(msg => ({
 		role: msg.role,
 		parts: msg.parts
 	}));
 
-	const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+	const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?key=${apiKey}`;
 	const payload: Record<string, unknown> = { contents };
 	if (options?.tools && options.tools.length) {
 		payload['tools'] = options.tools;
 	}
 
-	// Log payload structure for verification (sanitized - don't log full contents)
 	const toolCount = options?.tools?.flatMap(t => t.functionDeclarations ?? []).length ?? 0;
 	const payloadInfo = {
 		hasContents: !!payload.contents,
@@ -113,7 +184,8 @@ async function sendGeminiRequest(
 		url,
 		data: body,
 		headers: {
-			'Content-Type': 'application/json'
+			'Content-Type': 'application/json',
+			'Accept': 'text/event-stream'
 		}
 	}, token);
 
@@ -123,42 +195,222 @@ async function sendGeminiRequest(
 		throw new Error(`Gemini API error: ${context.res.statusCode} - ${errorText || 'Unknown error'}`);
 	}
 
-	const response = await asJson<{
-		candidates?: Array<{
-			content?: {
-				parts?: Array<{
-					text?: string;
-					functionCall?: {
-						name: string;
-						args?: unknown;
-					};
-				}>;
-			};
-		}>;
-	}>(context);
+	const contentTypeHeader = context.res.headers['content-type'];
+	const contentType = Array.isArray(contentTypeHeader) ? contentTypeHeader[0] : contentTypeHeader;
+	const isSse = typeof contentType === 'string' && contentType.toLowerCase().includes('text/event-stream');
 
-	const partsSource = response?.candidates?.[0]?.content?.parts;
-	if (!partsSource || !partsSource.length) {
-		throw new Error(localize('gemini.invalidResponse', "Model returned an empty response."));
-	}
-
-	const parts: GeminiContentPart[] = [];
-	for (const part of partsSource) {
-		if (typeof part.text === 'string') {
-			parts.push({ text: part.text });
-			continue;
+	if (!isSse) {
+		const buffer = await streamToBuffer(context.stream);
+		const responseText = buffer.toString();
+		let parsedValue: unknown;
+		try {
+			parsedValue = responseText ? JSON.parse(responseText) : undefined;
+		} catch (error) {
+			throw new Error(`Gemini API error: Unable to parse response: ${error instanceof Error ? error.message : String(error)}`);
 		}
-		if (part.functionCall) {
-			const args = normalizeFunctionCallArgs(part.functionCall.args);
-			parts.push({ functionCall: { name: part.functionCall.name, args } });
+
+		const chunks: GeminiApiChunk[] = Array.isArray(parsedValue)
+			? (parsedValue as GeminiApiChunk[])
+			: parsedValue
+				? [parsedValue as GeminiApiChunk]
+				: [];
+
+		const aggregatedParts: GeminiContentPart[] = [];
+		let finishReason: string | undefined;
+		let usageMetadata: unknown;
+
+		for (const chunk of chunks) {
+			const candidate = chunk.candidates?.[0];
+			const partsSource = candidate?.content?.parts ?? [];
+			for (const part of partsSource) {
+				if (typeof part?.text === 'string') {
+					aggregatedParts.push({ text: part.text });
+				} else if (part?.functionCall) {
+					const args = normalizeFunctionCallArgs(part.functionCall.args);
+					aggregatedParts.push({ functionCall: { name: part.functionCall.name, args } });
+				} else if (part?.functionResponse) {
+					aggregatedParts.push({ functionResponse: { name: part.functionResponse.name, response: part.functionResponse.response } });
+				}
+			}
+			finishReason = finishReason ?? candidate?.finishReason;
+			usageMetadata = chunk.usageMetadata ?? usageMetadata;
 		}
+
+		if (!aggregatedParts.length) {
+			throw new Error(localize('gemini.invalidResponse', "Model returned an empty response."));
+		}
+
+		const stream = new AsyncIterableSource<GeminiContentPart[]>();
+		const deferred = new DeferredPromise<GeminiResponse>();
+		stream.emitOne(aggregatedParts);
+		stream.resolve();
+		deferred.complete({
+			parts: aggregatedParts,
+			finishReason,
+			usageMetadata
+		});
+
+		return {
+			stream: stream.asyncIterable,
+			result: deferred.p
+		};
 	}
 
-	if (!parts.length) {
-		throw new Error(localize('gemini.emptyParts', "Gemini response did not include any usable parts."));
-	}
+	const stream = new AsyncIterableSource<GeminiContentPart[]>();
+	const deferred = new DeferredPromise<GeminiResponse>();
+	const aggregatedParts: GeminiContentPart[] = [];
+	const textAccumulators: string[] = [];
+	const emittedFunctionCalls = new Set<string>();
+	const emittedFunctionResponses = new Set<string>();
+	let finishReason: string | undefined;
+	let usageMetadata: unknown;
+	let streamCompleted = false;
+	let cancellationListener: IDisposable | undefined;
 
-	return { parts };
+	const finalizeSuccess = () => {
+		if (streamCompleted) {
+			return;
+		}
+		streamCompleted = true;
+		if (cancellationListener) {
+			cancellationListener.dispose();
+			cancellationListener = undefined;
+		}
+
+		if (!deferred.isSettled) {
+			if (!aggregatedParts.length) {
+				const err = new Error(localize('gemini.invalidResponse', "Model returned an empty response."));
+				deferred.error(err);
+				stream.reject(err);
+				return;
+			}
+			deferred.complete({ parts: aggregatedParts, finishReason, usageMetadata });
+		}
+		stream.resolve();
+	};
+
+	const finalizeError = (error: Error) => {
+		if (streamCompleted) {
+			return;
+		}
+		streamCompleted = true;
+		if (cancellationListener) {
+			cancellationListener.dispose();
+			cancellationListener = undefined;
+		}
+
+		if (!deferred.isSettled) {
+			deferred.error(error);
+		}
+		stream.reject(error);
+	};
+
+	cancellationListener = token.onCancellationRequested(() => {
+		const err = new CancellationError();
+		finalizeError(err);
+		if (typeof context.stream.destroy === 'function') {
+			context.stream.destroy();
+		}
+	});
+
+	const parser = new SSEParser(event => {
+		if (event.type !== 'message') {
+			return;
+		}
+
+		const rawData = event.data?.trim();
+		if (!rawData) {
+			return;
+		}
+		if (rawData === '[DONE]') {
+			finalizeSuccess();
+			return;
+		}
+
+		let parsed: GeminiApiChunk;
+		try {
+			parsed = JSON.parse(rawData) as GeminiApiChunk;
+		} catch (error) {
+			const err = new Error(`Gemini streaming chunk parse failure: ${error instanceof Error ? error.message : String(error)}`);
+			finalizeError(err);
+			return;
+		}
+
+		if (parsed.error) {
+			const err = new Error(parsed.error.message ?? 'Gemini streaming error');
+			finalizeError(err);
+			return;
+		}
+
+		const candidate = parsed.candidates?.[0];
+		if (!candidate) {
+			return;
+		}
+
+		if (candidate.finishReason) {
+			finishReason = finishReason ?? candidate.finishReason;
+		}
+
+		if (parsed.usageMetadata) {
+			usageMetadata = parsed.usageMetadata;
+		}
+
+		const currentParts = candidate.content?.parts ?? [];
+		const newParts: GeminiContentPart[] = [];
+
+		for (let index = 0; index < currentParts.length; index++) {
+			const part = currentParts[index];
+			if (typeof part?.text === 'string') {
+				const existing = textAccumulators[index] ?? '';
+				const delta = part.text.slice(existing.length);
+				textAccumulators[index] = part.text;
+				if (delta.length) {
+					newParts.push({ text: delta });
+				}
+			} else if (part?.functionCall) {
+				const args = normalizeFunctionCallArgs(part.functionCall.args);
+				const key = `${part.functionCall.name}:${JSON.stringify(args)}`;
+				if (!emittedFunctionCalls.has(key)) {
+					emittedFunctionCalls.add(key);
+					newParts.push({ functionCall: { name: part.functionCall.name, args } });
+				}
+			} else if (part?.functionResponse) {
+				const key = `${part.functionResponse.name}:${JSON.stringify(part.functionResponse.response ?? {})}`;
+				if (!emittedFunctionResponses.has(key)) {
+					emittedFunctionResponses.add(key);
+					newParts.push({ functionResponse: { name: part.functionResponse.name, response: part.functionResponse.response } });
+				}
+			}
+		}
+
+		if (newParts.length) {
+			aggregatedParts.push(...newParts);
+			stream.emitOne(newParts);
+		}
+	});
+
+	listenStream(context.stream, {
+		onData: chunk => {
+			try {
+				parser.feed(chunk.buffer);
+			} catch (error) {
+				const err = error instanceof Error ? error : new Error(String(error));
+				finalizeError(err);
+			}
+		},
+		onError: error => {
+			const err = error instanceof Error ? error : new Error(String(error));
+			finalizeError(err);
+		},
+		onEnd: () => {
+			finalizeSuccess();
+		}
+	}, token);
+
+	return {
+		stream: stream.asyncIterable,
+		result: deferred.p
+	};
 }
 function normalizeFunctionCallArgs(args: unknown): Record<string, unknown> {
 	if (args && typeof args === 'object') {
@@ -253,15 +505,28 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 		private readonly apiKey: string,
 		private readonly logService: ILogService,
 		private readonly textModelService: ITextModelService,
-		private readonly languageModelToolsService: ILanguageModelToolsService,
-		private readonly model: string
+		private readonly languageModelToolsService: ILanguageModelToolsService
 	) { }
+
+	private resolveModelFromRequest(userSelectedModelId?: string): string {
+		if (userSelectedModelId) {
+			const selectedModelConfig = GEMINI_MODELS.find(m => m.identifier === userSelectedModelId);
+			if (selectedModelConfig) {
+				return selectedModelConfig.id;
+			}
+		}
+		const defaultModel = GEMINI_MODELS.find(m => m.isDefault);
+		return defaultModel?.id || 'gemini-2.5-flash';
+	}
 
 	async invoke(request: IChatAgentRequest, progress: (parts: IChatProgress[]) => void, history: IChatAgentHistoryEntry[], token: CancellationToken): Promise<IChatAgentResult> {
 
 		if (token.isCancellationRequested) {
 			return { details: 'cancelled' };
 		}
+
+		// Resolve the model to use from request
+		const modelToUse = this.resolveModelFromRequest(request.userSelectedModelId);
 
 		// Read tools from request object first (setRequestTools() may not be called for initial value)
 		if (request.userSelectedTools) {
@@ -288,7 +553,34 @@ Only call a tool if it is necessary; otherwise respond normally.` }]
 					return { details: 'cancelled' };
 				}
 
-				const responseParts = await this.performRequest(messages, toolConfigs, token);
+				const streamingResponse = await this.performRequest(messages, toolConfigs, token, modelToUse);
+				let streamedText = false;
+
+				try {
+					for await (const chunk of streamingResponse.stream) {
+						if (token.isCancellationRequested) {
+							break;
+						}
+						const delta = this.extractTextFromParts(chunk, false);
+						if (delta.length) {
+							const markdownChunk = new MarkdownString(delta);
+							markdownChunk.supportThemeIcons = true;
+							progress([{ kind: 'markdownContent', content: markdownChunk }]);
+							streamedText = true;
+						}
+					}
+				} catch (error) {
+					if (!token.isCancellationRequested) {
+						throw error;
+					}
+				}
+
+				if (token.isCancellationRequested) {
+					return { details: 'cancelled' };
+				}
+
+				const responseData = await streamingResponse.result;
+				const responseParts = responseData.parts;
 				messages.push({ role: 'model', parts: responseParts });
 
 				const functionCalls = responseParts.filter((part): part is { functionCall: { name: string; args: Record<string, unknown> } } => hasKey(part, { functionCall: true }) && !!part.functionCall);
@@ -297,13 +589,15 @@ Only call a tool if it is necessary; otherwise respond normally.` }]
 
 					await this.tryAutoApplyEdits(responseText, contextEntries, progress, token);
 
-					const markdown = new MarkdownString(responseText);
-					markdown.supportThemeIcons = true;
-					progress([{ kind: 'markdownContent', content: markdown }]);
+					if (!streamedText) {
+						const markdown = new MarkdownString(responseText);
+						markdown.supportThemeIcons = true;
+						progress([{ kind: 'markdownContent', content: markdown }]);
+					}
 
 					return {
 						details: 'gemini-response',
-						metadata: { model: this.model }
+						metadata: { model: modelToUse }
 					};
 				}
 
@@ -490,22 +784,27 @@ Only call a tool if it is necessary; otherwise respond normally.` }]
 		}
 	}
 
-	private async performRequest(messages: GeminiContent[], tools: GeminiToolConfig[], token: CancellationToken): Promise<GeminiContentPart[]> {
+	private async performRequest(messages: GeminiContent[], tools: GeminiToolConfig[], token: CancellationToken, model: string): Promise<GeminiStreamingResponse> {
 		const toolNames = tools.flatMap(config => config.functionDeclarations.map(decl => decl.name));
-		this.logService.debug(`[gemini] invoking model with ${messages.length} messages and tools: ${toolNames.join(', ') || 'none'}`);
-		const response = await sendGeminiRequest(this.requestService, this.apiKey, this.model, messages, token, { tools });
-		this.logService.debug(`[gemini] model returned parts: ${JSON.stringify(response.parts.map(part => hasKey(part, { functionCall: true }) ? { functionCall: { name: part.functionCall.name, argsKeys: Object.keys(part.functionCall.args ?? {}) } } : hasKey(part, { functionResponse: true }) ? { functionResponse: { name: part.functionResponse.name } } : { text: (part as { text?: string }).text ?? '' }))}`);
-		return response.parts;
+		this.logService.debug(`[gemini] invoking model ${model} with ${messages.length} messages and tools: ${toolNames.join(', ') || 'none'}`);
+		const response = await sendGeminiRequest(this.requestService, this.apiKey, model, messages, token, { tools });
+		response.result.then(result => {
+			this.logService.debug(`[gemini] model returned parts: ${JSON.stringify(result.parts.map(part => hasKey(part, { functionCall: true }) ? { functionCall: { name: part.functionCall.name, argsKeys: Object.keys(part.functionCall.args ?? {}) } } : hasKey(part, { functionResponse: true }) ? { functionResponse: { name: part.functionResponse.name } } : { text: (part as { text?: string }).text ?? '' }))}`);
+		}, error => {
+			this.logService.warn(`[gemini] streaming request failed: ${error instanceof Error ? error.message : String(error)}`);
+		});
+		return response;
 	}
 
-	private extractTextFromParts(parts: GeminiContentPart[]): string {
+	private extractTextFromParts(parts: GeminiContentPart[], trim = true): string {
 		const segments: string[] = [];
 		for (const part of parts) {
 			if (hasKey(part, { text: true }) && typeof part.text === 'string') {
 				segments.push(part.text);
 			}
 		}
-		return segments.join('\n').trim();
+		const text = segments.join('\n');
+		return trim ? text.trim() : text;
 	}
 
 	private createToolInvocation(callId: string, toolId: string, parameters: Record<string, unknown>, request: IChatAgentRequest): IToolInvocation {
@@ -882,7 +1181,6 @@ class DeepSeekAgentContribution extends Disposable implements IWorkbenchContribu
 
 		// Read API key from env (which gets userEnv from preload script)
 		const apiKey = env['GEMINI_API_KEY'];
-		const model = 'gemini-2.5-flash';
 
 		if (!apiKey) {
 			logService.warn('[gemini] No API key configured. Set GEMINI_API_KEY environment variable.');
@@ -890,14 +1188,14 @@ class DeepSeekAgentContribution extends Disposable implements IWorkbenchContribu
 			return;
 		}
 
-		logService.info(`[gemini] registering online agent using Gemini 2.5 Flash`);
+		logService.info(`[gemini] registering online agent using Gemini models`);
 
 		const agentId = 'gemini.local';
 		const registration = this.chatAgentService.registerAgent(agentId, {
 			id: agentId,
 			name: 'gemini',
-			fullName: localize('gemini.agent.name', "Gemini 2.5 Flash"),
-			description: localize('gemini.agent.description', "Use Gemini 2.5 Flash online model."),
+			fullName: localize('gemini.agent.name', "Gemini"),
+			description: localize('gemini.agent.description', "Use Gemini online models."),
 			isCore: true,
 			isDefault: true,
 			locations: [ChatAgentLocation.Chat, ChatAgentLocation.EditorInline],
@@ -908,7 +1206,7 @@ class DeepSeekAgentContribution extends Disposable implements IWorkbenchContribu
 			],
 			metadata: {
 				followupPlaceholder: localize('gemini.followup.placeholder', "Ask Gemini..."),
-				additionalWelcomeMessage: localize('gemini.welcome', "Gemini 2.5 Flash is ready.")
+				additionalWelcomeMessage: localize('gemini.welcome', "Gemini is ready.")
 			},
 			disambiguation: [],
 			extensionId: new ExtensionIdentifier('core.gemini'),
@@ -918,7 +1216,7 @@ class DeepSeekAgentContribution extends Disposable implements IWorkbenchContribu
 		});
 		this._register(registration);
 
-		const implementation = new DeepSeekAgentImplementation(this.requestService, apiKey, logService, textModelService, languageModelToolsService, model);
+		const implementation = new DeepSeekAgentImplementation(this.requestService, apiKey, logService, textModelService, languageModelToolsService);
 		this._register(this.chatAgentService.registerAgentImplementation(agentId, implementation));
 
 		const enabledKey = contextKeyService.createKey(ChatContextKeys.enabled.key, true);
@@ -931,47 +1229,68 @@ class DeepSeekAgentContribution extends Disposable implements IWorkbenchContribu
 		}));
 
 		const vendor = 'google';
-		const modelIdentifier = 'google/gemini-2.5-flash';
 		const provider: ILanguageModelChatProvider = {
 			onDidChange: Event.None,
 			async provideLanguageModelChatInfo(): Promise<ILanguageModelChatMetadataAndIdentifier[]> {
-				return [{
-					identifier: modelIdentifier,
+				return GEMINI_MODELS.map(modelConfig => ({
+					identifier: modelConfig.identifier,
 					metadata: {
 						extension: new ExtensionIdentifier('core.gemini'),
-						name: 'Gemini 2.5 Flash',
-						id: modelIdentifier,
+						name: modelConfig.name,
+						id: modelConfig.identifier,
 						vendor,
 						version: '1.0.0',
 						family: 'gemini',
-						detail: localize('gemini.model.detail', "Google Gemini 2.5 Flash online model."),
-						maxInputTokens: 128000,
-						maxOutputTokens: 8192,
+						detail: modelConfig.description,
+						maxInputTokens: modelConfig.maxInputTokens,
+						maxOutputTokens: modelConfig.maxOutputTokens,
 						modelPickerCategory: { label: 'Google Models', order: 1 },
-						isDefault: true,
+						isDefault: modelConfig.isDefault,
 						isUserSelectable: true,
 						capabilities: { agentMode: true, toolCalling: true }
 					}
-				}];
+				}));
 			},
-			async sendChatRequest(_modelId, messages, _from, _options, token) {
-				const response = await sendGeminiRequest(requestService, apiKey, model, toGeminiContents(messages), token);
-				const text = response.parts
-					.filter((part): part is { text: string } => hasKey(part, { text: true }) && typeof part.text === 'string')
-					.map(part => part.text)
-					.join('\n')
-					.trim();
-				const functionCallPart = response.parts.find((part): part is { functionCall: { name: string; args: Record<string, unknown> } } => hasKey(part, { functionCall: true }) && !!part.functionCall);
-				const responseText = text.length ? text : functionCallPart ? localize('gemini.provider.functionCall', "Gemini wants to run tool {0}, but tools are only available in agent mode. Retry there or disable tool usage.", functionCallPart.functionCall.name) : '';
-				const stream = (async function* (): AsyncIterable<IChatResponsePart> {
-					yield { type: 'text', value: responseText };
+			async sendChatRequest(modelId, messages, _from, _options, token) {
+				const selectedModelConfig = GEMINI_MODELS.find(m => m.identifier === modelId);
+				const modelToUse = selectedModelConfig?.id || GEMINI_MODELS.find(m => m.isDefault)?.id || 'gemini-2.5-flash';
+				const response = await sendGeminiRequest(requestService, apiKey, modelToUse, toGeminiContents(messages), token);
+				let sawText = false;
+				let functionCallName: string | undefined;
+
+				const stream = (async function* (): AsyncIterable<IChatResponsePart | IChatResponsePart[]> {
+					for await (const chunk of response.stream) {
+						if (token.isCancellationRequested) {
+							break;
+						}
+						const chatParts: IChatResponsePart[] = [];
+						for (const part of chunk) {
+							if (hasKey(part, { text: true }) && typeof part.text === 'string') {
+								if (part.text.length) {
+									sawText = true;
+								}
+								chatParts.push({ type: 'text', value: part.text });
+							} else if (hasKey(part, { functionCall: true }) && !!part.functionCall) {
+								functionCallName = part.functionCall.name;
+							}
+						}
+						if (chatParts.length === 1) {
+							yield chatParts[0];
+						} else if (chatParts.length > 1) {
+							yield chatParts;
+						}
+					}
+					if (!sawText && functionCallName && !token.isCancellationRequested) {
+						yield { type: 'text', value: localize('gemini.provider.functionCall', "Gemini wants to run tool {0}, but tools are only available in agent mode. Retry there or disable tool usage.", functionCallName) };
+					}
 				})();
+
 				return {
 					stream,
-					result: Promise.resolve<IChatAgentResult>({
+					result: response.result.then((): IChatAgentResult => ({
 						details: 'gemini-response',
-						metadata: { model }
-					})
+						metadata: { model: modelToUse }
+					}))
 				};
 			},
 			async provideTokenCount(_modelId, message, _token) {
