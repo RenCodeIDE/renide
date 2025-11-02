@@ -1,0 +1,134 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.ren-account-dashboard-container {
+	display: flex;
+	flex-direction: column;
+	padding: 32px;
+	max-width: 800px;
+	margin: 0 auto;
+}
+
+.ren-account-dashboard-header {
+	display: flex;
+	align-items: center;
+	gap: 24px;
+	margin-bottom: 32px;
+	padding-bottom: 24px;
+	border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.ren-account-dashboard-avatar {
+	width: 80px;
+	height: 80px;
+	border-radius: 50%;
+	background: var(--vscode-badge-background);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 32px;
+	font-weight: 600;
+	color: var(--vscode-badge-foreground);
+	background-size: cover;
+	background-position: center;
+	flex-shrink: 0;
+}
+
+.ren-account-dashboard-info {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	flex: 1;
+}
+
+.ren-account-dashboard-name {
+	font-size: 24px;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+}
+
+.ren-account-dashboard-username {
+	font-size: 16px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.ren-account-dashboard-email {
+	font-size: 14px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.ren-account-dashboard-details {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	margin-bottom: 32px;
+	padding: 24px;
+	background: var(--vscode-editor-background);
+	border: 1px solid var(--vscode-panel-border);
+	border-radius: 8px;
+}
+
+.ren-account-dashboard-row {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: 16px;
+}
+
+.ren-account-dashboard-label {
+	font-size: 14px;
+	font-weight: 500;
+	color: var(--vscode-foreground);
+	flex-shrink: 0;
+}
+
+.ren-account-dashboard-value {
+	font-size: 14px;
+	color: var(--vscode-descriptionForeground);
+	text-align: right;
+	word-break: break-word;
+	flex: 1;
+}
+
+.ren-account-dashboard-actions {
+	display: flex;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+
+.ren-account-dashboard-button {
+	min-width: 120px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 600px) {
+	.ren-account-dashboard-container {
+		padding: 16px;
+	}
+
+	.ren-account-dashboard-header {
+		flex-direction: column;
+		align-items: center;
+		text-align: center;
+	}
+
+	.ren-account-dashboard-info {
+		align-items: center;
+	}
+
+	.ren-account-dashboard-row {
+		flex-direction: column;
+		gap: 4px;
+	}
+
+	.ren-account-dashboard-label {
+		text-align: left;
+	}
+
+	.ren-account-dashboard-value {
+		text-align: left;
+	}
+}
+

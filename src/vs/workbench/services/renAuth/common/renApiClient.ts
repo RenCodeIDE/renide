@@ -35,6 +35,64 @@ export class RenApiClient {
 				if (!result) {
 					throw new Error('Login failed: Empty response from server');
 				}
+				// Validate and normalize user object structure
+				if (!result.user || typeof result.user !== 'object') {
+					throw new Error('Login failed: Invalid user object in response');
+				}
+				// API returns different structure, so we need to normalize it
+				// API response structure: { id: number, name: string, email: string, createdAt: string }
+				const apiUser = result.user as { id?: number | string; name?: string; displayName?: string; username?: string; email?: string; createdAt?: number | string; avatarUrl?: string };
+
+				// Normalize API response to match IRenUser structure
+				// API returns: id (number), name (string), email (string), createdAt (ISO string)
+				// We need: id (string), username (string), email (string), displayName (string), createdAt (number)
+
+				// Convert id to string (API returns number)
+				const id = apiUser.id !== null && apiUser.id !== undefined ? String(apiUser.id) : null;
+				if (!id) {
+					throw new Error('Login failed: Missing or invalid user.id');
+				}
+
+				// Validate email
+				if (typeof apiUser.email !== 'string' || !apiUser.email) {
+					throw new Error('Login failed: Missing or invalid user.email');
+				}
+
+				// Map 'name' to 'displayName' (API uses 'name' field)
+				const displayName = typeof apiUser.name === 'string' ? apiUser.name : (typeof apiUser.displayName === 'string' ? apiUser.displayName : '');
+
+				// Derive username from email if not provided (extract part before @)
+				const username = typeof apiUser.username === 'string' && apiUser.username ? apiUser.username : apiUser.email.split('@')[0];
+
+				// Convert createdAt from ISO string to timestamp number
+				let createdAt: number;
+				if (typeof apiUser.createdAt === 'number') {
+					createdAt = apiUser.createdAt;
+				} else if (typeof apiUser.createdAt === 'string') {
+					const parsed = Date.parse(apiUser.createdAt);
+					if (isNaN(parsed)) {
+						throw new Error('Login failed: Invalid user.createdAt format');
+					}
+					createdAt = parsed;
+				} else {
+					throw new Error('Login failed: Missing or invalid user.createdAt');
+				}
+
+				// Normalize avatarUrl (optional)
+				const avatarUrl = typeof apiUser.avatarUrl === 'string' ? apiUser.avatarUrl : undefined;
+
+				// Create normalized user object
+				const normalizedUser: IRenUser = {
+					id,
+					username,
+					email: apiUser.email,
+					displayName,
+					avatarUrl,
+					createdAt
+				};
+
+				// Update result with normalized user
+				result.user = normalizedUser;
 				return result;
 			} else {
 				const errorText = await asText(response).catch(() => null);
@@ -106,11 +164,60 @@ export class RenApiClient {
 			}, CancellationToken.None);
 
 			if (isSuccess(response)) {
-				const result = await asJson<IRenUser>(response);
-				if (!result) {
-					throw new Error('Get profile failed: Empty response from server');
+				const apiUser = await asJson<{ id?: number | string; name?: string; displayName?: string; username?: string; email?: string; createdAt?: number | string; avatarUrl?: string }>(response);
+				if (!apiUser || typeof apiUser !== 'object') {
+					throw new Error('Get profile failed: Empty or invalid response from server');
 				}
-				return result;
+
+				// Normalize API response to match IRenUser structure
+				// DB schema: id (serial/number), name (text), email (text), createdAt (timestamp/ISO string)
+				// We need: id (string), username (string), email (string), displayName (string), createdAt (number)
+
+				// Convert id to string (DB returns number from serial)
+				const id = apiUser.id !== null && apiUser.id !== undefined ? String(apiUser.id) : null;
+				if (!id) {
+					throw new Error('Get profile failed: Missing or invalid id');
+				}
+
+				// Validate email
+				if (typeof apiUser.email !== 'string' || !apiUser.email) {
+					throw new Error('Get profile failed: Missing or invalid email');
+				}
+
+				// Map 'name' to 'displayName' (DB uses 'name' field)
+				const displayName = typeof apiUser.name === 'string' ? apiUser.name : (typeof apiUser.displayName === 'string' ? apiUser.displayName : '');
+
+				// Derive username from email if not provided (extract part before @)
+				const username = typeof apiUser.username === 'string' && apiUser.username ? apiUser.username : apiUser.email.split('@')[0];
+
+				// Convert createdAt from ISO string to timestamp number
+				let createdAt: number;
+				if (typeof apiUser.createdAt === 'number') {
+					createdAt = apiUser.createdAt;
+				} else if (typeof apiUser.createdAt === 'string') {
+					const parsed = Date.parse(apiUser.createdAt);
+					if (isNaN(parsed)) {
+						throw new Error('Get profile failed: Invalid createdAt format');
+					}
+					createdAt = parsed;
+				} else {
+					throw new Error('Get profile failed: Missing or invalid createdAt');
+				}
+
+				// Normalize avatarUrl (optional, not in DB schema)
+				const avatarUrl = typeof apiUser.avatarUrl === 'string' ? apiUser.avatarUrl : undefined;
+
+				// Create normalized user object matching IRenUser interface
+				const normalizedUser: IRenUser = {
+					id,
+					username,
+					email: apiUser.email,
+					displayName,
+					avatarUrl,
+					createdAt
+				};
+
+				return normalizedUser;
 			} else {
 				const errorText = await asText(response).catch(() => null);
 				let errorMessage = 'Unknown error';

@@ -5,6 +5,7 @@
 
 import { Event } from '../../../../base/common/event.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
+import { RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 
 export const IRenAuthService = createDecorator<IRenAuthService>('renAuthService');
 
@@ -41,4 +42,7 @@ export interface IRenLoginResult {
 	error?: string;
 	errorCode?: 'INVALID_CREDENTIALS' | 'NETWORK_ERROR' | 'SERVER_ERROR';
 }
+
+// Context Keys
+export const RenAuthContextKey = new RawContextKey<boolean>('ren.isAuthenticated', false);
 

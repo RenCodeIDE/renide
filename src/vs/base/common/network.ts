@@ -73,6 +73,8 @@ export namespace Schemas {
 
 	export const vscodeWorkspaceTrust = 'vscode-workspace-trust';
 
+	export const vscodeRenAccount = 'vscode-ren-account';
+
 	export const vscodeTerminal = 'vscode-terminal';
 
 	/** Scheme used for code blocks in chat. */

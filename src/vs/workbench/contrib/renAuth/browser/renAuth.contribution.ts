@@ -7,17 +7,24 @@ import { IWorkbenchContribution, IWorkbenchContributionsRegistry, Extensions as 
 import { LifecyclePhase } from '../../../services/lifecycle/common/lifecycle.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
-import { IRenAuthService } from '../../../services/renAuth/common/renAuth.js';
+import { IRenAuthService, RenAuthContextKey } from '../../../services/renAuth/common/renAuth.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { IStorageService, StorageScope } from '../../../../platform/storage/common/storage.js';
-import { registerAction2, Action2 } from '../../../../platform/actions/common/actions.js';
-import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+import { registerAction2, Action2, MenuId } from '../../../../platform/actions/common/actions.js';
+import { ServicesAccessor, IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { EditorPaneDescriptor, IEditorPaneRegistry } from '../../../browser/editor.js';
+import { EditorExtensions } from '../../../common/editor.js';
+import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
+import { RenAccountDashboardEditor } from '../../../services/renAuth/browser/renAccountDashboardEditor.js';
+import { RenAccountDashboardInput } from '../../../services/renAuth/browser/renAccountDashboardInput.js';
 
 const REN_AUTH_COMMANDS = {
 	LOGIN: 'ren.auth.login',
-	LOGOUT: 'ren.auth.logout'
+	LOGOUT: 'ren.auth.logout',
+	OPEN_DASHBOARD: 'ren.account.openDashboard'
 };
 
 const REN_AUTH_STORAGE_KEYS = {
@@ -150,6 +157,39 @@ export class RenAuthContribution extends Disposable implements IWorkbenchContrib
 			}
 		}));
 
+		// Register Ren Account Dashboard menu action
+		this._register(registerAction2(class RenAccountDashboardAction extends Action2 {
+			constructor() {
+				super({
+					id: REN_AUTH_COMMANDS.OPEN_DASHBOARD,
+					title: localize2('renAccount.openDashboard', 'Ren Account'),
+					category: localize2('renAuth.category', 'Ren'),
+					f1: true,
+					menu: [{
+						id: MenuId.GlobalActivity,
+						group: '1_account',
+						order: 1,
+						when: RenAuthContextKey
+					}]
+				});
+			}
+
+			async run(accessor: ServicesAccessor) {
+				const editorService = accessor.get(IEditorService);
+				const authService = accessor.get(IRenAuthService);
+				const instantiationService = accessor.get(IInstantiationService);
+
+				if (!authService.isAuthenticated) {
+					const notificationService = accessor.get(INotificationService);
+					notificationService.info(localize('renAuth.notLoggedIn', 'You are not logged in.'));
+					return;
+				}
+
+				const dashboardInput = instantiationService.createInstance(RenAccountDashboardInput);
+				await editorService.openEditor(dashboardInput);
+			}
+		}));
+
 		// Check auth status on startup
 		void this.checkAuthStatus();
 	}
@@ -166,4 +206,16 @@ export class RenAuthContribution extends Disposable implements IWorkbenchContrib
 // Register the contribution
 const workbenchRegistry = Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench);
 workbenchRegistry.registerWorkbenchContribution(RenAuthContribution, LifecyclePhase.Restored);
+
+// Register the editor pane
+Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
+	EditorPaneDescriptor.create(
+		RenAccountDashboardEditor,
+		RenAccountDashboardEditor.ID,
+		localize('renAccountDashboardEditor', 'Ren Account Dashboard')
+	),
+	[
+		new SyncDescriptor(RenAccountDashboardInput)
+	]
+);
 

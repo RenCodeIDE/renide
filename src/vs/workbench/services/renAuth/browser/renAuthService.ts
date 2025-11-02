@@ -5,12 +5,13 @@
 
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
+import { IContextKey, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
 import { IRequestService } from '../../../../platform/request/common/request.js';
 import { ISecretStorageService } from '../../../../platform/secrets/common/secrets.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
-import { IRenAuthService, IRenLoginResult, IRenUser } from '../common/renAuth.js';
+import { IRenAuthService, IRenLoginResult, IRenUser, RenAuthContextKey } from '../common/renAuth.js';
 import { RenApiClient } from '../common/renApiClient.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 
@@ -38,16 +39,19 @@ export class RenAuthService extends Disposable implements IRenAuthService {
 	private _refreshTimer: ReturnType<typeof setTimeout> | undefined = undefined;
 	private readonly apiClient: RenApiClient;
 	private _isCheckingAuthStatus: boolean = false;
+	private readonly _contextKey: IContextKey<boolean>;
 
 	constructor(
 		@IStorageService private readonly storageService: IStorageService,
 		@ISecretStorageService private readonly secretStorageService: ISecretStorageService,
 		@IRequestService private readonly requestService: IRequestService,
 		@IProductService private readonly productService: IProductService,
-		@ILogService private readonly logService: ILogService
+		@ILogService private readonly logService: ILogService,
+		@IContextKeyService contextKeyService: IContextKeyService
 	) {
 		super();
 		this.apiClient = new RenApiClient(this.requestService, this.productService, this.logService);
+		this._contextKey = RenAuthContextKey.bindTo(contextKeyService);
 		this._register(this.secretStorageService.onDidChangeSecret((key) => {
 			if (key === REN_AUTH_STORAGE_KEYS.ACCESS_TOKEN || key === REN_AUTH_STORAGE_KEYS.REFRESH_TOKEN) {
 				// If tokens change externally and we're not already checking, recheck auth status
@@ -91,6 +95,7 @@ export class RenAuthService extends Disposable implements IRenAuthService {
 			this._isAuthenticated = true;
 			this._currentUser = response.user;
 
+			this._contextKey.set(true);
 			this._onDidChangeAuthStatus.fire(true);
 			this._onDidChangeUser.fire(response.user);
 
@@ -140,6 +145,7 @@ export class RenAuthService extends Disposable implements IRenAuthService {
 		this._isAuthenticated = false;
 		this._currentUser = undefined;
 
+		this._contextKey.set(false);
 		this._onDidChangeAuthStatus.fire(false);
 		this._onDidChangeUser.fire(undefined);
 	}
@@ -222,10 +228,39 @@ export class RenAuthService extends Disposable implements IRenAuthService {
 
 			// Load user profile
 			try {
-				const user = JSON.parse(profileStr) as IRenUser;
+				const parsed = JSON.parse(profileStr);
+				if (!parsed || typeof parsed !== 'object') {
+					this.logService.warn('[RenAuth] Stored user profile is invalid: not an object');
+					return false;
+				}
+				// Validate required fields
+				if (typeof parsed.id !== 'string' || !parsed.id) {
+					this.logService.warn('[RenAuth] Stored user profile has invalid id');
+					return false;
+				}
+				if (typeof parsed.username !== 'string' || !parsed.username) {
+					this.logService.warn('[RenAuth] Stored user profile has invalid username');
+					return false;
+				}
+				if (typeof parsed.email !== 'string' || !parsed.email) {
+					this.logService.warn('[RenAuth] Stored user profile has invalid email');
+					return false;
+				}
+				if (typeof parsed.displayName !== 'string') {
+					this.logService.warn('[RenAuth] Stored user profile has missing or invalid displayName, will use fallback');
+				}
+				if (typeof parsed.createdAt !== 'number' || isNaN(parsed.createdAt)) {
+					this.logService.warn('[RenAuth] Stored user profile has invalid createdAt');
+					return false;
+				}
+				if (parsed.avatarUrl !== undefined && typeof parsed.avatarUrl !== 'string') {
+					this.logService.warn('[RenAuth] Stored user profile has invalid avatarUrl type');
+				}
+				const user = parsed as IRenUser;
 				this._currentUser = user;
 				this._isAuthenticated = true;
 
+				this._contextKey.set(true);
 				this._onDidChangeAuthStatus.fire(true);
 				this._onDidChangeUser.fire(user);
 
