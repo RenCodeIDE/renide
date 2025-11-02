@@ -3,11 +3,14 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { basename } from '../../../../../base/common/resources.js';
+import { URI } from '../../../../../base/common/uri.js';
 import { IMonitorXChangelogEntry } from '../../common/renWorkspaceStore.js';
 
 export interface IMonitorXRenderOptions {
 	readonly limit?: number;
 	readonly emptyMessage?: string;
+	readonly onFileClick?: (filePath: string) => void;
 }
 
 const MAX_DIFF_DISPLAY_LENGTH = 800;
@@ -37,8 +40,21 @@ export function renderMonitorXChangelog(target: HTMLElement, entries: IMonitorXC
 		header.className = 'ren-monitorx-changelog-entry-header';
 
 		const fileLabel = document.createElement('span');
+		// Extract just the filename from the full path
+		const fileUri = URI.file(entry.filePath);
+		const fileName = basename(fileUri);
 		fileLabel.className = 'ren-monitorx-changelog-entry-file';
-		fileLabel.textContent = entry.filePath;
+		if (options.onFileClick) {
+			fileLabel.classList.add('clickable');
+			fileLabel.style.cursor = 'pointer';
+			fileLabel.onclick = (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				options.onFileClick!(entry.filePath);
+			};
+		}
+		fileLabel.textContent = fileName;
+		fileLabel.setAttribute('title', entry.filePath); // Show full path on hover
 
 		const timeLabel = document.createElement('time');
 		timeLabel.className = 'ren-monitorx-changelog-entry-time';
@@ -55,12 +71,50 @@ export function renderMonitorXChangelog(target: HTMLElement, entries: IMonitorXC
 		item.appendChild(reason);
 
 		if (entry.diff) {
-			const diffBlock = document.createElement('pre');
+			const diffBlock = document.createElement('div');
 			diffBlock.className = 'ren-monitorx-changelog-entry-diff';
-			const diffText = entry.diff.length > MAX_DIFF_DISPLAY_LENGTH
-				? `${entry.diff.slice(0, MAX_DIFF_DISPLAY_LENGTH)}…`
-				: entry.diff;
-			diffBlock.textContent = diffText;
+
+			// Truncate before parsing if needed
+			let diffText = entry.diff;
+			const truncated = diffText.length > MAX_DIFF_DISPLAY_LENGTH;
+			if (truncated) {
+				// Try to truncate at a line boundary
+				const truncatedText = diffText.slice(0, MAX_DIFF_DISPLAY_LENGTH);
+				const lastNewline = truncatedText.lastIndexOf('\n');
+				diffText = lastNewline > 0 ? truncatedText.slice(0, lastNewline + 1) : truncatedText;
+			}
+
+			// Parse and render diff with colors
+			const diffLines = diffText.split('\n');
+			for (const line of diffLines) {
+				const lineSpan = document.createElement('span');
+				lineSpan.className = 'monitorx-diff-line';
+
+				if (line.startsWith('+')) {
+					lineSpan.classList.add('monitorx-diff-line-add');
+					lineSpan.textContent = line;
+				} else if (line.startsWith('-')) {
+					lineSpan.classList.add('monitorx-diff-line-delete');
+					lineSpan.textContent = line;
+				} else if (line.startsWith('@@')) {
+					lineSpan.classList.add('monitorx-diff-hunk-header');
+					lineSpan.textContent = line;
+				} else {
+					// Context line or other (space, empty, etc.)
+					lineSpan.textContent = line;
+				}
+
+				diffBlock.appendChild(lineSpan);
+				diffBlock.appendChild(document.createElement('br'));
+			}
+
+			if (truncated) {
+				const ellipsis = document.createElement('span');
+				ellipsis.className = 'monitorx-diff-line';
+				ellipsis.textContent = '…';
+				diffBlock.appendChild(ellipsis);
+			}
+
 			item.appendChild(diffBlock);
 		}
 

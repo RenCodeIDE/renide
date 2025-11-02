@@ -14,6 +14,9 @@ import { IInstantiationService } from '../../../../../platform/instantiation/com
 import { IOpenerService } from '../../../../../platform/opener/common/opener.js';
 import { IThemeService } from '../../../../../platform/theme/common/themeService.js';
 import { IHoverService } from '../../../../../platform/hover/browser/hover.js';
+import { IEditorService, SIDE_GROUP } from '../../../../services/editor/common/editorService.js';
+import { IResourceEditorInput } from '../../../../../platform/editor/common/editor.js';
+import { URI } from '../../../../../base/common/uri.js';
 import { IRenWorkspaceStore, IMonitorXChangelogEntry } from '../../common/renWorkspaceStore.js';
 import { renderMonitorXChangelog } from './monitorXChangelogRenderer.js';
 
@@ -32,7 +35,8 @@ export class MonitorXChangelogViewPane extends ViewPane {
 		@IOpenerService openerService: IOpenerService,
 		@IThemeService themeService: IThemeService,
 		@IHoverService hoverService: IHoverService,
-		@IRenWorkspaceStore private readonly workspaceStore: IRenWorkspaceStore
+		@IRenWorkspaceStore private readonly workspaceStore: IRenWorkspaceStore,
+		@IEditorService private readonly editorService: IEditorService
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 	}
@@ -63,10 +67,17 @@ export class MonitorXChangelogViewPane extends ViewPane {
 		this.updateEntries(entries);
 	}
 
+	private async openFile(filePath: string): Promise<void> {
+		const fileUri = URI.file(filePath);
+		const editorInput: IResourceEditorInput = { resource: fileUri };
+		await this.editorService.openEditor(editorInput, SIDE_GROUP);
+	}
+
 	private updateEntries(entries: IMonitorXChangelogEntry[]): void {
 		renderMonitorXChangelog(this.changelogContainer, entries, {
 			emptyMessage: localize('monitorx.changelog.empty', "No MonitorX activity recorded yet."),
-			limit: 50
+			limit: 50,
+			onFileClick: (path) => this.openFile(path)
 		});
 	}
 }
