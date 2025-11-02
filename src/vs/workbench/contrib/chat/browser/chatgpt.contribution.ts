@@ -3,35 +3,88 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { CancellationToken } from '../../../../base/common/cancellation.js';
-import { AsyncIterableSource, DeferredPromise } from '../../../../base/common/async.js';
-import { Event } from '../../../../base/common/event.js';
-import { MarkdownString } from '../../../../base/common/htmlContent.js';
-import { Disposable, IDisposable, IReference, toDisposable } from '../../../../base/common/lifecycle.js';
-import { listenStream } from '../../../../base/common/stream.js';
-import { localize } from '../../../../nls.js';
-import { ILogService } from '../../../../platform/log/common/log.js';
-import { ExtensionIdentifier } from '../../../../platform/extensions/common/extensions.js';
-import { registerWorkbenchContribution2, IWorkbenchContribution, WorkbenchPhase } from '../../../common/contributions.js';
-import { IChatAgentService, IChatAgentImplementation, IChatAgentHistoryEntry, IChatAgentRequest, IChatAgentResult, UserSelectedTools } from '../common/chatAgents.js';
-import { ChatAgentLocation, ChatModeKind } from '../common/constants.js';
-import { IChatProgressHistoryResponseContent } from '../common/chatModel.js';
-import { ChatErrorLevel, IChatProgress, IChatTaskDto } from '../common/chatService.js';
-import { IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
-import { ChatContextKeys } from '../common/chatContextKeys.js';
-import { ILanguageModelChatMetadataAndIdentifier, ILanguageModelChatProvider, ILanguageModelsService, IChatMessage, IChatResponsePart, IChatResponseTextPart, ChatMessageRole } from '../common/languageModels.js';
-import { ILanguageModelToolsService, IToolData, CountTokensCallback, IToolInvocation, IToolResult, IToolResultTextPart } from '../common/languageModelToolsService.js';
-import { ITextModelService, IResolvedTextEditorModel } from '../../../../editor/common/services/resolverService.js';
-import { IChatRequestVariableEntry, isChatRequestFileEntry, isImplicitVariableEntry, isPasteVariableEntry } from '../common/chatVariableEntries.js';
-import { basename } from '../../../../base/common/resources.js';
-import { isLocation, Location, TextEdit } from '../../../../editor/common/languages.js';
-import { Range, IRange } from '../../../../editor/common/core/range.js';
-import { URI, UriComponents } from '../../../../base/common/uri.js';
-import { CancellationError } from '../../../../base/common/errors.js';
-import { env } from '../../../../base/common/process.js';
-import { SSEParser } from '../../../../base/common/sseParser.js';
-import { IRequestService, isSuccess } from '../../../../platform/request/common/request.js';
-import { streamToBuffer } from '../../../../base/common/buffer.js';
+import { CancellationToken } from "../../../../base/common/cancellation.js";
+import {
+	AsyncIterableSource,
+	DeferredPromise,
+} from "../../../../base/common/async.js";
+import { Event } from "../../../../base/common/event.js";
+import { MarkdownString } from "../../../../base/common/htmlContent.js";
+import {
+	Disposable,
+	IDisposable,
+	IReference,
+	toDisposable,
+} from "../../../../base/common/lifecycle.js";
+import { listenStream } from "../../../../base/common/stream.js";
+import { localize } from "../../../../nls.js";
+import { ILogService } from "../../../../platform/log/common/log.js";
+import { ExtensionIdentifier } from "../../../../platform/extensions/common/extensions.js";
+import {
+	registerWorkbenchContribution2,
+	IWorkbenchContribution,
+	WorkbenchPhase,
+} from "../../../common/contributions.js";
+import {
+	IChatAgentService,
+	IChatAgentImplementation,
+	IChatAgentHistoryEntry,
+	IChatAgentRequest,
+	IChatAgentResult,
+	UserSelectedTools,
+} from "../common/chatAgents.js";
+import { ChatAgentLocation, ChatModeKind } from "../common/constants.js";
+import { IChatProgressHistoryResponseContent } from "../common/chatModel.js";
+import {
+	ChatErrorLevel,
+	IChatProgress,
+	IChatTaskDto,
+} from "../common/chatService.js";
+import { IContextKeyService } from "../../../../platform/contextkey/common/contextkey.js";
+import { ChatContextKeys } from "../common/chatContextKeys.js";
+import {
+	ILanguageModelChatMetadataAndIdentifier,
+	ILanguageModelChatProvider,
+	ILanguageModelsService,
+	IChatMessage,
+	IChatResponsePart,
+	IChatResponseTextPart,
+	ChatMessageRole,
+} from "../common/languageModels.js";
+import {
+	ILanguageModelToolsService,
+	IToolData,
+	CountTokensCallback,
+	IToolInvocation,
+	IToolResult,
+	IToolResultTextPart,
+} from "../common/languageModelToolsService.js";
+import {
+	ITextModelService,
+	IResolvedTextEditorModel,
+} from "../../../../editor/common/services/resolverService.js";
+import {
+	IChatRequestVariableEntry,
+	isChatRequestFileEntry,
+	isImplicitVariableEntry,
+	isPasteVariableEntry,
+} from "../common/chatVariableEntries.js";
+import { basename } from "../../../../base/common/resources.js";
+import {
+	isLocation,
+	Location,
+	TextEdit,
+} from "../../../../editor/common/languages.js";
+import { Range, IRange } from "../../../../editor/common/core/range.js";
+import { URI, UriComponents } from "../../../../base/common/uri.js";
+import { CancellationError } from "../../../../base/common/errors.js";
+import { env } from "../../../../base/common/process.js";
+import { SSEParser } from "../../../../base/common/sseParser.js";
+import {
+	IRequestService,
+	isSuccess,
+} from "../../../../platform/request/common/request.js";
+import { streamToBuffer } from "../../../../base/common/buffer.js";
 
 interface ChatGPTModelConfig {
 	readonly id: string;
@@ -45,44 +98,44 @@ interface ChatGPTModelConfig {
 
 const CHATGPT_MODELS: ChatGPTModelConfig[] = [
 	{
-		id: 'gpt-5-2025-08-07',
-		identifier: 'openai/gpt-5-2025-08-07',
-		name: 'GPT-5',
-		description: 'OpenAI GPT-5 - most advanced model.',
+		id: "gpt-5-2025-08-07",
+		identifier: "openai/gpt-5-2025-08-07",
+		name: "GPT-5",
+		description: "OpenAI GPT-5 - most advanced model.",
 		maxInputTokens: 128000,
 		maxOutputTokens: 16384,
-		isDefault: false
+		isDefault: false,
 	},
 	{
-		id: 'gpt-5-nano-2025-08-07',
-		identifier: 'openai/gpt-5-nano-2025-08-07',
-		name: 'GPT-5 Nano',
-		description: 'OpenAI GPT-5 Nano - fastest and most efficient.',
+		id: "gpt-5-nano-2025-08-07",
+		identifier: "openai/gpt-5-nano-2025-08-07",
+		name: "GPT-5 Nano",
+		description: "OpenAI GPT-5 Nano - fastest and most efficient.",
 		maxInputTokens: 128000,
 		maxOutputTokens: 16384,
-		isDefault: true
+		isDefault: true,
 	},
 	{
-		id: 'gpt-4.1-2025-04-14',
-		identifier: 'openai/gpt-4.1-2025-04-14',
-		name: 'GPT-4.1',
-		description: 'OpenAI GPT-4.1 - balanced performance.',
+		id: "gpt-4.1-2025-04-14",
+		identifier: "openai/gpt-4.1-2025-04-14",
+		name: "GPT-4.1",
+		description: "OpenAI GPT-4.1 - balanced performance.",
 		maxInputTokens: 128000,
 		maxOutputTokens: 16384,
-		isDefault: false
+		isDefault: false,
 	},
 	{
-		id: 'chatgpt-4o-latest',
-		identifier: 'openai/chatgpt-4o-latest',
-		name: 'GPT-4o',
-		description: 'OpenAI GPT-4o - optimized for chat.',
+		id: "chatgpt-4o-latest",
+		identifier: "openai/chatgpt-4o-latest",
+		name: "GPT-4o",
+		description: "OpenAI GPT-4o - optimized for chat.",
 		maxInputTokens: 128000,
 		maxOutputTokens: 16384,
-		isDefault: false
-	}
+		isDefault: false,
+	},
 ];
 
-type OpenAIRole = 'system' | 'user' | 'assistant' | 'tool';
+type OpenAIRole = "system" | "user" | "assistant" | "tool";
 
 interface OpenAIMessage {
 	readonly role: OpenAIRole;
@@ -94,7 +147,7 @@ interface OpenAIMessage {
 
 interface OpenAIToolCall {
 	readonly id: string;
-	readonly type: 'function';
+	readonly type: "function";
 	readonly function: {
 		readonly name: string;
 		readonly arguments: string;
@@ -102,7 +155,7 @@ interface OpenAIToolCall {
 }
 
 interface OpenAIFunction {
-	readonly type: 'function';
+	readonly type: "function";
 	readonly function: {
 		readonly name: string;
 		readonly description?: string;
@@ -123,7 +176,7 @@ interface OpenAIApiChunk {
 			readonly tool_calls?: Array<{
 				readonly index?: number;
 				readonly id?: string;
-				readonly type?: 'function';
+				readonly type?: "function";
 				readonly function?: {
 					readonly name?: string;
 					readonly arguments?: string;
@@ -188,7 +241,10 @@ interface IParsedCodeBlock {
 
 interface ChatGPTRequestOptions {
 	readonly tools?: OpenAIFunction[];
-	readonly tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+	readonly tool_choice?:
+		| "auto"
+		| "none"
+		| { type: "function"; function: { name: string } };
 }
 
 async function sendChatGPTRequest(
@@ -197,31 +253,34 @@ async function sendChatGPTRequest(
 	model: string,
 	messages: OpenAIMessage[],
 	token: CancellationToken,
-	options?: ChatGPTRequestOptions
+	options?: ChatGPTRequestOptions,
 ): Promise<ChatGPTStreamingResponse> {
-	const url = 'https://api.openai.com/v1/chat/completions';
+	const url = "https://api.openai.com/v1/chat/completions";
 	const payload: Record<string, unknown> = {
 		model,
 		messages,
-		stream: true
+		stream: true,
 	};
 	if (options?.tools && options.tools.length > 0) {
-		payload['tools'] = options.tools;
-		payload['tool_choice'] = options.tool_choice ?? 'auto';
+		payload["tools"] = options.tools;
+		payload["tool_choice"] = options.tool_choice ?? "auto";
 	}
 
 	const body = JSON.stringify(payload);
 
-	const context = await requestService.request({
-		type: 'POST',
-		url,
-		data: body,
-		headers: {
-			'Content-Type': 'application/json',
-			'Authorization': `Bearer ${apiKey}`,
-			'Accept': 'text/event-stream'
-		}
-	}, token);
+	const context = await requestService.request(
+		{
+			type: "POST",
+			url,
+			data: body,
+			headers: {
+				"Content-Type": "application/json",
+				Authorization: `Bearer ${apiKey}`,
+				Accept: "text/event-stream",
+			},
+		},
+		token,
+	);
 
 	if (!isSuccess(context)) {
 		const buffer = await streamToBuffer(context.stream);
@@ -233,7 +292,7 @@ async function sendChatGPTRequest(
 				errorMessage = errorJson.error.message;
 			}
 		} catch {
-			errorMessage += ` - ${errorText || 'Unknown error'}`;
+			errorMessage += ` - ${errorText || "Unknown error"}`;
 		}
 		throw new Error(errorMessage);
 	}
@@ -261,35 +320,49 @@ async function sendChatGPTRequest(
 
 		if (!deferred.isSettled) {
 			// Emit any remaining tool calls if finish_reason was set but they weren't emitted during streaming
-			if (!toolCallsEmitted && (finishReason !== undefined && finishReason !== null) && toolCallsMap.size > 0) {
+			if (
+				!toolCallsEmitted &&
+				finishReason !== undefined &&
+				finishReason !== null &&
+				toolCallsMap.size > 0
+			) {
 				for (const [id, toolCall] of toolCallsMap) {
 					let args: Record<string, unknown> = {};
 					try {
-						const argsStr = toolCall.function.arguments || '{}';
+						const argsStr = toolCall.function.arguments || "{}";
 						args = JSON.parse(argsStr) as Record<string, unknown>;
 					} catch {
-						args = { raw: toolCall.function.arguments || '' };
+						args = { raw: toolCall.function.arguments || "" };
 					}
 					aggregatedParts.push({
 						toolCall: {
 							id,
-							name: toolCall.function.name || '',
-							args
-						}
+							name: toolCall.function.name || "",
+							args,
+						},
 					});
 				}
 				toolCallsMap.clear();
 			}
 
-			if (!aggregatedParts.length && textAccumulator.length === 0 && toolCallsMap.size === 0) {
-				const err = new Error(localize('chatgpt.invalidResponse', "Model returned an empty response."));
+			if (
+				!aggregatedParts.length &&
+				textAccumulator.length === 0 &&
+				toolCallsMap.size === 0
+			) {
+				const err = new Error(
+					localize(
+						"chatgpt.invalidResponse",
+						"Model returned an empty response.",
+					),
+				);
 				deferred.error(err);
 				stream.reject(err);
 				return;
 			}
 			// Flush any remaining text
 			if (textAccumulator.length > 0) {
-				const accumulatedText = textAccumulator.join('');
+				const accumulatedText = textAccumulator.join("");
 				if (accumulatedText.trim().length) {
 					aggregatedParts.push({ text: accumulatedText });
 				}
@@ -319,13 +392,13 @@ async function sendChatGPTRequest(
 	cancellationListener = token.onCancellationRequested(() => {
 		const err = new CancellationError();
 		finalizeError(err);
-		if (typeof context.stream.destroy === 'function') {
+		if (typeof context.stream.destroy === "function") {
 			context.stream.destroy();
 		}
 	});
 
-	const parser = new SSEParser(event => {
-		if (event.type !== 'message') {
+	const parser = new SSEParser((event) => {
+		if (event.type !== "message") {
 			return;
 		}
 
@@ -333,7 +406,7 @@ async function sendChatGPTRequest(
 		if (!rawData) {
 			return;
 		}
-		if (rawData === '[DONE]') {
+		if (rawData === "[DONE]") {
 			finalizeSuccess();
 			return;
 		}
@@ -342,13 +415,15 @@ async function sendChatGPTRequest(
 		try {
 			parsed = JSON.parse(rawData) as OpenAIApiChunk;
 		} catch (error) {
-			const err = new Error(`ChatGPT streaming chunk parse failure: ${error instanceof Error ? error.message : String(error)}`);
+			const err = new Error(
+				`ChatGPT streaming chunk parse failure: ${error instanceof Error ? error.message : String(error)}`,
+			);
 			finalizeError(err);
 			return;
 		}
 
 		if (parsed.error) {
-			const err = new Error(parsed.error.message ?? 'ChatGPT streaming error');
+			const err = new Error(parsed.error.message ?? "ChatGPT streaming error");
 			finalizeError(err);
 			return;
 		}
@@ -391,48 +466,55 @@ async function sendChatGPTRequest(
 					// Append to existing call's arguments (arguments are streamed as text chunks)
 					// Create new object since properties are readonly
 					const updatedArguments = toolCallDelta.function.arguments
-						? (existingCall.function.arguments || '') + toolCallDelta.function.arguments
+						? (existingCall.function.arguments || "") +
+							toolCallDelta.function.arguments
 						: existingCall.function.arguments;
-					const updatedName = toolCallDelta.function.name || existingCall.function.name;
+					const updatedName =
+						toolCallDelta.function.name || existingCall.function.name;
 					toolCallsMap.set(toolCallDelta.id, {
 						id: toolCallDelta.id,
-						type: 'function',
+						type: "function",
 						function: {
 							name: updatedName,
-							arguments: updatedArguments || ''
-						}
+							arguments: updatedArguments || "",
+						},
 					});
 				} else {
 					// New tool call - initialize with empty arguments if not provided
 					toolCallsMap.set(toolCallDelta.id, {
 						id: toolCallDelta.id,
-						type: 'function',
+						type: "function",
 						function: {
-							name: toolCallDelta.function.name || '',
-							arguments: toolCallDelta.function.arguments || ''
-						}
+							name: toolCallDelta.function.name || "",
+							arguments: toolCallDelta.function.arguments || "",
+						},
 					});
 				}
 			}
 		}
 
 		// Emit tool calls when complete (after finish_reason is set and not null)
-		if (!toolCallsEmitted && finishReason !== undefined && finishReason !== null && toolCallsMap.size > 0) {
+		if (
+			!toolCallsEmitted &&
+			finishReason !== undefined &&
+			finishReason !== null &&
+			toolCallsMap.size > 0
+		) {
 			for (const [id, toolCall] of toolCallsMap) {
 				let args: Record<string, unknown> = {};
 				try {
-					const argsStr = toolCall.function.arguments || '{}';
+					const argsStr = toolCall.function.arguments || "{}";
 					args = JSON.parse(argsStr) as Record<string, unknown>;
 				} catch {
 					// If parsing fails, try to create a simple object with the raw string
-					args = { raw: toolCall.function.arguments || '' };
+					args = { raw: toolCall.function.arguments || "" };
 				}
 				newParts.push({
 					toolCall: {
 						id,
-						name: toolCall.function.name || '',
-						args
-					}
+						name: toolCall.function.name || "",
+						args,
+					},
 				});
 			}
 			toolCallsEmitted = true;
@@ -445,27 +527,31 @@ async function sendChatGPTRequest(
 		}
 	});
 
-	listenStream(context.stream, {
-		onData: chunk => {
-			try {
-				parser.feed(chunk.buffer);
-			} catch (error) {
+	listenStream(
+		context.stream,
+		{
+			onData: (chunk) => {
+				try {
+					parser.feed(chunk.buffer);
+				} catch (error) {
+					const err = error instanceof Error ? error : new Error(String(error));
+					finalizeError(err);
+				}
+			},
+			onError: (error) => {
 				const err = error instanceof Error ? error : new Error(String(error));
 				finalizeError(err);
-			}
+			},
+			onEnd: () => {
+				finalizeSuccess();
+			},
 		},
-		onError: error => {
-			const err = error instanceof Error ? error : new Error(String(error));
-			finalizeError(err);
-		},
-		onEnd: () => {
-			finalizeSuccess();
-		}
-	}, token);
+		token,
+	);
 
 	return {
 		stream: stream.asyncIterable,
-		result: deferred.p
+		result: deferred.p,
 	};
 }
 
@@ -473,11 +559,11 @@ function reduceMessageParts(message: IChatMessage): string {
 	const parts = message.content ?? [];
 	const segments: string[] = [];
 	for (const part of parts) {
-		if (part.type === 'text') {
+		if (part.type === "text") {
 			segments.push(part.value);
 		}
 	}
-	return segments.join('\n');
+	return segments.join("\n");
 }
 
 function toChatGPTMessages(messages: IChatMessage[]): OpenAIMessage[] {
@@ -492,37 +578,43 @@ function toChatGPTMessages(messages: IChatMessage[]): OpenAIMessage[] {
 
 		for (const part of entry.content ?? []) {
 			switch (part.type) {
-				case 'text': {
+				case "text": {
 					if (part.value.length) {
 						contentParts.push(part.value);
 					}
 					break;
 				}
-				case 'tool_use': {
+				case "tool_use": {
 					// Assistant message with tool call
-					const parameters = typeof part.parameters === 'object' && part.parameters !== null ? part.parameters as Record<string, unknown> : { value: part.parameters };
+					const parameters =
+						typeof part.parameters === "object" && part.parameters !== null
+							? (part.parameters as Record<string, unknown>)
+							: { value: part.parameters };
 					toolCalls.push({
 						id: part.toolCallId,
-						type: 'function',
+						type: "function",
 						function: {
 							name: part.name,
-							arguments: JSON.stringify(parameters)
-						}
+							arguments: JSON.stringify(parameters),
+						},
 					});
 					callIdToName.set(part.toolCallId, part.name);
 					break;
 				}
-				case 'tool_result': {
+				case "tool_result": {
 					// Tool response message
 					toolCallId = part.toolCallId;
 					const textOutputs = part.value
-						.filter((valuePart): valuePart is IChatResponseTextPart => valuePart.type === 'text')
-						.map(valuePart => valuePart.value)
-						.join('\n');
+						.filter(
+							(valuePart): valuePart is IChatResponseTextPart =>
+								valuePart.type === "text",
+						)
+						.map((valuePart) => valuePart.value)
+						.join("\n");
 					if (textOutputs.length) {
 						toolResult = { text: textOutputs, isError: part.isError };
 					} else {
-						toolResult = { text: '', isError: part.isError };
+						toolResult = { text: "", isError: part.isError };
 					}
 					break;
 				}
@@ -534,108 +626,158 @@ function toChatGPTMessages(messages: IChatMessage[]): OpenAIMessage[] {
 		if (entry.role === ChatMessageRole.Assistant) {
 			if (toolCalls.length > 0) {
 				// Assistant message with tool calls
-				const content = contentParts.length > 0 ? contentParts.join('\n') : null;
+				const content =
+					contentParts.length > 0 ? contentParts.join("\n") : null;
 				result.push({
-					role: 'assistant',
+					role: "assistant",
 					content: content,
-					tool_calls: toolCalls
+					tool_calls: toolCalls,
 				});
 			} else if (contentParts.length > 0) {
 				// Regular assistant message
 				result.push({
-					role: 'assistant',
-					content: contentParts.join('\n')
+					role: "assistant",
+					content: contentParts.join("\n"),
 				});
 			}
 		} else if (entry.role === ChatMessageRole.User) {
 			if (toolCallId && toolResult !== undefined) {
 				// Tool result message (OpenAI expects role 'tool')
 				result.push({
-					role: 'tool',
-					content: typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult),
-					tool_call_id: toolCallId
+					role: "tool",
+					content:
+						typeof toolResult === "string"
+							? toolResult
+							: JSON.stringify(toolResult),
+					tool_call_id: toolCallId,
 				});
 			} else if (contentParts.length > 0) {
 				// Regular user message
 				result.push({
-					role: 'user',
-					content: contentParts.join('\n')
+					role: "user",
+					content: contentParts.join("\n"),
 				});
 			}
-		} else if (entry.role === ChatMessageRole.System && contentParts.length > 0) {
+		} else if (
+			entry.role === ChatMessageRole.System &&
+			contentParts.length > 0
+		) {
 			// System message
 			result.push({
-				role: 'system',
-				content: contentParts.join('\n')
+				role: "system",
+				content: contentParts.join("\n"),
 			});
 		}
 	}
 
-		return result.filter(msg => {
-			// Filter out invalid messages
-			if (msg.role === 'assistant' && msg.content === null && !msg.tool_calls) {
-				return false;
-			}
-			if ((msg.role === 'user' || msg.role === 'system' || msg.role === 'tool') && (msg.content === null || msg.content === '')) {
-				return false;
-			}
-			return true;
-		});
+	return result.filter((msg) => {
+		// Filter out invalid messages
+		if (msg.role === "assistant" && msg.content === null && !msg.tool_calls) {
+			return false;
+		}
+		if (
+			(msg.role === "user" || msg.role === "system" || msg.role === "tool") &&
+			(msg.content === null || msg.content === "")
+		) {
+			return false;
+		}
+		return true;
+	});
 }
 
 class ChatGPTAgentImplementation implements IChatAgentImplementation {
-
 	private readonly requestTools = new Map<string, UserSelectedTools>();
-	private readonly fallbackCountTokens: CountTokensCallback = async (input: string, _token: CancellationToken) => input.length;
+	private readonly fallbackCountTokens: CountTokensCallback = async (
+		input: string,
+		_token: CancellationToken,
+	) => input.length;
 
 	constructor(
 		private readonly requestService: IRequestService,
 		private readonly apiKey: string,
 		private readonly logService: ILogService,
 		private readonly textModelService: ITextModelService,
-		private readonly languageModelToolsService: ILanguageModelToolsService
-	) { }
+		private readonly languageModelToolsService: ILanguageModelToolsService,
+		private readonly languageModelsService: ILanguageModelsService,
+	) {}
 
 	private resolveModelFromRequest(userSelectedModelId?: string): string {
 		if (userSelectedModelId) {
-			const selectedModelConfig = CHATGPT_MODELS.find(m => m.identifier === userSelectedModelId);
+			const selectedModelConfig = CHATGPT_MODELS.find(
+				(m) => m.identifier === userSelectedModelId,
+			);
 			if (selectedModelConfig) {
 				return selectedModelConfig.id;
 			}
 		}
-		const defaultModel = CHATGPT_MODELS.find(m => m.isDefault);
-		return defaultModel?.id || 'gpt-5-nano-2025-08-07';
+		const defaultModel = CHATGPT_MODELS.find((m) => m.isDefault);
+		return defaultModel?.id || "gpt-5-nano-2025-08-07";
 	}
 
-	async invoke(request: IChatAgentRequest, progress: (parts: IChatProgress[]) => void, history: IChatAgentHistoryEntry[], token: CancellationToken): Promise<IChatAgentResult> {
-
+	async invoke(
+		request: IChatAgentRequest,
+		progress: (parts: IChatProgress[]) => void,
+		history: IChatAgentHistoryEntry[],
+		token: CancellationToken,
+	): Promise<IChatAgentResult> {
 		if (token.isCancellationRequested) {
-			return { details: 'cancelled' };
+			return { details: "cancelled" };
+		}
+
+		// Check if user selected a model from a different vendor
+		if (request.userSelectedModelId) {
+			const selectedModelMetadata =
+				this.languageModelsService.lookupLanguageModel(
+					request.userSelectedModelId,
+				);
+			if (selectedModelMetadata && selectedModelMetadata.vendor !== "openai") {
+				// Delegate to language models service for cross-vendor model
+				return this.invokeViaLanguageModelsService(
+					request,
+					progress,
+					history,
+					token,
+					request.userSelectedModelId,
+				);
+			}
 		}
 
 		// Resolve the model to use from request
-		const modelToUse = this.resolveModelFromRequest(request.userSelectedModelId);
+		const modelToUse = this.resolveModelFromRequest(
+			request.userSelectedModelId,
+		);
 
 		// Read tools from request object first (setRequestTools() may not be called for initial value)
 		if (request.userSelectedTools) {
-			this.logService.debug(`[chatgpt] reading tools from request object for request ${request.requestId}: ${JSON.stringify(request.userSelectedTools)}`);
+			this.logService.debug(
+				`[chatgpt] reading tools from request object for request ${request.requestId}: ${JSON.stringify(request.userSelectedTools)}`,
+			);
 			this.requestTools.set(request.requestId, request.userSelectedTools);
 		}
 
-		const { messages, contextEntries } = await this.buildMessages(request, history, token);
-		const { tools: toolConfigs, nameToToolId } = this.buildChatGPTToolDeclarations(request.requestId);
+		const { messages, contextEntries } = await this.buildMessages(
+			request,
+			history,
+			token,
+		);
+		const { tools: toolConfigs, nameToToolId } =
+			this.buildChatGPTToolDeclarations(request.requestId);
 		if (toolConfigs.length > 0) {
 			// Add a system message about available tools
-			const toolSummaries = Array.from(nameToToolId.keys()).map(name => {
-				const toolId = nameToToolId.get(name);
-				const toolsArray = Array.from(this.languageModelToolsService.getTools());
-				const tool = toolsArray.find((t: IToolData) => t.id === toolId);
-				const desc = tool?.modelDescription || tool?.displayName || name;
-				return `- ${name}: ${desc}`;
-			}).join('\n');
+			const toolSummaries = Array.from(nameToToolId.keys())
+				.map((name) => {
+					const toolId = nameToToolId.get(name);
+					const toolsArray = Array.from(
+						this.languageModelToolsService.getTools(),
+					);
+					const tool = toolsArray.find((t: IToolData) => t.id === toolId);
+					const desc = tool?.modelDescription || tool?.displayName || name;
+					return `- ${name}: ${desc}`;
+				})
+				.join("\n");
 			messages.unshift({
-				role: 'system',
-				content: `You can call the following tools when they would help:\n${toolSummaries}\nOnly call a tool if it is necessary; otherwise respond normally.`
+				role: "system",
+				content: `You can call the following tools when they would help:\n${toolSummaries}\nOnly call a tool if it is necessary; otherwise respond normally.`,
 			});
 		}
 
@@ -645,10 +787,15 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		try {
 			while (iteration < maxIterations) {
 				if (token.isCancellationRequested) {
-					return { details: 'cancelled' };
+					return { details: "cancelled" };
 				}
 
-				const streamingResponse = await this.performRequest(messages, toolConfigs, token, modelToUse);
+				const streamingResponse = await this.performRequest(
+					messages,
+					toolConfigs,
+					token,
+					modelToUse,
+				);
 				let streamedText = false;
 
 				try {
@@ -660,7 +807,7 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						if (delta.length) {
 							const markdownChunk = new MarkdownString(delta);
 							markdownChunk.supportThemeIcons = true;
-							progress([{ kind: 'markdownContent', content: markdownChunk }]);
+							progress([{ kind: "markdownContent", content: markdownChunk }]);
 							streamedText = true;
 						}
 					}
@@ -671,50 +818,62 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				}
 
 				if (token.isCancellationRequested) {
-					return { details: 'cancelled' };
+					return { details: "cancelled" };
 				}
 
 				const responseData = await streamingResponse.result;
 				const responseParts = responseData.parts;
 
 				// Extract text and tool calls from response
-				const textParts = responseParts.filter(part => part.text !== undefined);
-				const toolCallParts = responseParts.filter(part => part.toolCall !== undefined);
+				const textParts = responseParts.filter(
+					(part) => part.text !== undefined,
+				);
+				const toolCallParts = responseParts.filter(
+					(part) => part.toolCall !== undefined,
+				);
 
 				// Add assistant message with text
 				if (textParts.length > 0) {
-					const textContent = textParts.map(part => part.text || '').join('');
+					const textContent = textParts.map((part) => part.text || "").join("");
 					if (textContent.trim().length) {
-						messages.push({ role: 'assistant', content: textContent });
+						messages.push({ role: "assistant", content: textContent });
 					}
 				}
 
 				// Handle tool calls
 				if (toolCallParts.length > 0) {
 					// Add assistant message with tool calls
-					const toolCalls: OpenAIToolCall[] = toolCallParts.map(part => ({
+					const toolCalls: OpenAIToolCall[] = toolCallParts.map((part) => ({
 						id: part.toolCall!.id,
-						type: 'function',
+						type: "function",
 						function: {
 							name: part.toolCall!.name,
-							arguments: JSON.stringify(part.toolCall!.args)
-						}
+							arguments: JSON.stringify(part.toolCall!.args),
+						},
 					}));
 					messages.push({
-						role: 'assistant',
+						role: "assistant",
 						content: null,
-						tool_calls: toolCalls
+						tool_calls: toolCalls,
 					});
 
 					if (!toolConfigs.length) {
-						const errorMessage = localize('chatgpt.toolsNotAuthorized', "ChatGPT requested tool calls but none were authorized for this request.");
-						progress([{ kind: 'markdownContent', content: new MarkdownString(errorMessage) }]);
+						const errorMessage = localize(
+							"chatgpt.toolsNotAuthorized",
+							"ChatGPT requested tool calls but none were authorized for this request.",
+						);
+						progress([
+							{
+								kind: "markdownContent",
+								content: new MarkdownString(errorMessage),
+							},
+						]);
 						return {
 							errorDetails: {
 								message: errorMessage,
-								level: ChatErrorLevel.Error
+								level: ChatErrorLevel.Error,
 							},
-							details: errorMessage
+							details: errorMessage,
 						};
 					}
 
@@ -722,48 +881,77 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					const toolResponseMessages: OpenAIMessage[] = [];
 					for (const callPart of toolCallParts) {
 						if (token.isCancellationRequested) {
-							return { details: 'cancelled' };
+							return { details: "cancelled" };
 						}
 
 						const toolName = callPart.toolCall!.name;
 						const toolId = nameToToolId.get(toolName);
 						if (!toolId) {
-							this.logService.warn(`[chatgpt] model requested unknown tool name ${toolName}`);
+							this.logService.warn(
+								`[chatgpt] model requested unknown tool name ${toolName}`,
+							);
 							toolResponseMessages.push({
-								role: 'tool',
-								content: JSON.stringify({ error: localize('chatgpt.unknownToolCall', "ChatGPT requested unknown tool {0}.", toolName) }),
-								tool_call_id: callPart.toolCall!.id
+								role: "tool",
+								content: JSON.stringify({
+									error: localize(
+										"chatgpt.unknownToolCall",
+										"ChatGPT requested unknown tool {0}.",
+										toolName,
+									),
+								}),
+								tool_call_id: callPart.toolCall!.id,
 							});
 							continue;
 						}
 
 						const parameters = callPart.toolCall!.args ?? {};
 						const callId = callPart.toolCall!.id;
-						const invocation = this.createToolInvocation(callId, toolId, parameters, request);
-						this.logService.debug(`[chatgpt] invoking tool ${toolId} (${toolName}) with params keys: ${Object.keys(parameters).join(', ')}`);
+						const invocation = this.createToolInvocation(
+							callId,
+							toolId,
+							parameters,
+							request,
+						);
+						this.logService.debug(
+							`[chatgpt] invoking tool ${toolId} (${toolName}) with params keys: ${Object.keys(parameters).join(", ")}`,
+						);
 
 						try {
-							const result = await this.languageModelToolsService.invokeTool(invocation, this.fallbackCountTokens, token);
-							this.logService.debug(`[chatgpt] tool ${toolId} completed successfully`);
+							const result = await this.languageModelToolsService.invokeTool(
+								invocation,
+								this.fallbackCountTokens,
+								token,
+							);
+							this.logService.debug(
+								`[chatgpt] tool ${toolId} completed successfully`,
+							);
 							const toolResult = this.createToolResponse(result);
 							toolResponseMessages.push({
-								role: 'tool',
+								role: "tool",
 								content: toolResult,
-								tool_call_id: callId
+								tool_call_id: callId,
 							});
 						} catch (error) {
-							const message = error instanceof Error ? error.message : String(error);
-							this.logService.warn(`[chatgpt] tool ${toolId} failed: ${message}`);
+							const message =
+								error instanceof Error ? error.message : String(error);
+							this.logService.warn(
+								`[chatgpt] tool ${toolId} failed: ${message}`,
+							);
 							toolResponseMessages.push({
-								role: 'tool',
+								role: "tool",
 								content: JSON.stringify({ error: message }),
-								tool_call_id: callId
+								tool_call_id: callId,
 							});
 						}
 					}
 
 					if (toolResponseMessages.length === 0) {
-						throw new Error(localize('chatgpt.noToolResponses', "ChatGPT requested tool calls but no responses were produced."));
+						throw new Error(
+							localize(
+								"chatgpt.noToolResponses",
+								"ChatGPT requested tool calls but no responses were produced.",
+							),
+						);
 					}
 
 					// Add tool responses to messages
@@ -773,63 +961,197 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				}
 
 				// No tool calls, return the response
-				const responseText = this.extractTextFromParts(responseParts) || localize('chatgpt.emptyTextResponse', "ChatGPT did not return any text.");
+				const responseText =
+					this.extractTextFromParts(responseParts) ||
+					localize(
+						"chatgpt.emptyTextResponse",
+						"ChatGPT did not return any text.",
+					);
 
-				await this.tryAutoApplyEdits(responseText, contextEntries, progress, token);
+				await this.tryAutoApplyEdits(
+					responseText,
+					contextEntries,
+					progress,
+					token,
+				);
 
 				if (!streamedText) {
 					const markdown = new MarkdownString(responseText);
 					markdown.supportThemeIcons = true;
-					progress([{ kind: 'markdownContent', content: markdown }]);
+					progress([{ kind: "markdownContent", content: markdown }]);
 				}
 
 				return {
-					details: 'chatgpt-response',
-					metadata: { model: modelToUse }
+					details: "chatgpt-response",
+					metadata: { model: modelToUse },
 				};
 			}
 
-			throw new Error(localize('chatgpt.maxToolIterations', "Reached the maximum number of tool call iterations without producing an answer."));
+			throw new Error(
+				localize(
+					"chatgpt.maxToolIterations",
+					"Reached the maximum number of tool call iterations without producing an answer.",
+				),
+			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			this.logService.error(`[chatgpt] ${message}`);
 
-			const markdown = new MarkdownString(localize('chatgpt.error', "ChatGPT request failed: {0}", message));
+			const markdown = new MarkdownString(
+				localize("chatgpt.error", "ChatGPT request failed: {0}", message),
+			);
 			markdown.isTrusted = true;
-			progress([{ kind: 'markdownContent', content: markdown }]);
+			progress([{ kind: "markdownContent", content: markdown }]);
 
 			return {
 				errorDetails: {
 					message,
-					level: ChatErrorLevel.Error
+					level: ChatErrorLevel.Error,
 				},
-				details: message
+				details: message,
 			};
 		} finally {
 			this.requestTools.delete(request.requestId);
-			this.languageModelToolsService.cancelToolCallsForRequest(request.requestId);
+			this.languageModelToolsService.cancelToolCallsForRequest(
+				request.requestId,
+			);
+		}
+	}
+
+	private async invokeViaLanguageModelsService(
+		request: IChatAgentRequest,
+		progress: (parts: IChatProgress[]) => void,
+		history: IChatAgentHistoryEntry[],
+		token: CancellationToken,
+		modelId: string,
+	): Promise<IChatAgentResult> {
+		this.logService.info(
+			`[chatgpt] Delegating request to language models service for model ${modelId} (cross-vendor)`,
+		);
+
+		const messages: IChatMessage[] = [];
+
+		// Add context prompt if available
+		const contextPrompt = await this.buildContextPrompt(request, token);
+		if (contextPrompt) {
+			messages.push({
+				role: ChatMessageRole.User,
+				content: [{ type: "text", value: contextPrompt.prompt }],
+			});
+		}
+
+		// Convert history
+		for (const entry of history) {
+			if (!entry) {
+				continue;
+			}
+			const userMessage = entry.request?.message;
+			if (userMessage) {
+				messages.push({
+					role: ChatMessageRole.User,
+					content: [{ type: "text", value: userMessage }],
+				});
+			}
+			const assistantText = entry.response
+				?.map((part) => this.extractResponseContent(part))
+				.filter(
+					(value): value is string =>
+						typeof value === "string" && value.length > 0,
+				)
+				.join("\n");
+			if (assistantText) {
+				messages.push({
+					role: ChatMessageRole.Assistant,
+					content: [{ type: "text", value: assistantText }],
+				});
+			}
+		}
+
+		// Add current request
+		messages.push({
+			role: ChatMessageRole.User,
+			content: [{ type: "text", value: request.message }],
+		});
+
+		try {
+			const response = await this.languageModelsService.sendChatRequest(
+				modelId,
+				new ExtensionIdentifier("core.chatgpt"),
+				messages,
+				{},
+				token,
+			);
+
+			for await (const chunk of response.stream) {
+				if (token.isCancellationRequested) {
+					break;
+				}
+				const parts = Array.isArray(chunk) ? chunk : [chunk];
+				for (const part of parts) {
+					if (part.type === "text") {
+						const markdownChunk = new MarkdownString(part.value);
+						markdownChunk.supportThemeIcons = true;
+						progress([{ kind: "markdownContent", content: markdownChunk }]);
+					}
+				}
+			}
+
+			await response.result;
+
+			return {
+				details: "chatgpt-response",
+				metadata: { model: modelId, delegated: true },
+			};
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.logService.error(
+				`[chatgpt] Error in delegated request for model ${modelId}:`,
+				error,
+			);
+			const markdown = new MarkdownString(
+				localize("chatgpt.error", "ChatGPT request failed: {0}", message),
+			);
+			markdown.isTrusted = true;
+			progress([{ kind: "markdownContent", content: markdown }]);
+			return {
+				errorDetails: {
+					message,
+					level: ChatErrorLevel.Error,
+				},
+				details: message,
+			};
 		}
 	}
 
 	setRequestTools(requestId: string, tools: UserSelectedTools): void {
 		if (!tools) {
-			this.logService.debug(`[chatgpt] clearing tool selection for request ${requestId}`);
+			this.logService.debug(
+				`[chatgpt] clearing tool selection for request ${requestId}`,
+			);
 			this.requestTools.delete(requestId);
 			return;
 		}
-		this.logService.debug(`[chatgpt] received tool selection for request ${requestId}: ${JSON.stringify(tools)}`);
+		this.logService.debug(
+			`[chatgpt] received tool selection for request ${requestId}: ${JSON.stringify(tools)}`,
+		);
 		this.requestTools.set(requestId, tools);
 	}
 
 	private getAllowedToolData(requestId: string): IToolData[] {
 		const selected = this.requestTools.get(requestId);
 		if (!selected) {
-			this.logService.debug(`[chatgpt] no tools selected for request ${requestId}`);
+			this.logService.debug(
+				`[chatgpt] no tools selected for request ${requestId}`,
+			);
 			return [];
 		}
-		const allowedIds = Object.keys(selected).filter(id => selected[id] === true);
+		const allowedIds = Object.keys(selected).filter(
+			(id) => selected[id] === true,
+		);
 		if (!allowedIds.length) {
-			this.logService.debug(`[chatgpt] tool selection for request ${requestId} contained no enabled entries`);
+			this.logService.debug(
+				`[chatgpt] tool selection for request ${requestId} contained no enabled entries`,
+			);
 			return [];
 		}
 		const allowedSet = new Set(allowedIds);
@@ -839,11 +1161,16 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				allowedTools.push(tool);
 			}
 		}
-		this.logService.debug(`[chatgpt] resolved ${allowedTools.length} tools for request ${requestId}: ${allowedTools.map(tool => tool.id).join(', ')}`);
+		this.logService.debug(
+			`[chatgpt] resolved ${allowedTools.length} tools for request ${requestId}: ${allowedTools.map((tool) => tool.id).join(", ")}`,
+		);
 		return allowedTools;
 	}
 
-	private buildChatGPTToolDeclarations(requestId: string): { tools: OpenAIFunction[]; nameToToolId: Map<string, string> } {
+	private buildChatGPTToolDeclarations(requestId: string): {
+		tools: OpenAIFunction[];
+		nameToToolId: Map<string, string>;
+	} {
 		const allowedTools = this.getAllowedToolData(requestId);
 		if (!allowedTools.length) {
 			return { tools: [], nameToToolId: new Map() };
@@ -870,31 +1197,37 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				descriptionParts.push(tool.userDescription);
 			}
 
-			const description = descriptionParts.length ? descriptionParts.join(' ') : undefined;
-			const parameters = tool.inputSchema ?? { type: 'object', properties: {} };
+			const description = descriptionParts.length
+				? descriptionParts.join(" ")
+				: undefined;
+			const parameters = tool.inputSchema ?? { type: "object", properties: {} };
 
 			functions.push({
-				type: 'function',
+				type: "function",
 				function: {
 					name: functionName,
 					description,
-					parameters
-				}
+					parameters,
+				},
 			});
 		}
 
 		return {
 			tools: functions,
-			nameToToolId
+			nameToToolId,
 		};
 	}
 
-	private sanitizeToolName(tool: IToolData, index: number, usedNames: Set<string>): string {
+	private sanitizeToolName(
+		tool: IToolData,
+		index: number,
+		usedNames: Set<string>,
+	): string {
 		const rawBase = tool.toolReferenceName ?? tool.id;
 		let base = rawBase
-			.replace(/[^a-zA-Z0-9_]/g, '_')
-			.replace(/_{2,}/g, '_')
-			.replace(/^_+/, '')
+			.replace(/[^a-zA-Z0-9_]/g, "_")
+			.replace(/_{2,}/g, "_")
+			.replace(/^_+/, "")
 			.slice(0, 64);
 		if (!base || !/^[A-Za-z]/.test(base)) {
 			base = `tool_${index + 1}`;
@@ -914,82 +1247,125 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		return attempt;
 	}
 
-	private extractResponseContent(part: IChatProgressHistoryResponseContent | IChatTaskDto): string | undefined {
+	private extractResponseContent(
+		part: IChatProgressHistoryResponseContent | IChatTaskDto,
+	): string | undefined {
 		switch (part.kind) {
-			case 'markdownContent':
-			case 'progressMessage':
-			case 'warning':
+			case "markdownContent":
+			case "progressMessage":
+			case "warning":
 				return (part.content as MarkdownString).value;
 			default:
 				return undefined;
 		}
 	}
 
-	private async performRequest(messages: OpenAIMessage[], tools: OpenAIFunction[], token: CancellationToken, model: string): Promise<ChatGPTStreamingResponse> {
-		const toolNames = tools.map(f => f.function.name);
-		this.logService.debug(`[chatgpt] invoking model ${model} with ${messages.length} messages and tools: ${toolNames.join(', ') || 'none'}`);
-		const response = await sendChatGPTRequest(this.requestService, this.apiKey, model, messages, token, tools.length > 0 ? { tools } : undefined);
-		response.result.then(result => {
-			this.logService.debug(`[chatgpt] model returned parts: ${JSON.stringify(result.parts.map(part => part.toolCall ? { toolCall: { name: part.toolCall.name, argsKeys: Object.keys(part.toolCall.args ?? {}) } } : { text: part.text ?? '' }))}`);
-		}, error => {
-			this.logService.warn(`[chatgpt] streaming request failed: ${error instanceof Error ? error.message : String(error)}`);
-		});
+	private async performRequest(
+		messages: OpenAIMessage[],
+		tools: OpenAIFunction[],
+		token: CancellationToken,
+		model: string,
+	): Promise<ChatGPTStreamingResponse> {
+		const toolNames = tools.map((f) => f.function.name);
+		this.logService.debug(
+			`[chatgpt] invoking model ${model} with ${messages.length} messages and tools: ${toolNames.join(", ") || "none"}`,
+		);
+		const response = await sendChatGPTRequest(
+			this.requestService,
+			this.apiKey,
+			model,
+			messages,
+			token,
+			tools.length > 0 ? { tools } : undefined,
+		);
+		response.result.then(
+			(result) => {
+				this.logService.debug(
+					`[chatgpt] model returned parts: ${JSON.stringify(result.parts.map((part) => (part.toolCall ? { toolCall: { name: part.toolCall.name, argsKeys: Object.keys(part.toolCall.args ?? {}) } } : { text: part.text ?? "" })))}`,
+				);
+			},
+			(error) => {
+				this.logService.warn(
+					`[chatgpt] streaming request failed: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			},
+		);
 		return response;
 	}
 
-	private extractTextFromParts(parts: ChatGPTContentPart[], trim = true): string {
+	private extractTextFromParts(
+		parts: ChatGPTContentPart[],
+		trim = true,
+	): string {
 		const segments: string[] = [];
 		for (const part of parts) {
 			if (part.text !== undefined) {
 				segments.push(part.text);
 			}
 		}
-		const text = segments.join('');
+		const text = segments.join("");
 		return trim ? text.trim() : text;
 	}
 
-	private createToolInvocation(callId: string, toolId: string, parameters: Record<string, unknown>, request: IChatAgentRequest): IToolInvocation {
+	private createToolInvocation(
+		callId: string,
+		toolId: string,
+		parameters: Record<string, unknown>,
+		request: IChatAgentRequest,
+	): IToolInvocation {
 		return {
 			callId,
 			toolId,
 			parameters,
 			context: { sessionId: request.sessionId },
-			chatRequestId: request.requestId
+			chatRequestId: request.requestId,
 		};
 	}
 
 	private createToolResponse(result?: IToolResult): string {
 		if (!result) {
-			return JSON.stringify({ error: localize('chatgpt.toolNoResult', "Tool call produced no result.") });
+			return JSON.stringify({
+				error: localize(
+					"chatgpt.toolNoResult",
+					"Tool call produced no result.",
+				),
+			});
 		}
 
 		const response: Record<string, unknown> = {};
 		const textOutput = (result.content ?? [])
-			.filter((part): part is IToolResultTextPart => part.kind === 'text')
-			.map(part => part.value)
-			.join('\n')
+			.filter((part): part is IToolResultTextPart => part.kind === "text")
+			.map((part) => part.value)
+			.join("\n")
 			.trim();
 		if (textOutput.length) {
-			response['text'] = textOutput;
+			response["text"] = textOutput;
 		}
 		if (result.toolResultError) {
-			response['error'] = result.toolResultError;
+			response["error"] = result.toolResultError;
 		}
 		if (result.toolMetadata !== undefined) {
-			response['metadata'] = result.toolMetadata;
+			response["metadata"] = result.toolMetadata;
 		}
 		if (!Object.keys(response).length) {
-			response['text'] = '';
+			response["text"] = "";
 		}
 		return JSON.stringify(response);
 	}
 
-	private async buildMessages(request: IChatAgentRequest, history: IChatAgentHistoryEntry[], token: CancellationToken): Promise<{ messages: OpenAIMessage[]; contextEntries: IContextBlockMetadata[] }> {
+	private async buildMessages(
+		request: IChatAgentRequest,
+		history: IChatAgentHistoryEntry[],
+		token: CancellationToken,
+	): Promise<{
+		messages: OpenAIMessage[];
+		contextEntries: IContextBlockMetadata[];
+	}> {
 		const messages: OpenAIMessage[] = [];
 		const contextPrompt = await this.buildContextPrompt(request, token);
 		const contextEntries = contextPrompt?.entries ?? [];
 		if (contextPrompt) {
-			messages.push({ role: 'user', content: contextPrompt.prompt });
+			messages.push({ role: "user", content: contextPrompt.prompt });
 		}
 
 		for (const entry of history) {
@@ -998,25 +1374,33 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			}
 			const userMessage = entry.request?.message;
 			if (userMessage) {
-				messages.push({ role: 'user', content: userMessage });
+				messages.push({ role: "user", content: userMessage });
 			}
 			const assistantText = entry.response
-				?.map(part => this.extractResponseContent(part))
-				.filter((value): value is string => typeof value === 'string' && value.length > 0)
-				.join('\n');
+				?.map((part) => this.extractResponseContent(part))
+				.filter(
+					(value): value is string =>
+						typeof value === "string" && value.length > 0,
+				)
+				.join("\n");
 			if (assistantText) {
-				messages.push({ role: 'assistant', content: assistantText });
+				messages.push({ role: "assistant", content: assistantText });
 			}
 		}
 
-		messages.push({ role: 'user', content: request.message });
+		messages.push({ role: "user", content: request.message });
 
 		return { messages, contextEntries };
 	}
 
-	private async buildContextPrompt(request: IChatAgentRequest, token: CancellationToken): Promise<IContextPromptResult | undefined> {
+	private async buildContextPrompt(
+		request: IChatAgentRequest,
+		token: CancellationToken,
+	): Promise<IContextPromptResult | undefined> {
 		const variables = request.variables?.variables ?? [];
-		this.logService.debug(`[chatgpt] preparing context: ${variables.length} entries`);
+		this.logService.debug(
+			`[chatgpt] preparing context: ${variables.length} entries`,
+		);
 		if (!variables.length) {
 			return undefined;
 		}
@@ -1037,8 +1421,10 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			if (isPasteVariableEntry(entry)) {
 				const snippet = this.truncate(entry.code);
 				if (snippet.trim().length) {
-					const lang = entry.language?.toLowerCase() ?? '';
-					blocks.push(this.formatCodeBlock(entry.name || 'pasted-snippet', snippet, lang));
+					const lang = entry.language?.toLowerCase() ?? "";
+					blocks.push(
+						this.formatCodeBlock(entry.name || "pasted-snippet", snippet, lang),
+					);
 				}
 				continue;
 			}
@@ -1062,16 +1448,21 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			return undefined;
 		}
 
-		this.logService.debug(`[chatgpt] including ${blocks.length} context blocks`);
+		this.logService.debug(
+			`[chatgpt] including ${blocks.length} context blocks`,
+		);
 		const prompt = [
 			'You are an expert coding assistant embedded in the IDE. The code blocks below are the exact context the user means -- even if they refer to them with vague terms like "this", "the file", or "the function".',
-			'Ground every response in those blocks: explain behaviour, data structures, and error cases using only the provided code. Mention the relevant file or block when helpful, and if the answer cannot be derived from this context, say so explicitly before offering any speculation.',
-			...blocks
-		].join('\n\n');
+			"Ground every response in those blocks: explain behaviour, data structures, and error cases using only the provided code. Mention the relevant file or block when helpful, and if the answer cannot be derived from this context, say so explicitly before offering any speculation.",
+			...blocks,
+		].join("\n\n");
 		return { prompt, entries: metadata };
 	}
 
-	private async loadEntryContent(entry: IChatRequestVariableEntry, token: CancellationToken): Promise<{ block: string; metadata?: IContextBlockMetadata } | undefined> {
+	private async loadEntryContent(
+		entry: IChatRequestVariableEntry,
+		token: CancellationToken,
+	): Promise<{ block: string; metadata?: IContextBlockMetadata } | undefined> {
 		const location = this.getLocation(entry);
 		const uri = location?.uri ?? this.getUri(entry);
 		if (!uri) {
@@ -1091,7 +1482,7 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			if (!text.trim().length) {
 				return undefined;
 			}
-			const language = model.getLanguageId() ?? '';
+			const language = model.getLanguageId() ?? "";
 			const label = this.getContextLabel(uri, range, entry);
 			return {
 				block: this.formatCodeBlock(label, text, language),
@@ -1100,14 +1491,16 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					uri,
 					range,
 					language,
-					content: text
-				}
+					content: text,
+				},
 			};
 		} catch (error) {
 			if (error instanceof CancellationError) {
 				throw error;
 			}
-			this.logService.warn(`[chatgpt] Failed to load context for ${entry.id}: ${error instanceof Error ? error.message : String(error)}`);
+			this.logService.warn(
+				`[chatgpt] Failed to load context for ${entry.id}: ${error instanceof Error ? error.message : String(error)}`,
+			);
 			return undefined;
 		} finally {
 			reference?.dispose();
@@ -1121,19 +1514,23 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				return URI.isUri(direct) ? direct : URI.revive(direct as UriComponents);
 			}
 			const rawValue = (entry as { value?: unknown }).value;
-			if (rawValue && typeof rawValue === 'object') {
+			if (rawValue && typeof rawValue === "object") {
 				const valueRecord = rawValue as Record<string, unknown>;
-				const schemeValue = valueRecord['scheme'];
-				if (typeof schemeValue === 'string') {
+				const schemeValue = valueRecord["scheme"];
+				if (typeof schemeValue === "string") {
 					return URI.revive(valueRecord as unknown as UriComponents);
 				}
-				const candidate = valueRecord['uri'];
+				const candidate = valueRecord["uri"];
 				if (candidate) {
-					return URI.isUri(candidate as unknown) ? candidate as URI : URI.revive(candidate as UriComponents);
+					return URI.isUri(candidate as unknown)
+						? (candidate as URI)
+						: URI.revive(candidate as UriComponents);
 				}
 			}
 		} catch (error) {
-			this.logService.warn(`[chatgpt] Unable to resolve URI for ${entry.id}: ${error instanceof Error ? error.message : String(error)}`);
+			this.logService.warn(
+				`[chatgpt] Unable to resolve URI for ${entry.id}: ${error instanceof Error ? error.message : String(error)}`,
+			);
 		}
 		return undefined;
 	}
@@ -1142,36 +1539,51 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		const value = (entry as { value?: unknown }).value;
 		if (value && isLocation(value)) {
 			const loc = value as Location;
-			const revivedUri = URI.isUri(loc.uri) ? loc.uri : URI.revive(loc.uri as UriComponents);
+			const revivedUri = URI.isUri(loc.uri)
+				? loc.uri
+				: URI.revive(loc.uri as UriComponents);
 			return {
 				uri: revivedUri,
-				range: Range.lift(loc.range)
+				range: Range.lift(loc.range),
 			};
 		}
-		if (value && typeof value === 'object') {
+		if (value && typeof value === "object") {
 			const recordValue = value as Record<string, unknown>;
-			const candidateUri = recordValue['uri'];
-			const candidateRange = recordValue['range'];
+			const candidateUri = recordValue["uri"];
+			const candidateRange = recordValue["range"];
 			if (candidateUri && candidateRange) {
-				const revivedUri = URI.isUri(candidateUri as unknown) ? candidateUri as URI : URI.revive(candidateUri as UriComponents);
+				const revivedUri = URI.isUri(candidateUri as unknown)
+					? (candidateUri as URI)
+					: URI.revive(candidateUri as UriComponents);
 				return {
 					uri: revivedUri,
-					range: Range.lift(candidateRange as IRange)
+					range: Range.lift(candidateRange as IRange),
 				};
 			}
 		}
 		return undefined;
 	}
 
-	private getContextLabel(uri: URI, range: Range | undefined, entry: IChatRequestVariableEntry): string {
+	private getContextLabel(
+		uri: URI,
+		range: Range | undefined,
+		entry: IChatRequestVariableEntry,
+	): string {
 		const fileName = basename(uri);
-		const locationText = range ? `${range.startLineNumber}-${range.endLineNumber}` : undefined;
-		const qualifier = entry.name && entry.name !== fileName ? entry.name : undefined;
-		return [fileName, locationText, qualifier].filter(Boolean).join(' ');
+		const locationText = range
+			? `${range.startLineNumber}-${range.endLineNumber}`
+			: undefined;
+		const qualifier =
+			entry.name && entry.name !== fileName ? entry.name : undefined;
+		return [fileName, locationText, qualifier].filter(Boolean).join(" ");
 	}
 
-	private formatCodeBlock(label: string, content: string, language: string): string {
-		const lang = language || '';
+	private formatCodeBlock(
+		label: string,
+		content: string,
+		language: string,
+	): string {
+		const lang = language || "";
 		return `${label}\n\n\`\`\`${lang}\n${content}\n\`\`\``;
 	}
 
@@ -1187,18 +1599,26 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		const regex = /```([^\n]*)\n([\s\S]*?)```/g;
 		let match: RegExpExecArray | null;
 		while ((match = regex.exec(markdown)) !== null) {
-			const language = match[1]?.trim() ?? '';
-			const content = match[2] ?? '';
+			const language = match[1]?.trim() ?? "";
+			const content = match[2] ?? "";
 			blocks.push({ language, content });
 		}
 		return blocks;
 	}
 
-	private findMatchingCodeBlock(entry: IContextBlockMetadata, blocks: IParsedCodeBlock[], used: Set<number>): { block: IParsedCodeBlock; index: number } | undefined {
+	private findMatchingCodeBlock(
+		entry: IContextBlockMetadata,
+		blocks: IParsedCodeBlock[],
+		used: Set<number>,
+	): { block: IParsedCodeBlock; index: number } | undefined {
 		let bestScore = 0;
 		let bestIndex = -1;
 
-		const anchor = entry.content.split('\n').map(line => line.trim()).find(line => line.length > 0) ?? '';
+		const anchor =
+			entry.content
+				.split("\n")
+				.map((line) => line.trim())
+				.find((line) => line.length > 0) ?? "";
 
 		for (let i = 0; i < blocks.length; i++) {
 			if (used.has(i)) {
@@ -1210,13 +1630,17 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				continue;
 			}
 			let score = 0;
-			if (!entry.language || !candidate.language || entry.language === candidate.language) {
+			if (
+				!entry.language ||
+				!candidate.language ||
+				entry.language === candidate.language
+			) {
 				score += 2;
 			}
 			if (anchor && candidateContent.includes(anchor)) {
 				score += 5;
 			}
-			const entryFirstLine = entry.content.split('\n')[0]?.trim() ?? '';
+			const entryFirstLine = entry.content.split("\n")[0]?.trim() ?? "";
 			if (entryFirstLine && candidateContent.startsWith(entryFirstLine)) {
 				score += 3;
 			}
@@ -1238,7 +1662,12 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		return { block: blocks[bestIndex], index: bestIndex };
 	}
 
-	private async tryAutoApplyEdits(responseText: string, contextEntries: IContextBlockMetadata[], progress: (parts: IChatProgress[]) => void, token: CancellationToken): Promise<void> {
+	private async tryAutoApplyEdits(
+		responseText: string,
+		contextEntries: IContextBlockMetadata[],
+		progress: (parts: IChatProgress[]) => void,
+		token: CancellationToken,
+	): Promise<void> {
 		if (!contextEntries.length || token.isCancellationRequested) {
 			return;
 		}
@@ -1272,25 +1701,41 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					continue;
 				}
 
-				const reference = await this.textModelService.createModelReference(entry.uri);
+				const reference = await this.textModelService.createModelReference(
+					entry.uri,
+				);
 				try {
 					const model = reference.object.textEditorModel;
 					const editRange = entry.range ?? model.getFullModelRange();
 					const edit: TextEdit = { range: editRange, text: newTextRaw };
-					progress([{ kind: 'textEdit', uri: entry.uri, edits: [edit], done: false }]);
-					progress([{ kind: 'textEdit', uri: entry.uri, edits: [], done: true }]);
+					progress([
+						{ kind: "textEdit", uri: entry.uri, edits: [edit], done: false },
+					]);
+					progress([
+						{ kind: "textEdit", uri: entry.uri, edits: [], done: true },
+					]);
 				} finally {
 					reference.dispose();
 				}
 			} catch (error) {
-				this.logService.warn(`[chatgpt] Failed to auto-apply edit for ${entry.label}: ${error instanceof Error ? error.message : String(error)}`);
+				this.logService.warn(
+					`[chatgpt] Failed to auto-apply edit for ${entry.label}: ${error instanceof Error ? error.message : String(error)}`,
+				);
 			}
 		}
 	}
 }
 
-class ChatGPTAgentContribution extends Disposable implements IWorkbenchContribution {
-	static readonly ID = 'workbench.contrib.chatGPTAgent';
+class ChatGPTAgentContribution
+	extends Disposable
+	implements IWorkbenchContribution
+{
+	static readonly ID = "workbench.contrib.chatGPTAgent";
+
+	// Log when class is loaded
+	static {
+		console.log("[chatgpt] ChatGPTAgentContribution class definition loaded");
+	}
 
 	constructor(
 		@IChatAgentService private readonly chatAgentService: IChatAgentService,
@@ -1299,132 +1744,291 @@ class ChatGPTAgentContribution extends Disposable implements IWorkbenchContribut
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@ILanguageModelsService languageModelsService: ILanguageModelsService,
 		@ITextModelService textModelService: ITextModelService,
-		@ILanguageModelToolsService languageModelToolsService: ILanguageModelToolsService
+		@ILanguageModelToolsService
+		languageModelToolsService: ILanguageModelToolsService,
 	) {
 		super();
 
+		logService.info(
+			`[chatgpt] ===== ChatGPTAgentContribution constructor START =====`,
+		);
+
 		// Read API key from env (which gets userEnv from preload script)
-		const apiKey = env['CHAT_GPT_API_KEY'];
+		const apiKey = env["CHAT_GPT_API_KEY"];
+		logService.info(
+			`[chatgpt] Environment check: CHAT_GPT_API_KEY=${apiKey ? "present" : "missing"}, env keys available: ${
+				Object.keys(env)
+					.filter((k) => k.includes("GPT") || k.includes("API"))
+					.join(", ") || "none"
+			}`,
+		);
 
 		if (!apiKey) {
-			logService.warn('[chatgpt] No API key configured. Set CHAT_GPT_API_KEY environment variable.');
+			logService.warn(
+				"[chatgpt] No API key configured. Set CHAT_GPT_API_KEY environment variable.",
+			);
+			logService.info(
+				`[chatgpt] ===== ChatGPTAgentContribution constructor END (early return - no API key) =====`,
+			);
 			// Don't register if no API key to avoid "No default agent" errors
 			return;
 		}
 
-		logService.info(`[chatgpt] registering online agent using ChatGPT models`);
+		logService.info(
+			`[chatgpt] API key found: ${apiKey ? `present (${apiKey.length} chars, starts with ${apiKey.substring(0, 7)}...)` : "missing"}`,
+		);
+		logService.info(
+			`[chatgpt] registering online agent using ChatGPT models (${CHATGPT_MODELS.length} models defined)`,
+		);
 
-		const agentId = 'chatgpt.local';
+		const agentId = "chatgpt.local";
 		const registration = this.chatAgentService.registerAgent(agentId, {
 			id: agentId,
-			name: 'chatgpt',
-			fullName: localize('chatgpt.agent.name', "ChatGPT"),
-			description: localize('chatgpt.agent.description', "Use ChatGPT online models."),
+			name: "chatgpt",
+			fullName: localize("chatgpt.agent.name", "ChatGPT"),
+			description: localize(
+				"chatgpt.agent.description",
+				"Use ChatGPT online models.",
+			),
 			isCore: true,
 			isDefault: false,
 			locations: [ChatAgentLocation.Chat, ChatAgentLocation.EditorInline],
 			modes: [ChatModeKind.Agent, ChatModeKind.Ask, ChatModeKind.Edit],
 			slashCommands: [
-				{ name: 'explain', description: localize('chatgpt.command.explain', "Explain the current selection."), when: undefined },
-				{ name: 'review', description: localize('chatgpt.command.review', "Review the shown changes."), when: undefined }
+				{
+					name: "explain",
+					description: localize(
+						"chatgpt.command.explain",
+						"Explain the current selection.",
+					),
+					when: undefined,
+				},
+				{
+					name: "review",
+					description: localize(
+						"chatgpt.command.review",
+						"Review the shown changes.",
+					),
+					when: undefined,
+				},
 			],
 			metadata: {
-				followupPlaceholder: localize('chatgpt.followup.placeholder', "Ask ChatGPT..."),
-				additionalWelcomeMessage: localize('chatgpt.welcome', "ChatGPT is ready.")
+				followupPlaceholder: localize(
+					"chatgpt.followup.placeholder",
+					"Ask ChatGPT...",
+				),
+				additionalWelcomeMessage: localize(
+					"chatgpt.welcome",
+					"ChatGPT is ready.",
+				),
 			},
 			disambiguation: [],
-			extensionId: new ExtensionIdentifier('core.chatgpt'),
-			extensionVersion: '0.0.0',
-			extensionPublisherId: 'core',
-			extensionDisplayName: 'Core'
+			extensionId: new ExtensionIdentifier("core.chatgpt"),
+			extensionVersion: "0.0.0",
+			extensionPublisherId: "core",
+			extensionDisplayName: "Core",
 		});
 		this._register(registration);
 
-		const implementation = new ChatGPTAgentImplementation(this.requestService, apiKey, logService, textModelService, languageModelToolsService);
-		this._register(this.chatAgentService.registerAgentImplementation(agentId, implementation));
+		const implementation = new ChatGPTAgentImplementation(
+			this.requestService,
+			apiKey,
+			logService,
+			textModelService,
+			languageModelToolsService,
+			languageModelsService,
+		);
+		this._register(
+			this.chatAgentService.registerAgentImplementation(
+				agentId,
+				implementation,
+			),
+		);
 
-		const enabledKey = contextKeyService.createKey(ChatContextKeys.enabled.key, true);
-		const panelRegisteredKey = contextKeyService.createKey(ChatContextKeys.panelParticipantRegistered.key, true);
-		const extensionRegisteredKey = contextKeyService.createKey(ChatContextKeys.extensionParticipantRegistered.key, true);
-		this._register(toDisposable(() => {
-			enabledKey.reset();
-			panelRegisteredKey.reset();
-			extensionRegisteredKey.reset();
-		}));
+		const enabledKey = contextKeyService.createKey(
+			ChatContextKeys.enabled.key,
+			true,
+		);
+		const panelRegisteredKey = contextKeyService.createKey(
+			ChatContextKeys.panelParticipantRegistered.key,
+			true,
+		);
+		const extensionRegisteredKey = contextKeyService.createKey(
+			ChatContextKeys.extensionParticipantRegistered.key,
+			true,
+		);
+		this._register(
+			toDisposable(() => {
+				enabledKey.reset();
+				panelRegisteredKey.reset();
+				extensionRegisteredKey.reset();
+			}),
+		);
 
-		const vendor = 'openai';
+		const vendor = "openai";
 		const provider: ILanguageModelChatProvider = {
 			onDidChange: Event.None,
-			async provideLanguageModelChatInfo(): Promise<ILanguageModelChatMetadataAndIdentifier[]> {
-				return CHATGPT_MODELS.map(modelConfig => ({
-					identifier: modelConfig.identifier,
-					metadata: {
-						extension: new ExtensionIdentifier('core.chatgpt'),
-						name: modelConfig.name,
-						id: modelConfig.identifier,
-						vendor,
-						version: '1.0.0',
-						family: 'gpt',
-						detail: modelConfig.description,
-						maxInputTokens: modelConfig.maxInputTokens,
-						maxOutputTokens: modelConfig.maxOutputTokens,
-						modelPickerCategory: { label: 'OpenAI Models', order: 1 },
-						isDefault: modelConfig.isDefault,
-						isUserSelectable: true,
-						capabilities: { agentMode: true, toolCalling: true }
-					}
-				}));
+			async provideLanguageModelChatInfo(
+				options,
+				token,
+			): Promise<ILanguageModelChatMetadataAndIdentifier[]> {
+				logService.info(
+					`[chatgpt] provideLanguageModelChatInfo called: silent=${options.silent}, token cancelled=${token.isCancellationRequested}`,
+				);
+				try {
+					const models = CHATGPT_MODELS.map((modelConfig) => ({
+						identifier: modelConfig.identifier,
+						metadata: {
+							extension: new ExtensionIdentifier("core.chatgpt"),
+							name: modelConfig.name,
+							id: modelConfig.identifier,
+							vendor,
+							version: "1.0.0",
+							family: "gpt",
+							detail: modelConfig.description,
+							maxInputTokens: modelConfig.maxInputTokens,
+							maxOutputTokens: modelConfig.maxOutputTokens,
+							modelPickerCategory: { label: "OpenAI Models", order: 1 },
+							isDefault: modelConfig.isDefault,
+							isUserSelectable: true,
+							capabilities: { agentMode: true, toolCalling: true },
+						},
+					}));
+					logService.info(
+						`[chatgpt] provideLanguageModelChatInfo returning ${models.length} models: ${models.map((m) => m.identifier).join(", ")}`,
+					);
+					return models;
+				} catch (error) {
+					logService.error(
+						`[chatgpt] Error in provideLanguageModelChatInfo:`,
+						error,
+					);
+					throw error;
+				}
 			},
 			async sendChatRequest(modelId, messages, _from, _options, token) {
-				const selectedModelConfig = CHATGPT_MODELS.find(m => m.identifier === modelId);
-				const modelToUse = selectedModelConfig?.id || CHATGPT_MODELS.find(m => m.isDefault)?.id || 'gpt-5-nano-2025-08-07';
-				const response = await sendChatGPTRequest(requestService, apiKey, modelToUse, toChatGPTMessages(messages), token);
-				let sawText = false;
-				let functionCallName: string | undefined;
+				logService.info(
+					`[chatgpt] sendChatRequest called: modelId=${modelId}, messages=${messages.length}, apiKey present=${!!apiKey}, apiKey length=${apiKey?.length || 0}`,
+				);
+				const selectedModelConfig = CHATGPT_MODELS.find(
+					(m) => m.identifier === modelId,
+				);
+				const modelToUse =
+					selectedModelConfig?.id ||
+					CHATGPT_MODELS.find((m) => m.isDefault)?.id ||
+					"gpt-5-nano-2025-08-07";
+				logService.info(
+					`[chatgpt] Resolved model to use: ${modelToUse} (from identifier ${modelId})`,
+				);
+				try {
+					const response = await sendChatGPTRequest(
+						requestService,
+						apiKey,
+						modelToUse,
+						toChatGPTMessages(messages),
+						token,
+					);
+					logService.info(
+						`[chatgpt] sendChatRequest succeeded for model ${modelToUse}`,
+					);
+					let sawText = false;
+					let functionCallName: string | undefined;
 
-				const stream = (async function* (): AsyncIterable<IChatResponsePart | IChatResponsePart[]> {
-					for await (const chunk of response.stream) {
-						if (token.isCancellationRequested) {
-							break;
-						}
-						const chatParts: IChatResponsePart[] = [];
-						for (const part of chunk) {
-							if (part.text !== undefined && part.text.length > 0) {
-								sawText = true;
-								chatParts.push({ type: 'text', value: part.text });
-							} else if (part.toolCall !== undefined) {
-								functionCallName = part.toolCall.name;
+					const stream = (async function* (): AsyncIterable<
+						IChatResponsePart | IChatResponsePart[]
+					> {
+						for await (const chunk of response.stream) {
+							if (token.isCancellationRequested) {
+								break;
+							}
+							const chatParts: IChatResponsePart[] = [];
+							for (const part of chunk) {
+								if (part.text !== undefined && part.text.length > 0) {
+									sawText = true;
+									chatParts.push({ type: "text", value: part.text });
+								} else if (part.toolCall !== undefined) {
+									functionCallName = part.toolCall.name;
+								}
+							}
+							if (chatParts.length === 1) {
+								yield chatParts[0];
+							} else if (chatParts.length > 1) {
+								yield chatParts;
 							}
 						}
-						if (chatParts.length === 1) {
-							yield chatParts[0];
-						} else if (chatParts.length > 1) {
-							yield chatParts;
+						if (
+							!sawText &&
+							functionCallName &&
+							!token.isCancellationRequested
+						) {
+							yield {
+								type: "text",
+								value: localize(
+									"chatgpt.provider.functionCall",
+									"ChatGPT wants to run tool {0}, but tools are only available in agent mode. Retry there or disable tool usage.",
+									functionCallName,
+								),
+							};
 						}
-					}
-					if (!sawText && functionCallName && !token.isCancellationRequested) {
-						yield { type: 'text', value: localize('chatgpt.provider.functionCall', "ChatGPT wants to run tool {0}, but tools are only available in agent mode. Retry there or disable tool usage.", functionCallName) };
-					}
-				})();
+					})();
 
-				return {
-					stream,
-					result: response.result.then((): IChatAgentResult => ({
-						details: 'chatgpt-response',
-						metadata: { model: modelToUse }
-					}))
-				};
+					return {
+						stream,
+						result: response.result
+							.then((): IChatAgentResult => {
+								logService.info(
+									`[chatgpt] Request completed successfully for model ${modelToUse}`,
+								);
+								return {
+									details: "chatgpt-response",
+									metadata: { model: modelToUse },
+								};
+							})
+							.catch((error) => {
+								logService.error(
+									`[chatgpt] Request failed for model ${modelToUse}:`,
+									error,
+								);
+								throw error;
+							}),
+					};
+				} catch (error) {
+					logService.error(
+						`[chatgpt] Error in sendChatRequest for model ${modelToUse}:`,
+						error,
+					);
+					throw error;
+				}
 			},
 			async provideTokenCount(_modelId, message, _token) {
-				if (typeof message === 'string') {
+				if (typeof message === "string") {
 					return message.length;
 				}
 				return reduceMessageParts(message).length;
-			}
+			},
 		};
-		this._register(languageModelsService.registerLanguageModelProvider(vendor, provider));
+		logService.info(
+			`[chatgpt] Registering language model provider for vendor: ${vendor}`,
+		);
+		const registrationDisposable =
+			languageModelsService.registerLanguageModelProvider(vendor, provider);
+		this._register(registrationDisposable);
+		logService.info(
+			`[chatgpt] Language model provider registered successfully for vendor: ${vendor}`,
+		);
+		logService.info(
+			`[chatgpt] ===== ChatGPTAgentContribution constructor END (success) =====`,
+		);
 	}
 }
 
-registerWorkbenchContribution2(ChatGPTAgentContribution.ID, ChatGPTAgentContribution, WorkbenchPhase.AfterRestored);
-
+console.log(
+	"[chatgpt] About to register ChatGPTAgentContribution with ID:",
+	ChatGPTAgentContribution.ID,
+);
+registerWorkbenchContribution2(
+	ChatGPTAgentContribution.ID,
+	ChatGPTAgentContribution,
+	WorkbenchPhase.AfterRestored,
+);
+console.log("[chatgpt] ChatGPTAgentContribution registration call completed");

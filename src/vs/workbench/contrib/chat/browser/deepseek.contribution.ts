@@ -505,7 +505,8 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 		private readonly apiKey: string,
 		private readonly logService: ILogService,
 		private readonly textModelService: ITextModelService,
-		private readonly languageModelToolsService: ILanguageModelToolsService
+		private readonly languageModelToolsService: ILanguageModelToolsService,
+		private readonly languageModelsService: ILanguageModelsService
 	) { }
 
 	private resolveModelFromRequest(userSelectedModelId?: string): string {
@@ -523,6 +524,15 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 
 		if (token.isCancellationRequested) {
 			return { details: 'cancelled' };
+		}
+
+		// Check if user selected a model from a different vendor
+		if (request.userSelectedModelId) {
+			const selectedModelMetadata = this.languageModelsService.lookupLanguageModel(request.userSelectedModelId);
+			if (selectedModelMetadata && selectedModelMetadata.vendor !== 'google') {
+				// Delegate to language models service for cross-vendor model
+				return this.invokeViaLanguageModelsService(request, progress, history, token, request.userSelectedModelId);
+			}
 		}
 
 		// Resolve the model to use from request
@@ -666,6 +676,95 @@ Only call a tool if it is necessary; otherwise respond normally.` }]
 		} finally {
 			this.requestTools.delete(request.requestId);
 			this.languageModelToolsService.cancelToolCallsForRequest(request.requestId);
+		}
+	}
+
+	private async invokeViaLanguageModelsService(request: IChatAgentRequest, progress: (parts: IChatProgress[]) => void, history: IChatAgentHistoryEntry[], token: CancellationToken, modelId: string): Promise<IChatAgentResult> {
+		this.logService.info(`[gemini] Delegating request to language models service for model ${modelId} (cross-vendor)`);
+
+		const messages: IChatMessage[] = [];
+
+		// Add context prompt if available
+		const contextPrompt = await this.buildContextPrompt(request, token);
+		if (contextPrompt) {
+			messages.push({
+				role: ChatMessageRole.User,
+				content: [{ type: 'text', value: contextPrompt.prompt }]
+			});
+		}
+
+		// Convert history
+		for (const entry of history) {
+			if (!entry) {
+				continue;
+			}
+			const userMessage = entry.request?.message;
+			if (userMessage) {
+				messages.push({
+					role: ChatMessageRole.User,
+					content: [{ type: 'text', value: userMessage }]
+				});
+			}
+			const assistantText = entry.response
+				?.map(part => this.extractResponseContent(part))
+				.filter((value): value is string => typeof value === 'string' && value.length > 0)
+				.join('\n');
+			if (assistantText) {
+				messages.push({
+					role: ChatMessageRole.Assistant,
+					content: [{ type: 'text', value: assistantText }]
+				});
+			}
+		}
+
+		// Add current request
+		messages.push({
+			role: ChatMessageRole.User,
+			content: [{ type: 'text', value: request.message }]
+		});
+
+		try {
+			const response = await this.languageModelsService.sendChatRequest(
+				modelId,
+				new ExtensionIdentifier('core.gemini'),
+				messages,
+				{},
+				token
+			);
+
+			for await (const chunk of response.stream) {
+				if (token.isCancellationRequested) {
+					break;
+				}
+				const parts = Array.isArray(chunk) ? chunk : [chunk];
+				for (const part of parts) {
+					if (part.type === 'text') {
+						const markdownChunk = new MarkdownString(part.value);
+						markdownChunk.supportThemeIcons = true;
+						progress([{ kind: 'markdownContent', content: markdownChunk }]);
+					}
+				}
+			}
+
+			await response.result;
+
+			return {
+				details: 'gemini-response',
+				metadata: { model: modelId, delegated: true }
+			};
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.logService.error(`[gemini] Error in delegated request for model ${modelId}:`, error);
+			const markdown = new MarkdownString(localize('gemini.error', "Gemini request failed: {0}", message));
+			markdown.isTrusted = true;
+			progress([{ kind: 'markdownContent', content: markdown }]);
+			return {
+				errorDetails: {
+					message,
+					level: ChatErrorLevel.Error
+				},
+				details: message
+			};
 		}
 	}
 
@@ -1216,7 +1315,7 @@ class DeepSeekAgentContribution extends Disposable implements IWorkbenchContribu
 		});
 		this._register(registration);
 
-		const implementation = new DeepSeekAgentImplementation(this.requestService, apiKey, logService, textModelService, languageModelToolsService);
+		const implementation = new DeepSeekAgentImplementation(this.requestService, apiKey, logService, textModelService, languageModelToolsService, languageModelsService);
 		this._register(this.chatAgentService.registerAgentImplementation(agentId, implementation));
 
 		const enabledKey = contextKeyService.createKey(ChatContextKeys.enabled.key, true);
@@ -1231,7 +1330,7 @@ class DeepSeekAgentContribution extends Disposable implements IWorkbenchContribu
 		const vendor = 'google';
 		const provider: ILanguageModelChatProvider = {
 			onDidChange: Event.None,
-			async provideLanguageModelChatInfo(): Promise<ILanguageModelChatMetadataAndIdentifier[]> {
+			async provideLanguageModelChatInfo(_options, _token): Promise<ILanguageModelChatMetadataAndIdentifier[]> {
 				return GEMINI_MODELS.map(modelConfig => ({
 					identifier: modelConfig.identifier,
 					metadata: {
