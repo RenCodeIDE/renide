@@ -60,6 +60,7 @@ import { SettingsEditor2Input } from '../../../services/preferences/common/prefe
 import { nullRange, Settings2EditorModel } from '../../../services/preferences/common/preferencesModels.js';
 import { IUserDataProfileService } from '../../../services/userDataProfile/common/userDataProfile.js';
 import { IUserDataSyncWorkbenchService } from '../../../services/userDataSync/common/userDataSync.js';
+import { IRenAuthService } from '../../../services/renAuth/common/renAuth.js';
 import { SuggestEnabledInput } from '../../codeEditor/browser/suggestEnabledInput/suggestEnabledInput.js';
 import { ADVANCED_SETTING_TAG, CONTEXT_AI_SETTING_RESULTS_AVAILABLE, CONTEXT_SETTINGS_EDITOR, CONTEXT_SETTINGS_ROW_FOCUS, CONTEXT_SETTINGS_SEARCH_FOCUS, CONTEXT_TOC_ROW_FOCUS, EMBEDDINGS_SEARCH_PROVIDER_NAME, ENABLE_LANGUAGE_FILTER, EXTENSION_FETCH_TIMEOUT_MS, EXTENSION_SETTING_TAG, FEATURE_SETTING_TAG, FILTER_MODEL_SEARCH_PROVIDER_NAME, getExperimentalExtensionToggleData, ID_SETTING_TAG, IPreferencesSearchService, ISearchProvider, LANGUAGE_SETTING_TAG, LLM_RANKED_SEARCH_PROVIDER_NAME, MODIFIED_SETTING_TAG, POLICY_SETTING_TAG, REQUIRE_TRUSTED_WORKSPACE_SETTING_TAG, SETTINGS_EDITOR_COMMAND_CLEAR_SEARCH_RESULTS, SETTINGS_EDITOR_COMMAND_SHOW_AI_RESULTS, SETTINGS_EDITOR_COMMAND_SUGGEST_FILTERS, SETTINGS_EDITOR_COMMAND_TOGGLE_AI_SEARCH, STRING_MATCH_SEARCH_PROVIDER_NAME, TF_IDF_SEARCH_PROVIDER_NAME, WorkbenchSettingsEditorSettings, WORKSPACE_TRUST_SETTING_TAG } from '../common/preferences.js';
 import { settingsHeaderBorder, settingsSashBorder, settingsTextInputBorder } from '../common/settingsEditorColorRegistry.js';
@@ -757,6 +758,9 @@ export class SettingsEditor2 extends EditorPane {
 				this.updateInputAriaLabel();
 			}));
 		}
+
+		// Ren Account Controls
+		this._register(this.instantiationService.createInstance(RenAccountControls, this.window, headerControlsContainer));
 
 		this.controlsElement = DOM.append(this.searchContainer, DOM.$('.search-container-widgets'));
 
@@ -2173,6 +2177,101 @@ class SyncControls extends Disposable {
 			DOM.hide(this.lastSyncedLabel);
 			DOM.show(this.turnOnSyncButton.element);
 		}
+	}
+}
+
+class RenAccountControls extends Disposable {
+	private readonly container: HTMLElement;
+	private readonly signInButton: Button;
+	private readonly profileContainer: HTMLElement;
+
+	constructor(
+		window: CodeWindow,
+		parent: HTMLElement,
+		@ICommandService private readonly commandService: ICommandService,
+		@IRenAuthService private readonly renAuthService: IRenAuthService,
+	) {
+		super();
+
+		this.container = DOM.append(parent, $('.ren-account-controls'));
+
+		// Sign-in button (shown when not authenticated)
+		const signInButtonContainer = DOM.append(this.container, $('.ren-account-signin'));
+		this.signInButton = this._register(new Button(signInButtonContainer, { title: true, ...defaultButtonStyles }));
+		this.signInButton.label = localize('renSignInButton', "Sign In to Ren Account");
+		this._register(this.signInButton.onDidClick(async () => {
+			await this.commandService.executeCommand('ren.auth.login');
+		}));
+
+		// Profile container (shown when authenticated)
+		this.profileContainer = DOM.append(this.container, $('.ren-account-profile'));
+		DOM.hide(this.profileContainer);
+
+		// Initial update
+		this.update();
+
+		// Listen to auth status changes
+		this._register(this.renAuthService.onDidChangeAuthStatus(() => this.update()));
+		this._register(this.renAuthService.onDidChangeUser(() => this.update()));
+	}
+
+	private update(): void {
+		const isAuthenticated = this.renAuthService.isAuthenticated;
+		const user = this.renAuthService.currentUser;
+
+		if (isAuthenticated && user) {
+			DOM.hide(this.signInButton.element.parentElement!);
+			DOM.show(this.profileContainer);
+			this.renderProfile(user);
+		} else {
+			DOM.show(this.signInButton.element.parentElement!);
+			DOM.hide(this.profileContainer);
+		}
+	}
+
+	private renderProfile(user: { id: string; username?: string; email: string; displayName?: string; avatarUrl?: string; createdAt: number }): void {
+		DOM.clearNode(this.profileContainer);
+
+		// Avatar or initials
+		if (user.avatarUrl) {
+			const avatar = DOM.append(this.profileContainer, $('img.ren-account-avatar')) as HTMLImageElement;
+			avatar.src = user.avatarUrl;
+			avatar.alt = user.displayName || user.username || user.email;
+		} else {
+			const initials = this.getInitials(user.displayName || user.username);
+			const avatarInitials = DOM.append(this.profileContainer, $('.ren-account-avatar-initials'));
+			avatarInitials.textContent = initials;
+		}
+
+		// User info
+		const infoContainer = DOM.append(this.profileContainer, $('.ren-account-info'));
+		const displayName = DOM.append(infoContainer, $('.ren-account-display-name'));
+		displayName.textContent = user.displayName || user.username || user.email;
+
+		const email = DOM.append(infoContainer, $('.ren-account-email'));
+		email.textContent = user.email;
+
+		// Sign-out button
+		const signOutButton = this._register(new Button(this.profileContainer, { title: localize('renSignOut', "Sign Out"), ...defaultButtonStyles, secondary: true }));
+		signOutButton.label = localize('renSignOutLabel', "Sign Out");
+		this._register(signOutButton.onDidClick(async () => {
+			await this.commandService.executeCommand('ren.auth.logout');
+		}));
+	}
+
+	private getInitials(name: string | undefined): string {
+		if (!name) {
+			return '??';
+		}
+		const trimmed = name.trim();
+		if (!trimmed) {
+			return '??';
+		}
+		const parts = trimmed.split(/\s+/);
+		if (parts.length >= 2 && parts[0].length > 0 && parts[1].length > 0) {
+			return (parts[0][0] + parts[1][0]).toUpperCase();
+		}
+		return trimmed.substring(0, Math.min(2, trimmed.length)).toUpperCase() || '??';
 	}
 }
 

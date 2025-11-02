@@ -238,6 +238,11 @@ export interface IProductConfiguration {
 	readonly remoteDefaultExtensionsIfInstalledLocally?: string[];
 
 	readonly extensionConfigurationPolicy?: IStringDictionary<IPolicy>;
+
+	readonly renAccount?: {
+		readonly apiBaseUrl: string;
+		readonly webPortalUrl: string;
+	};
 }
 
 export interface ITunnelApplicationConfig {

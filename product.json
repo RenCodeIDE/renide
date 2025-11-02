@@ -3,6 +3,10 @@
 	"nameLong": "Ren",
 	"applicationName": "ren",
 	"dataFolderName": ".vscode-oss",
+	"renAccount": {
+		"apiBaseUrl": "https://ren-ide-server.goyalishaan2005.workers.dev",
+		"webPortalUrl": "https://ren-ide-server.goyalishaan2005.workers.dev"
+	},
 	"win32MutexName": "vscodeoss",
 	"licenseName": "MIT",
 	"licenseUrl": "https://github.com/microsoft/vscode/blob/main/LICENSE.txt",

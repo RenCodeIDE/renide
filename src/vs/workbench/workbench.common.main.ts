@@ -116,6 +116,7 @@ import './services/authentication/browser/authenticationMcpService.js';
 import './services/authentication/browser/dynamicAuthenticationProviderStorageService.js';
 import './services/authentication/browser/authenticationQueryService.js';
 import './services/accounts/common/defaultAccount.js';
+import './services/renAuth/browser/renAuthService.js';
 import '../platform/hover/browser/hoverService.js';
 import './services/assignment/common/assignmentService.js';
 import './services/outline/browser/outlineService.js';
@@ -363,6 +364,9 @@ import './contrib/languageStatus/browser/languageStatus.contribution.js';
 
 // Authentication
 import './contrib/authentication/browser/authentication.contribution.js';
+
+// Ren Auth
+import './contrib/renAuth/browser/renAuth.contribution.js';
 
 // User Data Sync
 import './contrib/userDataSync/browser/userDataSync.contribution.js';

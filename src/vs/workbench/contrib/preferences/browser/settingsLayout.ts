@@ -280,16 +280,21 @@ export const tocData: ITOCEntry<string> = {
 					label: localize('telemetry', "Telemetry"),
 					settings: ['telemetry.*']
 				},
-				{
-					id: 'application/settingsSync',
-					label: localize('settingsSync', "Settings Sync"),
-					settings: ['settingsSync.*']
-				},
-				{
-					id: 'application/experimental',
-					label: localize('experimental', "Experimental"),
-					settings: ['application.experimental.*']
-				},
+			{
+				id: 'application/settingsSync',
+				label: localize('settingsSync', "Settings Sync"),
+				settings: ['settingsSync.*']
+			},
+			{
+				id: 'application/renAccount',
+				label: localize('renAccount', "Ren Account"),
+				settings: [] // Custom section, no settings to match
+			},
+			{
+				id: 'application/experimental',
+				label: localize('experimental', "Experimental"),
+				settings: ['application.experimental.*']
+			},
 				{
 					id: 'application/other',
 					label: localize('other', "Other"),
