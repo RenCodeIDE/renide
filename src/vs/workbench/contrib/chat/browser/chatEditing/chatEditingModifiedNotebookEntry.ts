@@ -10,7 +10,7 @@ import { DisposableStore, IReference, thenRegisterOrDispose } from '../../../../
 import { ResourceMap, ResourceSet } from '../../../../../base/common/map.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { ITransaction, IObservable, observableValue, autorun, transaction, ObservablePromise } from '../../../../../base/common/observable.js';
-import { isEqual } from '../../../../../base/common/resources.js';
+import { isEqual, relativePath } from '../../../../../base/common/resources.js';
 import { assertType } from '../../../../../base/common/types.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { generateUuid } from '../../../../../base/common/uuid.js';
@@ -45,6 +45,8 @@ import { INotebookEditorWorkerService } from '../../../notebook/common/services/
 import { ChatEditKind, IModifiedEntryTelemetryInfo, IModifiedFileEntryEditorIntegration, ISnapshotEntry, ModifiedFileEntryState } from '../../common/chatEditingService.js';
 import { IChatResponseModel } from '../../common/chatModel.js';
 import { IChatService } from '../../common/chatService.js';
+import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
+import { IRenWorkspaceStore } from '../../../renViews/common/renWorkspaceStore.js';
 import { AbstractChatEditingModifiedFileEntry } from './chatEditingModifiedFileEntry.js';
 import { createSnapshot, deserializeSnapshot, getNotebookSnapshotFileURI, restoreSnapshot, SnapshotComparer } from './notebook/chatEditingModifiedNotebookSnapshot.js';
 import { ChatEditingNewNotebookContentEdits } from './notebook/chatEditingNewNotebookContentEdits.js';
@@ -190,8 +192,10 @@ export class ChatEditingModifiedNotebookEntry extends AbstractChatEditingModifie
 		@INotebookLoggingService private readonly loggingService: INotebookLoggingService,
 		@INotebookEditorModelResolverService private readonly notebookResolver: INotebookEditorModelResolverService,
 		@IAiEditTelemetryService aiEditTelemetryService: IAiEditTelemetryService,
+		@IRenWorkspaceStore renWorkspaceStore: IRenWorkspaceStore,
+		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
 	) {
-		super(modifiedResourceRef.object.notebook.uri, telemetryInfo, kind, configurationService, fileConfigService, chatService, fileService, undoRedoService, instantiationService, aiEditTelemetryService);
+		super(modifiedResourceRef.object.notebook.uri, telemetryInfo, kind, configurationService, fileConfigService, chatService, fileService, undoRedoService, instantiationService, aiEditTelemetryService, renWorkspaceStore);
 		this.initialContentComparer = new SnapshotComparer(initialContent);
 		this.modifiedModel = this._register(modifiedResourceRef).object.notebook;
 		this.originalModel = this._register(originalResourceRef).object.notebook;
@@ -422,6 +426,66 @@ export class ChatEditingModifiedNotebookEntry extends AbstractChatEditingModifie
 			this.initializeModelsFromDiff();
 			return;
 		}
+	}
+
+	protected override async _createChangelogEntry(): Promise<void> {
+		// Get cell diff info
+		const cellsDiffInfo = this._cellsDiffInfo.get();
+		if (!cellsDiffInfo || cellsDiffInfo.length === 0) {
+			return; // No changes to record
+		}
+
+		// Count changes
+		let added = 0;
+		let modified = 0;
+		let deleted = 0;
+		for (const cell of cellsDiffInfo) {
+			switch (cell.type) {
+				case 'insert':
+					added++;
+					break;
+				case 'modified':
+					modified++;
+					break;
+				case 'delete':
+					deleted++;
+					break;
+			}
+		}
+
+		// If no actual changes, skip
+		if (added === 0 && modified === 0 && deleted === 0) {
+			return;
+		}
+
+		// Get file path relative to workspace
+		const workspace = this._workspaceContextService.getWorkspace();
+		const workspaceFolder = workspace.folders[0];
+		let filePath: string;
+		if (workspaceFolder) {
+			const relative = relativePath(workspaceFolder.uri, this.originalURI);
+			filePath = relative ?? this.originalURI.fsPath;
+		} else {
+			filePath = this.originalURI.fsPath;
+		}
+
+		// Format a summary diff for notebooks
+		const diffParts: string[] = [];
+		diffParts.push('Notebook changes:');
+		if (added > 0) { diffParts.push(`+${added} cell(s) added`); }
+		if (modified > 0) { diffParts.push(`${modified} cell(s) modified`); }
+		if (deleted > 0) { diffParts.push(`-${deleted} cell(s) deleted`); }
+		const diffString = diffParts.join(', ');
+
+		// Get reason from telemetry info, fallback to default
+		const reason = this._telemetryInfo.editExplanation || 'AI edit applied';
+
+		// Create changelog entry
+		await this._renWorkspaceStore.addChangelogEntry({
+			filePath,
+			diff: diffString,
+			reason
+		});
 	}
 
 	protected override async _doAccept(): Promise<void> {

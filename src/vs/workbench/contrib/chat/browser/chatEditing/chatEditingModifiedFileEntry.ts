@@ -26,6 +26,7 @@ import { ICellEditOperation } from '../../../notebook/common/notebookCommon.js';
 import { ChatEditKind, IModifiedEntryTelemetryInfo, IModifiedFileEntry, IModifiedFileEntryEditorIntegration, ISnapshotEntry, ModifiedFileEntryState } from '../../common/chatEditingService.js';
 import { IChatResponseModel } from '../../common/chatModel.js';
 import { ChatUserAction, IChatService } from '../../common/chatService.js';
+import { IRenWorkspaceStore } from '../../../renViews/common/renWorkspaceStore.js';
 
 class AutoAcceptControl {
 	constructor(
@@ -105,6 +106,7 @@ export abstract class AbstractChatEditingModifiedFileEntry extends Disposable im
 		@IUndoRedoService private readonly _undoRedoService: IUndoRedoService,
 		@IInstantiationService protected readonly _instantiationService: IInstantiationService,
 		@IAiEditTelemetryService private readonly _aiEditTelemetryService: IAiEditTelemetryService,
+		@IRenWorkspaceStore protected readonly _renWorkspaceStore: IRenWorkspaceStore,
 	) {
 		super();
 
@@ -215,6 +217,18 @@ export abstract class AbstractChatEditingModifiedFileEntry extends Disposable im
 			return;
 		}
 
+		// Create changelog entry BEFORE _doAccept() clears the diff
+		// Check both agentId and modeId for reliable detection
+		if (this._telemetryInfo.agentId || this._telemetryInfo.modeId === 'agent') {
+			try {
+				await this._createChangelogEntry();
+			} catch (error) {
+				// Don't fail accept operation if changelog fails
+				console.error('Failed to create changelog entry:', error);
+				// Errors are already logged by the store
+			}
+		}
+
 		await this._doAccept();
 		transaction(tx => {
 			this._stateObs.set(ModifiedFileEntryState.Accepted, tx);
@@ -223,6 +237,8 @@ export abstract class AbstractChatEditingModifiedFileEntry extends Disposable im
 
 		this._notifySessionAction('accepted');
 	}
+
+	protected abstract _createChangelogEntry(): Promise<void>;
 
 	protected abstract _doAccept(): Promise<void>;
 

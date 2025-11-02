@@ -22,6 +22,7 @@ export class MockChatService implements IChatService {
 	editingSessions = [];
 	transferredSessionData: IChatTransferredSessionData | undefined;
 	readonly onDidSubmitRequest: Event<{ chatSessionId: string }> = Event.None;
+	readonly onDidCompleteAgentRequest: Event<{ agentName: string; success: boolean }> = Event.None;
 
 	private sessions = new Map<string, IChatModel>();
 

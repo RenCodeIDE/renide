@@ -94,6 +94,11 @@ export class ChatEditingSession extends Disposable implements IChatEditingSessio
 	 */
 	private readonly _initialFileContents = new ResourceMap<string>();
 
+	/**
+	 * Stores edit explanations from EditTool invocations, keyed by requestId:uri
+	 */
+	private readonly _editExplanations = new Map<string, string>();
+
 	private readonly _baselineCreationLocks = new SequencerByKey</* URI.path */ string>();
 	private readonly _streamingEditLocks = new SequencerByKey</* URI */ string>();
 
@@ -503,7 +508,7 @@ export class ChatEditingSession extends Disposable implements IChatEditingSessio
 	}
 
 	private async _acceptStreamingEditsStart(responseModel: IChatResponseModel, undoStop: string | undefined, resource: URI) {
-		const entry = await this._getOrCreateModifiedFileEntry(resource, NotExistBehavior.Create, this._getTelemetryInfoForModel(responseModel));
+		const entry = await this._getOrCreateModifiedFileEntry(resource, NotExistBehavior.Create, this._getTelemetryInfoForModel(responseModel, resource));
 
 		// Record file baseline if this is the first edit for this file in this request
 		if (!this._timeline.hasFileBaseline(resource, responseModel.requestId)) {
@@ -550,7 +555,7 @@ export class ChatEditingSession extends Disposable implements IChatEditingSessio
 	}
 
 	private async _acceptEdits(resource: URI, textEdits: (TextEdit | ICellEditOperation)[], isLastEdits: boolean, responseModel: IChatResponseModel): Promise<void> {
-		const entry = await this._getOrCreateModifiedFileEntry(resource, NotExistBehavior.Create, this._getTelemetryInfoForModel(responseModel));
+		const entry = await this._getOrCreateModifiedFileEntry(resource, NotExistBehavior.Create, this._getTelemetryInfoForModel(responseModel, resource));
 
 		// Record edit operations in the timeline if there are actual edits
 		if (textEdits.length > 0) {
@@ -560,8 +565,9 @@ export class ChatEditingSession extends Disposable implements IChatEditingSessio
 		await entry.acceptAgentEdits(resource, textEdits, isLastEdits, responseModel);
 	}
 
-	private _getTelemetryInfoForModel(responseModel: IChatResponseModel): IModifiedEntryTelemetryInfo {
+	private _getTelemetryInfoForModel(responseModel: IChatResponseModel, resource?: URI): IModifiedEntryTelemetryInfo {
 		// Make these getters because the response result is not available when the file first starts to be edited
+		const self = this;
 		return new class implements IModifiedEntryTelemetryInfo {
 			get agentId() { return responseModel.agent?.id; }
 			get modelId() { return responseModel.request?.modelId; }
@@ -580,7 +586,23 @@ export class ChatEditingSession extends Disposable implements IChatEditingSessio
 				}
 				return undefined;
 			}
+
+			get editExplanation(): string | undefined {
+				if (resource) {
+					const key = `${responseModel.requestId}:${resource.toString()}`;
+					return self._editExplanations.get(key);
+				}
+				return undefined;
+			}
 		};
+	}
+
+	/**
+	 * Store edit explanation from EditTool invocation
+	 */
+	public storeEditExplanation(requestId: string, resource: URI, explanation: string): void {
+		const key = `${requestId}:${resource.toString()}`;
+		this._editExplanations.set(key, explanation);
 	}
 
 	private async _resolve(requestId: string, undoStop: string | undefined, resource: URI): Promise<void> {

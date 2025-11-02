@@ -30,6 +30,10 @@ import { ICellEditOperation } from '../../../notebook/common/notebookCommon.js';
 import { ChatEditKind, IModifiedEntryTelemetryInfo, IModifiedFileEntry, IModifiedFileEntryEditorIntegration, ISnapshotEntry, ModifiedFileEntryState } from '../../common/chatEditingService.js';
 import { IChatResponseModel } from '../../common/chatModel.js';
 import { IChatService } from '../../common/chatService.js';
+import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
+import { relativePath } from '../../../../../base/common/resources.js';
+import { IDocumentDiff } from '../../../../../editor/common/diff/documentDiffProvider.js';
+import { IRenWorkspaceStore } from '../../../renViews/common/renWorkspaceStore.js';
 import { ChatEditingCodeEditorIntegration } from './chatEditingCodeEditorIntegration.js';
 import { AbstractChatEditingModifiedFileEntry } from './chatEditingModifiedFileEntry.js';
 import { ChatEditingTextModelChangeService } from './chatEditingTextModelChangeService.js';
@@ -93,6 +97,8 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 		@IUndoRedoService undoRedoService: IUndoRedoService,
 		@IInstantiationService instantiationService: IInstantiationService,
 		@IAiEditTelemetryService aiEditTelemetryService: IAiEditTelemetryService,
+		@IRenWorkspaceStore renWorkspaceStore: IRenWorkspaceStore,
+		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
 	) {
 		super(
 			resourceRef.object.textEditorModel.uri,
@@ -105,6 +111,7 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 			undoRedoService,
 			instantiationService,
 			aiEditTelemetryService,
+			renWorkspaceStore,
 		);
 
 		this._docFileEditorModel = this._register(resourceRef).object;
@@ -286,6 +293,108 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 			}
 			this._multiDiffEntryDelegate.collapse(undefined);
 		}
+	}
+
+	protected override async _createChangelogEntry(): Promise<void> {
+		// Get the diff - it should already be computed since we're calling this before _doAccept()
+		// The diff is computed when edits are applied via acceptAgentEdits()
+		const diffInfo = this._textModelChangeService.diffInfo.get();
+		if (!diffInfo || diffInfo.identical) {
+			return; // No changes to record
+		}
+
+		// Get file path relative to workspace
+		const workspace = this._workspaceContextService.getWorkspace();
+		const workspaceFolder = workspace.folders[0];
+		let filePath: string;
+		if (workspaceFolder) {
+			const relative = relativePath(workspaceFolder.uri, this.originalURI);
+			filePath = relative ?? this.originalURI.fsPath;
+		} else {
+			filePath = this.originalURI.fsPath;
+		}
+
+		// Format diff as unified diff string
+		const diffString = this._formatUnifiedDiff(diffInfo);
+
+		// Get reason from telemetry info, fallback to default
+		const reason = this._telemetryInfo.editExplanation || 'AI edit applied';
+
+		// Create changelog entry
+		await this._renWorkspaceStore.addChangelogEntry({
+			filePath,
+			diff: diffString,
+			reason
+		});
+	}
+
+	private _formatUnifiedDiff(diff: IDocumentDiff): string {
+		const lines: string[] = [];
+		const originalLines = this.originalModel.getLinesContent();
+		const modifiedLines = this.modifiedModel.getLinesContent();
+
+		for (const change of diff.changes) {
+			const originalStart = change.original.startLineNumber;
+			const originalEnd = change.original.endLineNumberExclusive;
+			const modifiedStart = change.modified.startLineNumber;
+			const modifiedEnd = change.modified.endLineNumberExclusive;
+
+			const originalLineCount = originalEnd - originalStart;
+			const modifiedLineCount = modifiedEnd - modifiedStart;
+
+			// Unified diff header: @@ -start,count +start,count @@
+			lines.push(`@@ -${originalStart},${originalLineCount} +${modifiedStart},${modifiedLineCount} @@`);
+
+			// Process inner changes if available, otherwise process the entire range
+			if (change.innerChanges && change.innerChanges.length > 0) {
+				// Use inner changes for more granular diff
+				let lastProcessedOriginal = originalStart - 1;
+				let lastProcessedModified = modifiedStart - 1;
+
+				for (const innerChange of change.innerChanges) {
+					// Context before inner change (unchanged lines)
+					const innerOrigStart = innerChange.originalRange.startLineNumber;
+					for (let i = Math.max(originalStart, lastProcessedOriginal + 1); i < innerOrigStart; i++) {
+						if (i > 0 && i <= originalLines.length) {
+							lines.push(' ' + originalLines[i - 1]);
+						}
+					}
+
+					// Deleted lines (original) - Range.endLineNumber is inclusive
+					const origStart = innerChange.originalRange.startLineNumber;
+					const origEnd = innerChange.originalRange.endLineNumber;
+					for (let i = origStart; i <= origEnd && i > 0 && i <= originalLines.length; i++) {
+						lines.push('-' + originalLines[i - 1]);
+					}
+					lastProcessedOriginal = Math.max(lastProcessedOriginal, origEnd);
+
+					// Added lines (modified) - Range.endLineNumber is inclusive
+					const modStart = innerChange.modifiedRange.startLineNumber;
+					const modEnd = innerChange.modifiedRange.endLineNumber;
+					for (let i = modStart; i <= modEnd && i > 0 && i <= modifiedLines.length; i++) {
+						lines.push('+' + modifiedLines[i - 1]);
+					}
+					lastProcessedModified = Math.max(lastProcessedModified, modEnd);
+				}
+
+				// Context after last inner change
+				for (let i = lastProcessedOriginal + 1; i < Math.min(originalEnd, originalLines.length + 1); i++) {
+					if (i > 0 && i <= originalLines.length) {
+						lines.push(' ' + originalLines[i - 1]);
+					}
+				}
+			} else {
+				// No inner changes - show deleted then added
+				for (let i = originalStart; i < originalEnd && i > 0 && i <= originalLines.length; i++) {
+					lines.push('-' + originalLines[i - 1]);
+				}
+				for (let i = modifiedStart; i < modifiedEnd && i > 0 && i <= modifiedLines.length; i++) {
+					lines.push('+' + modifiedLines[i - 1]);
+				}
+			}
+		}
+
+		return lines.join('\n');
 	}
 
 	protected _createEditorIntegration(editor: IEditorPane): IModifiedFileEntryEditorIntegration {

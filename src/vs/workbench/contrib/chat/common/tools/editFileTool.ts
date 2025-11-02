@@ -85,6 +85,12 @@ export class EditTool implements IToolImpl {
 			throw new Error('This tool must be called from within an editing session');
 		}
 
+		// Store the explanation for later retrieval when edits are accepted
+		if (parameters.explanation) {
+			const request = model.getRequests().at(-1)!;
+			editSession.storeEditExplanation(request.id, uri, parameters.explanation);
+		}
+
 		const codeMapper = this.codeMapperService.providers[0];
 		if (!codeMapper) {
 			// Fallback to direct insertion when no code mapper is available
