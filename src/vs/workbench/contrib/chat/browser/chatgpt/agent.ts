@@ -1,0 +1,720 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import { CancellationToken } from '../../../../../base/common/cancellation.js';
+import { MarkdownString } from '../../../../../base/common/htmlContent.js';
+import { localize } from '../../../../../nls.js';
+import { ILogService } from '../../../../../platform/log/common/log.js';
+import { ExtensionIdentifier } from '../../../../../platform/extensions/common/extensions.js';
+import {
+	IChatAgentImplementation,
+	IChatAgentHistoryEntry,
+	IChatAgentRequest,
+	IChatAgentResult,
+	UserSelectedTools,
+} from '../../common/chatAgents.js';
+import { IChatProgressHistoryResponseContent } from '../../common/chatModel.js';
+import {
+	ChatErrorLevel,
+	IChatProgress,
+	IChatTaskDto,
+} from '../../common/chatService.js';
+import {
+	ILanguageModelsService,
+	IChatMessage,
+	ChatMessageRole,
+} from '../../common/languageModels.js';
+import {
+	ILanguageModelToolsService,
+	IToolData,
+	CountTokensCallback,
+	IToolInvocation,
+	IToolResultTextPart,
+} from '../../common/languageModelToolsService.js';
+import { IRequestService } from '../../../../../platform/request/common/request.js';
+import { ISecretStorageService } from '../../../../../platform/secrets/common/secrets.js';
+import { CHATGPT_MODELS } from './models.js';
+import type { OpenAIMessage, OpenAIToolCall, OpenAIFunction, ServerToolResult, ChatGPTStreamingResponse, IContextBlockMetadata } from './types.js';
+import { convertOpenAIMessagesToIDE } from './conversion.js';
+import { validateIDEFormat } from './validation.js';
+import { sendChatGPTRequest } from './request.js';
+import { extractTextFromParts } from './utils.js';
+import { ContextBuilder } from './context.js';
+
+export class ChatGPTAgentImplementation implements IChatAgentImplementation {
+	private readonly requestTools = new Map<string, UserSelectedTools>();
+	private readonly fallbackCountTokens: CountTokensCallback = async (
+		input: string,
+		_token: CancellationToken,
+	) => input.length;
+	private readonly contextBuilder: ContextBuilder;
+
+	constructor(
+		private readonly requestService: IRequestService,
+		private readonly serverAddress: string,
+		private readonly secretStorageService: ISecretStorageService,
+		private readonly logService: ILogService,
+		textModelService: any,
+		private readonly languageModelToolsService: ILanguageModelToolsService,
+		private readonly languageModelsService: ILanguageModelsService,
+	) {
+		this.contextBuilder = new ContextBuilder(textModelService, logService);
+	}
+
+	private async getAccessToken(): Promise<string | undefined> {
+		try {
+			const token = await this.secretStorageService.get('ren.auth.accessToken');
+			if (token) {
+				this.logService.debug(`[chatgpt-server] Access token retrieved successfully (length: ${token.length})`);
+			} else {
+				this.logService.warn(`[chatgpt-server] No access token found in secret storage. User needs to authenticate.`);
+			}
+			return token ?? undefined;
+		} catch (error) {
+			this.logService.error(
+				`[chatgpt-server] Error retrieving access token: ${error instanceof Error ? error.message : String(error)}`,
+			);
+			return undefined;
+		}
+	}
+
+	private resolveModelFromRequest(userSelectedModelId?: string): string {
+		if (userSelectedModelId) {
+			const selectedModelConfig = CHATGPT_MODELS.find(
+				(m) => m.identifier === userSelectedModelId,
+			);
+			if (selectedModelConfig) {
+				return selectedModelConfig.id;
+			}
+		}
+		const defaultModel = CHATGPT_MODELS.find((m) => m.isDefault);
+		return defaultModel?.id || 'gpt-5-nano-2025-08-07';
+	}
+
+	async invoke(
+		request: IChatAgentRequest,
+		progress: (parts: IChatProgress[]) => void,
+		history: IChatAgentHistoryEntry[],
+		token: CancellationToken,
+	): Promise<IChatAgentResult> {
+		if (token.isCancellationRequested) {
+			return { details: 'cancelled' };
+		}
+
+		if (request.userSelectedModelId) {
+			const selectedModelMetadata =
+				this.languageModelsService.lookupLanguageModel(
+					request.userSelectedModelId,
+				);
+			if (selectedModelMetadata && selectedModelMetadata.vendor !== 'openai') {
+				return this.invokeViaLanguageModelsService(
+					request,
+					progress,
+					history,
+					token,
+					request.userSelectedModelId,
+				);
+			}
+		}
+
+		const modelToUse = this.resolveModelFromRequest(request.userSelectedModelId);
+
+		if (request.userSelectedTools) {
+			this.logService.debug(
+				`[chatgpt] reading tools from request object for request ${request.requestId}: ${JSON.stringify(request.userSelectedTools)}`,
+			);
+			this.requestTools.set(request.requestId, request.userSelectedTools);
+		}
+
+		const { messages, contextEntries } = await this.buildMessages(request, history, token);
+		const { tools: toolConfigs, nameToToolId } = this.buildChatGPTToolDeclarations(request.requestId);
+
+		const contextPrompt = await this.contextBuilder.buildContextPrompt(request, token);
+		const contextString = contextPrompt?.prompt;
+
+		if (toolConfigs.length > 0) {
+			const toolSummaries = Array.from(nameToToolId.keys())
+				.map((name) => {
+					const toolId = nameToToolId.get(name);
+					const toolsArray = Array.from(this.languageModelToolsService.getTools());
+					const tool = toolsArray.find((t: IToolData) => t.id === toolId);
+					const desc = tool?.modelDescription || tool?.displayName || name;
+					return `- ${name}: ${desc}`;
+				})
+				.join('\n');
+			messages.unshift({
+				role: 'system',
+				content: `You can call the following tools when they would help:\n${toolSummaries}\nOnly call a tool if it is necessary; otherwise respond normally.`,
+			});
+		}
+
+		const maxIterations = 10;
+		let iteration = 0;
+		let toolResults: ServerToolResult[] | undefined = undefined;
+
+		try {
+			while (iteration < maxIterations) {
+				if (token.isCancellationRequested) {
+					return { details: 'cancelled' };
+				}
+
+				this.logService.info(`[chatgpt-server] invoke iteration ${iteration + 1}/${maxIterations}`);
+
+				const streamingResponse = await this.performRequest(
+					messages,
+					toolConfigs,
+					token,
+					modelToUse,
+					contextString,
+					toolResults,
+				);
+				let streamedText = false;
+
+				try {
+					for await (const chunk of streamingResponse.stream) {
+						if (token.isCancellationRequested) {
+							break;
+						}
+						const delta = extractTextFromParts(chunk, false);
+						if (delta.length) {
+							const markdownChunk = new MarkdownString(delta);
+							markdownChunk.supportThemeIcons = true;
+							progress([{ kind: 'markdownContent', content: markdownChunk }]);
+							streamedText = true;
+						}
+					}
+				} catch (error) {
+					if (!token.isCancellationRequested) {
+						throw error;
+					}
+				}
+
+				if (token.isCancellationRequested) {
+					return { details: 'cancelled' };
+				}
+
+				const responseData = await streamingResponse.result;
+				const responseParts = responseData.parts;
+
+				this.logService.info(`[chatgpt-server] Response received: ${responseParts.length} parts total`);
+
+				const textParts = responseParts.filter((part) => part.text !== undefined);
+				const toolCallParts = responseParts.filter((part) => part.toolCall !== undefined);
+
+				this.logService.info(`[chatgpt-server] Filtered tool calls: ${toolCallParts.length} tool call(s) found`);
+
+				if (textParts.length > 0) {
+					const textContent = textParts.map((part) => part.text || '').join('');
+					if (textContent.trim().length) {
+						messages.push({ role: 'assistant', content: textContent });
+					}
+				}
+
+				if (toolCallParts.length > 0) {
+					const toolCalls: OpenAIToolCall[] = toolCallParts.map((part) => ({
+						id: part.toolCall!.id,
+						type: 'function',
+						function: {
+							name: part.toolCall!.name,
+							arguments: JSON.stringify(part.toolCall!.args),
+						},
+					}));
+					messages.push({
+						role: 'assistant',
+						content: null,
+						tool_calls: toolCalls,
+					});
+
+					if (!toolConfigs.length) {
+						const errorMessage = localize(
+							'chatgpt.toolsNotAuthorized',
+							'ChatGPT requested tool calls but none were authorized for this request.',
+						);
+						progress([{ kind: 'markdownContent', content: new MarkdownString(errorMessage) }]);
+						return {
+							errorDetails: { message: errorMessage, level: ChatErrorLevel.Error },
+							details: errorMessage,
+						};
+					}
+
+					const toolResultsForNextRequest: ServerToolResult[] = [];
+
+					for (const callPart of toolCallParts) {
+						if (token.isCancellationRequested) {
+							return { details: 'cancelled' };
+						}
+
+						const toolName = callPart.toolCall!.name;
+						const toolId = nameToToolId.get(toolName);
+						if (!toolId) {
+							this.logService.error(
+								`[chatgpt-server] model requested unknown tool name '${toolName}'. Available names: ${Array.from(nameToToolId.keys()).join(', ')}`,
+							);
+							toolResultsForNextRequest.push({
+								toolCallId: callPart.toolCall!.id,
+								content: [{
+									type: 'text',
+									value: localize('chatgpt.unknownToolCall', 'ChatGPT requested unknown tool {0}.', toolName),
+								}],
+							});
+							continue;
+						}
+
+						const parameters = callPart.toolCall!.args ?? {};
+						const callId = callPart.toolCall!.id;
+						const invocation = this.createToolInvocation(callId, toolId, parameters, request);
+
+						try {
+							const result = await this.languageModelToolsService.invokeTool(
+								invocation,
+								this.fallbackCountTokens,
+								token,
+							);
+							const textOutput = (result.content ?? [])
+								.filter((part): part is IToolResultTextPart => part.kind === 'text')
+								.map((part) => part.value)
+								.join('\n');
+							toolResultsForNextRequest.push({
+								toolCallId: callId,
+								content: [{ type: 'text', value: textOutput }],
+							});
+						} catch (error) {
+							const message = error instanceof Error ? error.message : String(error);
+							this.logService.error(`[chatgpt-server] tool ${toolId} failed: ${message}`);
+							toolResultsForNextRequest.push({
+								toolCallId: callId,
+								content: [{ type: 'text', value: message }],
+							});
+						}
+					}
+
+					if (toolResultsForNextRequest.length === 0) {
+						throw new Error(
+							localize('chatgpt.noToolResponses', 'ChatGPT requested tool calls but no responses were produced.'),
+						);
+					}
+
+					toolResults = toolResultsForNextRequest;
+					this.logService.info(`[chatgpt-server] Collected ${toolResults.length} tool results for next request`);
+					iteration++;
+					continue;
+				}
+
+				const responseText =
+					extractTextFromParts(responseParts) ||
+					localize('chatgpt.emptyTextResponse', 'ChatGPT did not return any text.');
+
+				toolResults = undefined;
+
+				await this.contextBuilder.tryAutoApplyEdits(responseText, contextEntries, progress, token);
+
+				if (!streamedText) {
+					const markdown = new MarkdownString(responseText);
+					markdown.supportThemeIcons = true;
+					progress([{ kind: 'markdownContent', content: markdown }]);
+				}
+
+				this.logService.info(`[chatgpt-server] Request completed successfully`);
+
+				return {
+					details: 'chatgpt-response',
+					metadata: { model: modelToUse },
+				};
+			}
+
+			throw new Error(
+				localize('chatgpt.maxToolIterations', 'Reached the maximum number of tool call iterations without producing an answer.'),
+			);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			let userMessage = message;
+
+			if (message.includes('Authentication token is missing') || message.includes('noAuthToken')) {
+				userMessage = localize('chatgpt.authRequired', 'Please sign in to use ChatGPT. Authentication is required.');
+			} else if (message.includes('SERVER_ADDRESS') || message.includes('server address')) {
+				userMessage = localize('chatgpt.serverAddressMissing', 'Server address is not configured. Please set SERVER_ADDRESS environment variable.');
+			} else if (message.includes('401') || message.includes('Unauthorized')) {
+				userMessage = localize('chatgpt.unauthorized', 'Authentication failed. Please sign in again.');
+			} else if (message.includes('403') || message.includes('Forbidden')) {
+				userMessage = localize('chatgpt.forbidden', 'Access forbidden. Please check your permissions.');
+			} else if (message.includes('Network') || message.includes('fetch') || message.includes('ECONNREFUSED')) {
+				userMessage = localize('chatgpt.networkError', 'Network error. Please check your connection and server address.');
+			}
+
+			this.logService.error(`[chatgpt-server] Request failed: ${message}`);
+
+			const markdown = new MarkdownString(localize('chatgpt.error', 'ChatGPT request failed: {0}', userMessage));
+			markdown.isTrusted = true;
+			progress([{ kind: 'markdownContent', content: markdown }]);
+
+			return {
+				errorDetails: { message: userMessage, level: ChatErrorLevel.Error },
+				details: message,
+			};
+		} finally {
+			this.requestTools.delete(request.requestId);
+			this.languageModelToolsService.cancelToolCallsForRequest(request.requestId);
+		}
+	}
+
+	private async invokeViaLanguageModelsService(
+		request: IChatAgentRequest,
+		progress: (parts: IChatProgress[]) => void,
+		history: IChatAgentHistoryEntry[],
+		token: CancellationToken,
+		modelId: string,
+	): Promise<IChatAgentResult> {
+		this.logService.info(`[chatgpt] Delegating request to language models service for model ${modelId} (cross-vendor)`);
+
+		const messages: IChatMessage[] = [];
+
+		const contextPrompt = await this.contextBuilder.buildContextPrompt(request, token);
+		if (contextPrompt) {
+			messages.push({
+				role: ChatMessageRole.User,
+				content: [{ type: 'text', value: contextPrompt.prompt }],
+			});
+		}
+
+		for (const entry of history) {
+			if (!entry) {
+				continue;
+			}
+			const userMessage = entry.request?.message;
+			if (userMessage) {
+				messages.push({
+					role: ChatMessageRole.User,
+					content: [{ type: 'text', value: userMessage }],
+				});
+			}
+			const assistantText = entry.response
+				?.map((part) => this.extractResponseContent(part))
+				.filter((value): value is string => typeof value === 'string' && value.length > 0)
+				.join('\n');
+			if (assistantText) {
+				messages.push({
+					role: ChatMessageRole.Assistant,
+					content: [{ type: 'text', value: assistantText }],
+				});
+			}
+		}
+
+		messages.push({
+			role: ChatMessageRole.User,
+			content: [{ type: 'text', value: request.message }],
+		});
+
+		try {
+			const response = await this.languageModelsService.sendChatRequest(
+				modelId,
+				new ExtensionIdentifier('core.chatgpt'),
+				messages,
+				{},
+				token,
+			);
+
+			for await (const chunk of response.stream) {
+				if (token.isCancellationRequested) {
+					break;
+				}
+				const parts = Array.isArray(chunk) ? chunk : [chunk];
+				for (const part of parts) {
+					if (part.type === 'text') {
+						const markdownChunk = new MarkdownString(part.value);
+						markdownChunk.supportThemeIcons = true;
+						progress([{ kind: 'markdownContent', content: markdownChunk }]);
+					}
+				}
+			}
+
+			await response.result;
+
+			return {
+				details: 'chatgpt-response',
+				metadata: { model: modelId, delegated: true },
+			};
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.logService.error(`[chatgpt] Error in delegated request for model ${modelId}:`, error);
+			const markdown = new MarkdownString(localize('chatgpt.error', 'ChatGPT request failed: {0}', message));
+			markdown.isTrusted = true;
+			progress([{ kind: 'markdownContent', content: markdown }]);
+			return {
+				errorDetails: { message, level: ChatErrorLevel.Error },
+				details: message,
+			};
+		}
+	}
+
+	setRequestTools(requestId: string, tools: UserSelectedTools): void {
+		if (!tools) {
+			this.logService.debug(`[chatgpt] clearing tool selection for request ${requestId}`);
+			this.requestTools.delete(requestId);
+			return;
+		}
+		this.logService.debug(`[chatgpt] received tool selection for request ${requestId}: ${JSON.stringify(tools)}`);
+		this.requestTools.set(requestId, tools);
+	}
+
+	private getAllowedToolData(requestId: string): IToolData[] {
+		const selected = this.requestTools.get(requestId);
+		if (!selected) {
+			const allTools = Array.from(this.languageModelToolsService.getTools());
+			this.logService.debug(`[chatgpt] no tools selected for request ${requestId}, using all ${allTools.length} registered tools`);
+			return allTools;
+		}
+		const allowedIds = Object.keys(selected).filter((id) => selected[id] === true);
+		if (!allowedIds.length) {
+			const allTools = Array.from(this.languageModelToolsService.getTools());
+			this.logService.debug(`[chatgpt] tool selection for request ${requestId} contained no enabled entries, using all ${allTools.length} registered tools`);
+			return allTools;
+		}
+		const allowedSet = new Set(allowedIds);
+		const allowedTools: IToolData[] = [];
+		for (const tool of this.languageModelToolsService.getTools()) {
+			if (allowedSet.has(tool.id)) {
+				allowedTools.push(tool);
+			}
+		}
+		this.logService.debug(
+			`[chatgpt] resolved ${allowedTools.length} tools for request ${requestId}: ${allowedTools.map((tool) => tool.id).join(', ')}`,
+		);
+		return allowedTools;
+	}
+
+	private buildChatGPTToolDeclarations(requestId: string): {
+		tools: OpenAIFunction[];
+		nameToToolId: Map<string, string>;
+	} {
+		const allowedTools = this.getAllowedToolData(requestId);
+		if (!allowedTools.length) {
+			return { tools: [], nameToToolId: new Map() };
+		}
+
+		const usedNames = new Set<string>();
+		const nameToToolId = new Map<string, string>();
+		const functions: OpenAIFunction[] = [];
+
+		for (let index = 0; index < allowedTools.length; index++) {
+			const tool = allowedTools[index];
+			const functionName = this.sanitizeToolName(tool, index, usedNames);
+			usedNames.add(functionName);
+			nameToToolId.set(functionName, tool.id);
+
+			const descriptionParts: string[] = [];
+			if (tool.displayName && tool.displayName !== tool.toolReferenceName) {
+				descriptionParts.push(tool.displayName);
+			}
+			if (tool.modelDescription) {
+				descriptionParts.push(tool.modelDescription);
+			}
+			if (tool.userDescription) {
+				descriptionParts.push(tool.userDescription);
+			}
+
+			const description = descriptionParts.length ? descriptionParts.join(' ') : undefined;
+			const parameters = tool.inputSchema ?? { type: 'object', properties: {} };
+
+			functions.push({
+				type: 'function',
+				function: {
+					name: functionName,
+					description,
+					parameters,
+				},
+			});
+		}
+
+		return { tools: functions, nameToToolId };
+	}
+
+	private sanitizeToolName(tool: IToolData, index: number, usedNames: Set<string>): string {
+		const rawBase = tool.toolReferenceName ?? tool.id;
+		let base = rawBase
+			.replace(/[^a-zA-Z0-9_]/g, '_')
+			.replace(/_{2,}/g, '_')
+			.replace(/^_+/, '')
+			.slice(0, 64);
+		if (!base || !/^[A-Za-z]/.test(base)) {
+			base = `tool_${index + 1}`;
+		}
+
+		let attempt = base;
+		let counter = 1;
+		while (usedNames.has(attempt)) {
+			counter++;
+			const suffix = `_${counter}`;
+			const baseLength = Math.max(1, 64 - suffix.length);
+			attempt = `${base.slice(0, baseLength)}${suffix}`;
+			if (!/^[A-Za-z]/.test(attempt)) {
+				attempt = `tool_${index + counter}`;
+			}
+		}
+		return attempt;
+	}
+
+	private extractResponseContent(part: IChatProgressHistoryResponseContent | IChatTaskDto): string | undefined {
+		switch (part.kind) {
+			case 'markdownContent':
+			case 'progressMessage':
+			case 'warning':
+				return (part.content as MarkdownString).value;
+			default:
+				return undefined;
+		}
+	}
+
+	private async buildMessages(
+		request: IChatAgentRequest,
+		history: IChatAgentHistoryEntry[],
+		token: CancellationToken,
+	): Promise<{
+		messages: OpenAIMessage[];
+		contextEntries: IContextBlockMetadata[];
+	}> {
+		const messages: OpenAIMessage[] = [];
+		const contextPrompt = await this.contextBuilder.buildContextPrompt(request, token);
+		const contextEntries = contextPrompt?.entries ?? [];
+		if (contextPrompt) {
+			messages.push({ role: 'user', content: contextPrompt.prompt });
+		}
+
+		for (const entry of history) {
+			if (!entry) {
+				continue;
+			}
+			const userMessage = entry.request?.message;
+			if (userMessage) {
+				messages.push({ role: 'user', content: userMessage });
+			}
+			const assistantText = entry.response
+				?.map((part) => this.extractResponseContent(part))
+				.filter((value): value is string => typeof value === 'string' && value.length > 0)
+				.join('\n');
+			if (assistantText) {
+				messages.push({ role: 'assistant', content: assistantText });
+			}
+		}
+
+		messages.push({ role: 'user', content: request.message });
+
+		return { messages, contextEntries };
+	}
+
+	private async performRequest(
+		messages: OpenAIMessage[],
+		tools: OpenAIFunction[],
+		token: CancellationToken,
+		model: string,
+		context?: string,
+		toolResults?: ServerToolResult[],
+	): Promise<ChatGPTStreamingResponse> {
+		const toolNames = tools.map((f) => f.function.name);
+		this.logService.info(
+			`[chatgpt-server] performRequest: model=${model}, messages=${messages.length}, tools=${toolNames.join(', ') || 'none'}, hasContext=${!!context}, toolResults=${toolResults?.length || 0}`,
+		);
+
+		const accessToken = await this.getAccessToken();
+		if (!accessToken) {
+			throw new Error(
+				localize('chatgpt.noAuthToken', 'Authentication token is missing. Please sign in to use ChatGPT.'),
+			);
+		}
+
+		const ideMessages = convertOpenAIMessagesToIDE(messages, this.logService);
+		validateIDEFormat(ideMessages);
+		this.logService.debug(`[chatgpt-server] Message format validation passed: ${ideMessages.length} messages in IDE format`);
+
+		const serverTools = tools.map((tool) => {
+			let parameters: Record<string, unknown> & { type?: string; properties?: Record<string, unknown> };
+			const rawParameters = tool.function.parameters;
+			if (!rawParameters || typeof rawParameters !== 'object' || rawParameters === null || Array.isArray(rawParameters)) {
+				parameters = { type: 'object', properties: {} };
+			} else {
+				// Cast to object type for type narrowing
+				parameters = rawParameters as Record<string, unknown> & { type?: string; properties?: Record<string, unknown> };
+				// Ensure type: "object"
+				if (!('type' in parameters) || parameters.type !== 'object') {
+					parameters = { ...parameters, type: 'object' };
+				}
+				// Ensure properties exist
+				if (!('properties' in parameters) || typeof parameters.properties !== 'object' || parameters.properties === null || Array.isArray(parameters.properties)) {
+					parameters = { ...parameters, properties: {} };
+				}
+				// Ensure all properties have both type and description (required by server schema)
+				if (parameters.properties) {
+					const props = parameters.properties as Record<string, any>;
+					for (const key in props) {
+						if (props[key] && typeof props[key] === 'object' && props[key] !== null && !Array.isArray(props[key])) {
+							const prop = props[key];
+							// Ensure type exists (default to 'string' if missing)
+							if (!('type' in prop) || typeof prop.type !== 'string') {
+								props[key] = { ...prop, type: 'string' };
+							}
+							// Ensure description exists (default to empty string if missing)
+							if (!('description' in props[key])) {
+								props[key] = { ...props[key], description: '' };
+							}
+						}
+					}
+				}
+			}
+			return {
+				name: tool.function.name,
+				description: tool.function.description,
+				parameters,
+			};
+		});
+
+		const endpoint: '/api/agent/tools' = '/api/agent/tools';
+		const hasToolResults = toolResults && toolResults.length > 0;
+
+		this.logService.info(`[chatgpt-server] Using endpoint: ${endpoint} (tools=${serverTools.length}, toolResults=${toolResults?.length || 0})`);
+
+		const response = await sendChatGPTRequest(
+			this.requestService,
+			accessToken,
+			this.serverAddress,
+			endpoint,
+			ideMessages,
+			token,
+			{
+				context,
+				modelName: model,
+				tools: serverTools,
+				toolResults: hasToolResults ? toolResults : undefined,
+			},
+			this.logService,
+		);
+
+		response.result.then(
+			(result) => {
+				this.logService.info(
+					`[chatgpt-server] Request completed: ${result.parts.length} parts, finishReason=${result.finishReason || 'none'}`,
+				);
+			},
+			(error) => {
+				this.logService.error(`[chatgpt-server] Streaming request failed: ${error instanceof Error ? error.message : String(error)}`);
+			},
+		);
+		return response;
+	}
+
+	private createToolInvocation(
+		callId: string,
+		toolId: string,
+		parameters: Record<string, unknown>,
+		request: IChatAgentRequest,
+	): IToolInvocation {
+		return {
+			callId,
+			toolId,
+			parameters,
+			context: { sessionId: request.sessionId },
+			chatRequestId: request.requestId,
+		};
+	}
+}
+

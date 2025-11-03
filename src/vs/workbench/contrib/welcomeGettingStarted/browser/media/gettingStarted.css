@@ -156,6 +156,22 @@
 		". footer footer footer .";
 }
 
+/* Center the header content for a cleaner, aligned look */
+.monaco-workbench
+	.part.editor
+	> .content
+	.gettingStartedContainer
+	.gettingStartedSlideCategories
+	> .gettingStartedCategoriesContainer
+	> .header {
+		text-align: center;
+	}
+
+.monaco-workbench .part.editor > .content .gettingStartedContainer .header h1,
+.monaco-workbench .part.editor > .content .gettingStartedContainer .header .subtitle {
+	text-align: center;
+}
+
 .monaco-workbench
 	.part.editor
 	> .content
