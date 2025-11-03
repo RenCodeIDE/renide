@@ -35,7 +35,7 @@
 				;
 				connect-src
 					'self'
-					http://localhost:11434
+					http://localhost:*
 					https:
 					ws:
 				;
@@ -65,14 +65,17 @@
 					notebookChatEditController
 					richScreenReaderContent
 				;
-		"/>
+		"
+		/>
 
 		<!-- Workbench CSS -->
-		<link rel="stylesheet" href="../../../workbench/workbench.desktop.main.css">
+		<link
+			rel="stylesheet"
+			href="../../../workbench/workbench.desktop.main.css"
+		/>
 	</head>
 
-	<body aria-label="">
-	</body>
+	<body aria-label=""></body>
 
 	<!-- Startup (do not modify order of script tags!) -->
 	<script src="./workbench.js" type="module"></script>
