@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { IRenWorkspaceStore, IMonitorXChangelogEntry, IMonitorXChangelogEntryInput } from '../common/renWorkspaceStore.js';
+import { IRenWorkspaceStore, IMonitorXChangelogEntry, IMonitorXChangelogEntryInput, IMonitorXChangelogFileChange, IMonitorXChangelogGraphReference } from '../common/renWorkspaceStore.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { VSBuffer } from '../../../../base/common/buffer.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
@@ -168,15 +168,40 @@ export class RenWorkspaceStore extends Disposable implements IRenWorkspaceStore 
 
 	async addChangelogEntry(entry: IMonitorXChangelogEntryInput): Promise<IMonitorXChangelogEntry> {
 		await this.ensureChangelogLoaded();
-		const changelogEntry: IMonitorXChangelogEntry = {
+		const sanitizedFiles: IMonitorXChangelogFileChange[] = [];
+		for (const file of entry.files) {
+			if (!file || typeof file.path !== 'string') {
+				continue;
+			}
+			const diff = typeof file.diff === 'string' ? file.diff : '';
+			sanitizedFiles.push({
+				path: file.path,
+				diff
+			});
+		}
+		if (!sanitizedFiles.length) {
+			throw new Error('MonitorX changelog entry requires at least one file change.');
+		}
+
+		const subject = entry.subject.trim();
+		if (!subject.length) {
+			throw new Error('MonitorX changelog entry requires a non-empty subject.');
+		}
+
+		const description = entry.description.trim();
+		const graph = entry.graph ? this.sanitizeGraphReference(entry.graph) : undefined;
+		const metadata = entry.metadata ? this.sanitizeMetadata(entry.metadata) : undefined;
+		const finalizedEntry: IMonitorXChangelogEntry = {
 			id: generateUuid(),
-			filePath: entry.filePath,
-			diff: entry.diff,
-			reason: entry.reason,
-			timestamp: entry.timestamp ?? Date.now()
+			subject,
+			description,
+			timestamp: entry.timestamp ?? Date.now(),
+			files: sanitizedFiles,
+			...(graph ? { graph } : {}),
+			...(metadata ? { metadata } : {})
 		};
 
-		this._changelogEntries.push(changelogEntry);
+		this._changelogEntries.push(finalizedEntry);
 		if (this._changelogEntries.length > RenWorkspaceStore.CHANGELOG_MAX_ENTRIES) {
 			this._changelogEntries.splice(0, this._changelogEntries.length - RenWorkspaceStore.CHANGELOG_MAX_ENTRIES);
 		}
@@ -189,7 +214,7 @@ export class RenWorkspaceStore extends Disposable implements IRenWorkspaceStore 
 		}
 
 		this._onDidChangeChangelog.fire(this.cloneChangelogEntries());
-		return changelogEntry;
+		return finalizedEntry;
 	}
 
 	async getRecentChangelogEntries(limit = 10): Promise<IMonitorXChangelogEntry[]> {
@@ -247,25 +272,10 @@ export class RenWorkspaceStore extends Disposable implements IRenWorkspaceStore 
 	private sanitizeChangelogEntries(raw: unknown[]): IMonitorXChangelogEntry[] {
 		const entries: IMonitorXChangelogEntry[] = [];
 		for (const candidate of raw) {
-			if (!candidate || typeof candidate !== 'object') {
-				continue;
+			const sanitized = this.sanitizeChangelogEntry(candidate);
+			if (sanitized) {
+				entries.push(sanitized);
 			}
-			const value = candidate as Record<string, unknown>;
-			const filePath = typeof value.filePath === 'string' ? value.filePath : undefined;
-			const diff = typeof value.diff === 'string' ? value.diff : undefined;
-			const reason = typeof value.reason === 'string' ? value.reason : undefined;
-			const timestampCandidate = typeof value.timestamp === 'number' ? value.timestamp : typeof value.timestamp === 'string' ? Number(value.timestamp) : NaN;
-			if (!filePath || !diff || !reason || !Number.isFinite(timestampCandidate)) {
-				continue;
-			}
-			const id = typeof value.id === 'string' ? value.id : generateUuid();
-			entries.push({
-				id,
-				filePath,
-				diff,
-				reason,
-				timestamp: timestampCandidate
-			});
 		}
 
 		entries.sort((a, b) => a.timestamp - b.timestamp);
@@ -275,8 +285,112 @@ export class RenWorkspaceStore extends Disposable implements IRenWorkspaceStore 
 		return entries;
 	}
 
+	private sanitizeChangelogEntry(candidate: unknown): IMonitorXChangelogEntry | undefined {
+		if (!candidate || typeof candidate !== 'object') {
+			return undefined;
+		}
+		const value = candidate as Record<string, unknown>;
+		const timestampCandidate = typeof value.timestamp === 'number' ? value.timestamp : typeof value.timestamp === 'string' ? Number(value.timestamp) : NaN;
+		if (!Number.isFinite(timestampCandidate)) {
+			return undefined;
+		}
+		const files = this.sanitizeFileChanges(value);
+		if (!files.length) {
+			return undefined;
+		}
+		const subject = typeof value.subject === 'string' && value.subject.trim().length ? value.subject.trim() : this.deriveSubject(files, value);
+		const description = typeof value.description === 'string' ? value.description : (typeof value.reason === 'string' ? value.reason : '');
+		const id = typeof value.id === 'string' ? value.id : generateUuid();
+		const graph = this.sanitizeGraphReference(value.graph);
+		const metadata = this.sanitizeMetadata(value.metadata);
+		return {
+			id,
+			subject,
+			description,
+			timestamp: timestampCandidate,
+			files,
+			...(graph ? { graph } : {}),
+			...(metadata ? { metadata } : {})
+		};
+	}
+
+	private sanitizeFileChanges(value: Record<string, unknown>): IMonitorXChangelogFileChange[] {
+		const result: IMonitorXChangelogFileChange[] = [];
+		const filesCandidate = Array.isArray(value.files) ? value.files : undefined;
+		if (filesCandidate) {
+			for (const file of filesCandidate) {
+				if (!file || typeof file !== 'object') {
+					continue;
+				}
+				const fileRecord = file as Record<string, unknown>;
+				const path = typeof fileRecord.path === 'string' ? fileRecord.path : undefined;
+				const diff = typeof fileRecord.diff === 'string' ? fileRecord.diff : undefined;
+				if (path && diff !== undefined) {
+					result.push({ path, diff });
+				}
+			}
+		}
+
+		// Back-compat with legacy structure
+		if (!result.length) {
+			const filePath = typeof value.filePath === 'string' ? value.filePath : undefined;
+			const diff = typeof value.diff === 'string' ? value.diff : undefined;
+			if (filePath && diff !== undefined) {
+				result.push({ path: filePath, diff });
+			}
+		}
+
+		return result;
+	}
+
+	private sanitizeGraphReference(graph: unknown): IMonitorXChangelogGraphReference | undefined {
+		if (!graph || typeof graph !== 'object') {
+			return undefined;
+		}
+		const record = graph as Record<string, unknown>;
+		const uri = typeof record.uri === 'string' ? record.uri : undefined;
+		const summary = typeof record.summary === 'string' ? record.summary : undefined;
+		if (!uri && (!summary || !summary.trim())) {
+			return undefined;
+		}
+		return {
+			...(uri ? { uri } : {}),
+			...(summary ? { summary } : {})
+		};
+	}
+
+	private sanitizeMetadata(metadata: unknown): Record<string, unknown> | undefined {
+		if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+			return undefined;
+		}
+		const clean: Record<string, unknown> = {};
+		for (const [key, value] of Object.entries(metadata as Record<string, unknown>)) {
+			if (typeof key !== 'string') {
+				continue;
+			}
+			if (value === undefined) {
+				continue;
+			}
+			clean[key] = value;
+		}
+		return Object.keys(clean).length ? clean : undefined;
+	}
+
+	private deriveSubject(files: readonly IMonitorXChangelogFileChange[], value: Record<string, unknown>): string {
+		if (typeof value.reason === 'string' && value.reason.trim().length) {
+			return value.reason.trim();
+		}
+		const firstFile = files[0];
+		return `Update ${firstFile.path}`;
+	}
+
 	private cloneChangelogEntries(entries: IMonitorXChangelogEntry[] = this._changelogEntries): IMonitorXChangelogEntry[] {
-		return entries.map(entry => ({ ...entry }));
+		return entries.map(entry => ({
+			...entry,
+			files: entry.files.map(file => ({ ...file })),
+			graph: entry.graph ? { ...entry.graph } : undefined,
+			metadata: entry.metadata ? { ...entry.metadata } : undefined
+		}));
 	}
 
 	private getChangelogFileUri(): URI {

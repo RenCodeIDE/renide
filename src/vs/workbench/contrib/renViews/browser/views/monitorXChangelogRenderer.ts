@@ -5,12 +5,18 @@
 
 import { basename } from '../../../../../base/common/resources.js';
 import { URI } from '../../../../../base/common/uri.js';
-import { IMonitorXChangelogEntry } from '../../common/renWorkspaceStore.js';
+import { IMonitorXChangelogEntry, IMonitorXChangelogFileChange } from '../../common/renWorkspaceStore.js';
+import { IMonitorXChangelogDraft } from '../../common/renChangelogBuffer.js';
 
 export interface IMonitorXRenderOptions {
 	readonly limit?: number;
 	readonly emptyMessage?: string;
 	readonly onFileClick?: (filePath: string) => void;
+}
+
+export interface IMonitorXDraftRenderOptions extends IMonitorXRenderOptions {
+	readonly onSubjectChange?: (sessionId: string, subject: string) => void;
+	readonly onDescriptionChange?: (sessionId: string, description: string) => void;
 }
 
 const MAX_DIFF_DISPLAY_LENGTH = 800;
@@ -39,83 +45,26 @@ export function renderMonitorXChangelog(target: HTMLElement, entries: IMonitorXC
 		const header = document.createElement('header');
 		header.className = 'ren-monitorx-changelog-entry-header';
 
-		const fileLabel = document.createElement('span');
-		// Extract just the filename from the full path
-		const fileUri = URI.file(entry.filePath);
-		const fileName = basename(fileUri);
-		fileLabel.className = 'ren-monitorx-changelog-entry-file';
-		if (options.onFileClick) {
-			fileLabel.classList.add('clickable');
-			fileLabel.style.cursor = 'pointer';
-			fileLabel.onclick = (e) => {
-				e.preventDefault();
-				e.stopPropagation();
-				options.onFileClick!(entry.filePath);
-			};
-		}
-		fileLabel.textContent = fileName;
-		fileLabel.setAttribute('title', entry.filePath); // Show full path on hover
+		const subjectLabel = document.createElement('span');
+		subjectLabel.className = 'ren-monitorx-changelog-entry-subject';
+		subjectLabel.textContent = entry.subject || 'Untitled change';
 
 		const timeLabel = document.createElement('time');
 		timeLabel.className = 'ren-monitorx-changelog-entry-time';
 		timeLabel.dateTime = new Date(entry.timestamp).toISOString();
 		timeLabel.textContent = new Date(entry.timestamp).toLocaleString();
 
-		header.appendChild(fileLabel);
+		header.appendChild(subjectLabel);
 		header.appendChild(timeLabel);
 		item.appendChild(header);
 
-		const reason = document.createElement('p');
-		reason.className = 'ren-monitorx-changelog-entry-reason';
-		reason.textContent = entry.reason;
-		item.appendChild(reason);
+		const description = document.createElement('p');
+		description.className = 'ren-monitorx-changelog-entry-description';
+		description.textContent = entry.description || '--';
+		item.appendChild(description);
 
-		if (entry.diff) {
-			const diffBlock = document.createElement('div');
-			diffBlock.className = 'ren-monitorx-changelog-entry-diff';
-
-			// Truncate before parsing if needed
-			let diffText = entry.diff;
-			const truncated = diffText.length > MAX_DIFF_DISPLAY_LENGTH;
-			if (truncated) {
-				// Try to truncate at a line boundary
-				const truncatedText = diffText.slice(0, MAX_DIFF_DISPLAY_LENGTH);
-				const lastNewline = truncatedText.lastIndexOf('\n');
-				diffText = lastNewline > 0 ? truncatedText.slice(0, lastNewline + 1) : truncatedText;
-			}
-
-			// Parse and render diff with colors
-			const diffLines = diffText.split('\n');
-			for (const line of diffLines) {
-				const lineSpan = document.createElement('span');
-				lineSpan.className = 'monitorx-diff-line';
-
-				if (line.startsWith('+')) {
-					lineSpan.classList.add('monitorx-diff-line-add');
-					lineSpan.textContent = line;
-				} else if (line.startsWith('-')) {
-					lineSpan.classList.add('monitorx-diff-line-delete');
-					lineSpan.textContent = line;
-				} else if (line.startsWith('@@')) {
-					lineSpan.classList.add('monitorx-diff-hunk-header');
-					lineSpan.textContent = line;
-				} else {
-					// Context line or other (space, empty, etc.)
-					lineSpan.textContent = line;
-				}
-
-				diffBlock.appendChild(lineSpan);
-				diffBlock.appendChild(document.createElement('br'));
-			}
-
-			if (truncated) {
-				const ellipsis = document.createElement('span');
-				ellipsis.className = 'monitorx-diff-line';
-				ellipsis.textContent = '…';
-				diffBlock.appendChild(ellipsis);
-			}
-
-			item.appendChild(diffBlock);
+		for (const file of entry.files) {
+			appendFileSection(item, file, options);
 		}
 
 		list.appendChild(item);
@@ -124,3 +73,145 @@ export function renderMonitorXChangelog(target: HTMLElement, entries: IMonitorXC
 	target.appendChild(list);
 }
 
+function appendFileSection(container: HTMLElement, file: IMonitorXChangelogFileChange, options: IMonitorXRenderOptions): void {
+	const section = document.createElement('section');
+	section.className = 'ren-monitorx-changelog-file';
+
+	const header = document.createElement('div');
+	header.className = 'ren-monitorx-changelog-file-header';
+
+	const label = document.createElement('span');
+	label.className = 'ren-monitorx-changelog-entry-file';
+	const fileUri = URI.file(file.path);
+	const fileName = basename(fileUri);
+	label.textContent = fileName;
+	label.setAttribute('title', file.path);
+	if (options.onFileClick) {
+		label.classList.add('clickable');
+		label.onclick = (event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			options.onFileClick!(file.path);
+		};
+	}
+
+	header.appendChild(label);
+	section.appendChild(header);
+
+	if (file.diff) {
+		section.appendChild(renderDiff(file.diff));
+	}
+
+	container.appendChild(section);
+}
+
+function renderDiff(diffText: string): HTMLElement {
+	const diffBlock = document.createElement('div');
+	diffBlock.className = 'ren-monitorx-changelog-entry-diff';
+
+	let text = diffText;
+	const truncated = text.length > MAX_DIFF_DISPLAY_LENGTH;
+	if (truncated) {
+		const truncatedText = text.slice(0, MAX_DIFF_DISPLAY_LENGTH);
+		const lastNewline = truncatedText.lastIndexOf('\n');
+		text = lastNewline > 0 ? truncatedText.slice(0, lastNewline + 1) : truncatedText;
+	}
+
+	const diffLines = text.split('\n');
+	for (const line of diffLines) {
+		const lineSpan = document.createElement('span');
+		lineSpan.className = 'monitorx-diff-line';
+
+		if (line.startsWith('+')) {
+			lineSpan.classList.add('monitorx-diff-line-add');
+			lineSpan.textContent = line;
+		} else if (line.startsWith('-')) {
+			lineSpan.classList.add('monitorx-diff-line-delete');
+			lineSpan.textContent = line;
+		} else if (line.startsWith('@@')) {
+			lineSpan.classList.add('monitorx-diff-hunk-header');
+			lineSpan.textContent = line;
+		} else {
+			lineSpan.textContent = line;
+		}
+
+		diffBlock.appendChild(lineSpan);
+		diffBlock.appendChild(document.createElement('br'));
+	}
+
+	if (truncated) {
+		const ellipsis = document.createElement('span');
+		ellipsis.className = 'monitorx-diff-line';
+		ellipsis.textContent = '…';
+		diffBlock.appendChild(ellipsis);
+	}
+
+	return diffBlock;
+}
+
+export function renderMonitorXChangelogDrafts(target: HTMLElement, drafts: readonly IMonitorXChangelogDraft[], options: IMonitorXDraftRenderOptions = {}): void {
+	target.textContent = '';
+
+	if (!drafts.length) {
+		const empty = document.createElement('div');
+		empty.className = 'ren-monitorx-draft-empty';
+		empty.textContent = options.emptyMessage ?? 'No pending MonitorX drafts. Apply AI edits to stage a changelog entry.';
+		target.appendChild(empty);
+		return;
+	}
+
+	const list = document.createElement('div');
+	list.className = 'ren-monitorx-draft-list';
+
+	for (const draft of drafts.slice().sort((a, b) => b.updatedAt - a.updatedAt)) {
+		const item = document.createElement('article');
+		item.className = 'ren-monitorx-draft-entry';
+
+		const header = document.createElement('header');
+		header.className = 'ren-monitorx-draft-entry-header';
+
+		const status = document.createElement('span');
+		status.className = 'ren-monitorx-draft-status';
+		status.textContent = 'Pending';
+
+		const timeLabel = document.createElement('time');
+		timeLabel.className = 'ren-monitorx-draft-entry-time';
+		timeLabel.dateTime = new Date(draft.updatedAt).toISOString();
+		timeLabel.textContent = new Date(draft.updatedAt).toLocaleString();
+
+		header.appendChild(status);
+		header.appendChild(timeLabel);
+		item.appendChild(header);
+
+		const subjectInput = document.createElement('input');
+		subjectInput.className = 'ren-monitorx-draft-subject';
+		subjectInput.value = draft.subject;
+		subjectInput.placeholder = 'Changelog subject';
+		subjectInput.addEventListener('change', () => {
+			if (options.onSubjectChange) {
+				options.onSubjectChange(draft.sessionId, subjectInput.value.trim());
+			}
+		});
+		item.appendChild(subjectInput);
+
+		const descriptionArea = document.createElement('textarea');
+		descriptionArea.className = 'ren-monitorx-draft-description';
+		descriptionArea.value = draft.description;
+		descriptionArea.rows = Math.min(8, Math.max(3, draft.description.split(/\r?\n/).length));
+		descriptionArea.placeholder = 'Describe what changed';
+		descriptionArea.addEventListener('change', () => {
+			if (options.onDescriptionChange) {
+				options.onDescriptionChange(draft.sessionId, descriptionArea.value.trim());
+			}
+		});
+		item.appendChild(descriptionArea);
+
+		for (const file of draft.files) {
+			appendFileSection(item, file, options);
+		}
+
+		list.appendChild(item);
+	}
+
+	target.appendChild(list);
+}

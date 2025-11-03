@@ -21,8 +21,10 @@ import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContaine
 import { ViewContainerLocation, IViewContainersRegistry, IViewsRegistry, Extensions as ViewExtensions, ViewContainer } from '../../../common/views.js';
 import { MonitorXChangelogViewPane } from './views/monitorXChangelogViewPane.js';
 import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
-import { IRenWorkspaceStore, IMonitorXChangelogEntryInput } from '../common/renWorkspaceStore.js';
+import { IRenWorkspaceStore, IMonitorXChangelogEntryInput, IMonitorXChangelogFileChange } from '../common/renWorkspaceStore.js';
 import './renWorkspaceStore.js';
+import './renChangelogBuffer.js';
+import { MonitorXChangelogToolContribution } from './monitorXChangelogTool.js';
 import { isWeb } from '../../../../base/common/platform.js';
 import { registerSingleton, InstantiationType } from '../../../../platform/instantiation/common/extensions.js';
 import { IGitHeatmapService, NullGitHeatmapService } from '../../../../platform/gitHeatmap/common/gitHeatmapService.js';
@@ -131,6 +133,7 @@ export class RenViewsContribution implements IWorkbenchContribution {
 // Register the contribution
 const workbenchRegistry = Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench);
 workbenchRegistry.registerWorkbenchContribution(RenViewsContribution, LifecyclePhase.Restored);
+workbenchRegistry.registerWorkbenchContribution(MonitorXChangelogToolContribution, LifecyclePhase.Restored);
 
 const MONITORX_CHANGELOG_CONTAINER_ID = 'workbench.view.monitorxChangelog';
 const MONITORX_CHANGELOG_VIEW_ID = 'workbench.view.monitorxChangelog.entries';
@@ -164,15 +167,50 @@ if (!CommandsRegistry.getCommand(MONITORX_ADD_CHANGELOG_COMMAND)) {
 		id: MONITORX_ADD_CHANGELOG_COMMAND,
 		handler: async (accessor, args: Partial<IMonitorXChangelogEntryInput> | undefined) => {
 			const workspaceStore = accessor.get(IRenWorkspaceStore);
-			if (!args || typeof args.filePath !== 'string' || typeof args.diff !== 'string' || typeof args.reason !== 'string') {
-				throw new Error('monitorx.addChangelogEntry requires filePath, diff, and reason strings.');
+			if (!args) {
+				throw new Error('monitorx.addChangelogEntry requires an argument payload.');
 			}
-			const entry = await workspaceStore.addChangelogEntry({
-				filePath: args.filePath,
-				diff: args.diff,
-				reason: args.reason,
+
+			const subject = typeof args.subject === 'string' ? args.subject.trim() : '';
+			if (!subject) {
+				throw new Error('monitorx.addChangelogEntry requires a non-empty subject string.');
+			}
+
+			const description = typeof args.description === 'string' ? args.description : '';
+			const filesInput = Array.isArray(args.files) ? args.files : [];
+			const files: IMonitorXChangelogFileChange[] = [];
+			for (const file of filesInput) {
+				if (!file || typeof file !== 'object') {
+					continue;
+				}
+				const record = file as Record<string, unknown>;
+				const path = typeof record.path === 'string' ? record.path : undefined;
+				const diff = typeof record.diff === 'string' ? record.diff : undefined;
+				if (path && diff !== undefined) {
+					files.push({ path, diff });
+				}
+			}
+			if (!files.length) {
+				throw new Error('monitorx.addChangelogEntry requires at least one file change with path and diff.');
+			}
+
+			const graphRecord = args.graph && typeof args.graph === 'object' && !Array.isArray(args.graph) ? args.graph as Record<string, unknown> : undefined;
+			const graphInput = graphRecord ? {
+				uri: typeof graphRecord.uri === 'string' ? graphRecord.uri : undefined,
+				summary: typeof graphRecord.summary === 'string' ? graphRecord.summary : undefined
+			} : undefined;
+			const metadata = args.metadata && typeof args.metadata === 'object' && !Array.isArray(args.metadata) ? args.metadata as Record<string, unknown> : undefined;
+
+			const entryInput: IMonitorXChangelogEntryInput = {
+				subject,
+				description,
+				files,
+				...(graphInput && (graphInput.uri || (graphInput.summary && graphInput.summary.trim())) ? { graph: graphInput } : {}),
+				...(metadata ? { metadata } : {}),
 				timestamp: typeof args.timestamp === 'number' ? args.timestamp : undefined
-			});
+			};
+
+			const entry = await workspaceStore.addChangelogEntry(entryInput);
 			return { ...entry };
 		}
 	});

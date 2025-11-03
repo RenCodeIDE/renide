@@ -10,7 +10,7 @@ import { DisposableStore, IReference, thenRegisterOrDispose } from '../../../../
 import { ResourceMap, ResourceSet } from '../../../../../base/common/map.js';
 import { Schemas } from '../../../../../base/common/network.js';
 import { ITransaction, IObservable, observableValue, autorun, transaction, ObservablePromise } from '../../../../../base/common/observable.js';
-import { isEqual, relativePath } from '../../../../../base/common/resources.js';
+import { isEqual, relativePath, basename } from '../../../../../base/common/resources.js';
 import { assertType } from '../../../../../base/common/types.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { generateUuid } from '../../../../../base/common/uuid.js';
@@ -47,6 +47,7 @@ import { IChatResponseModel } from '../../common/chatModel.js';
 import { IChatService } from '../../common/chatService.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IRenWorkspaceStore } from '../../../renViews/common/renWorkspaceStore.js';
+import { IRenMonitorXChangelogBuffer, IMonitorXChangelogDraftSeed } from '../../../renViews/common/renChangelogBuffer.js';
 import { AbstractChatEditingModifiedFileEntry } from './chatEditingModifiedFileEntry.js';
 import { createSnapshot, deserializeSnapshot, getNotebookSnapshotFileURI, restoreSnapshot, SnapshotComparer } from './notebook/chatEditingModifiedNotebookSnapshot.js';
 import { ChatEditingNewNotebookContentEdits } from './notebook/chatEditingNewNotebookContentEdits.js';
@@ -193,9 +194,23 @@ export class ChatEditingModifiedNotebookEntry extends AbstractChatEditingModifie
 		@INotebookEditorModelResolverService private readonly notebookResolver: INotebookEditorModelResolverService,
 		@IAiEditTelemetryService aiEditTelemetryService: IAiEditTelemetryService,
 		@IRenWorkspaceStore renWorkspaceStore: IRenWorkspaceStore,
+		@IRenMonitorXChangelogBuffer renChangelogBuffer: IRenMonitorXChangelogBuffer,
 		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
 	) {
-		super(modifiedResourceRef.object.notebook.uri, telemetryInfo, kind, configurationService, fileConfigService, chatService, fileService, undoRedoService, instantiationService, aiEditTelemetryService, renWorkspaceStore);
+		super(
+			modifiedResourceRef.object.notebook.uri,
+			telemetryInfo,
+			kind,
+			configurationService,
+			fileConfigService,
+			chatService,
+			fileService,
+			undoRedoService,
+			instantiationService,
+			aiEditTelemetryService,
+			renWorkspaceStore,
+			renChangelogBuffer,
+		);
 		this.initialContentComparer = new SnapshotComparer(initialContent);
 		this.modifiedModel = this._register(modifiedResourceRef).object.notebook;
 		this.originalModel = this._register(originalResourceRef).object.notebook;
@@ -428,14 +443,12 @@ export class ChatEditingModifiedNotebookEntry extends AbstractChatEditingModifie
 		}
 	}
 
-	protected override async _createChangelogEntry(): Promise<void> {
-		// Get cell diff info
+	protected override async buildChangelogDraft(): Promise<IMonitorXChangelogDraftSeed | undefined> {
 		const cellsDiffInfo = this._cellsDiffInfo.get();
 		if (!cellsDiffInfo || cellsDiffInfo.length === 0) {
-			return; // No changes to record
+			return undefined;
 		}
 
-		// Count changes
 		let added = 0;
 		let modified = 0;
 		let deleted = 0;
@@ -453,39 +466,22 @@ export class ChatEditingModifiedNotebookEntry extends AbstractChatEditingModifie
 			}
 		}
 
-		// If no actual changes, skip
 		if (added === 0 && modified === 0 && deleted === 0) {
-			return;
+			return undefined;
 		}
 
-		// Get file path relative to workspace
-		const workspace = this._workspaceContextService.getWorkspace();
-		const workspaceFolder = workspace.folders[0];
-		let filePath: string;
-		if (workspaceFolder) {
-			const relative = relativePath(workspaceFolder.uri, this.originalURI);
-			filePath = relative ?? this.originalURI.fsPath;
-		} else {
-			filePath = this.originalURI.fsPath;
-		}
+		const filePath = this._resolveWorkspaceRelativePath();
+		const diffSummary = this._formatNotebookDiffSummary(added, modified, deleted);
+		const subject = this._generateNotebookSubject(added, modified, deleted);
+		const description = this._generateNotebookDescription(added, modified, deleted);
+		const metadata = this._buildNotebookMetadata(added, modified, deleted);
 
-		// Format a summary diff for notebooks
-		const diffParts: string[] = [];
-		diffParts.push('Notebook changes:');
-		if (added > 0) { diffParts.push(`+${added} cell(s) added`); }
-		if (modified > 0) { diffParts.push(`${modified} cell(s) modified`); }
-		if (deleted > 0) { diffParts.push(`-${deleted} cell(s) deleted`); }
-		const diffString = diffParts.join(', ');
-
-		// Get reason from telemetry info, fallback to default
-		const reason = this._telemetryInfo.editExplanation || 'AI edit applied';
-
-		// Create changelog entry
-		await this._renWorkspaceStore.addChangelogEntry({
-			filePath,
-			diff: diffString,
-			reason
-		});
+		return {
+			subject,
+			description,
+			files: [{ path: filePath, diff: diffSummary }],
+			metadata
+		};
 	}
 
 	protected override async _doAccept(): Promise<void> {
@@ -669,9 +665,10 @@ export class ChatEditingModifiedNotebookEntry extends AbstractChatEditingModifie
 			await finishPreviousCells();
 		}
 
-		// isLastEdits can be true for cell Uris, but when its true for Cells edits.
-		// It cannot be true for the notebook itself.
-		isLastEdits = !isCellUri && isLastEdits;
+		// isLastEdits can be true for cell URIs, but we only treat it as the final update for
+		// the notebook when the resource itself is the notebook.
+		const shouldUpdateDraft = !isCellUri;
+		isLastEdits = shouldUpdateDraft;
 
 		// If this is the last edit and & we got regular text edits for generating new notebook content
 		// Then generate notebook edits from those text edits & apply those notebook edits.
@@ -692,6 +689,14 @@ export class ChatEditingModifiedNotebookEntry extends AbstractChatEditingModifie
 				this._rewriteRatioObs.set(1, tx);
 			}
 		});
+
+		if (shouldUpdateDraft) {
+			try {
+				await this.storeChangelogDraft();
+			} catch (error) {
+				console.error('Failed to update notebook changelog draft:', error);
+			}
+		}
 	}
 
 	private disposeDeletedCellEntries() {
@@ -1123,6 +1128,102 @@ export class ChatEditingModifiedNotebookEntry extends AbstractChatEditingModifie
 		}));
 
 		return cellEntry;
+	}
+
+	private _resolveWorkspaceRelativePath(): string {
+		const workspace = this._workspaceContextService.getWorkspace();
+		const workspaceFolder = workspace.folders[0];
+		if (workspaceFolder) {
+			const relative = relativePath(workspaceFolder.uri, this.originalURI);
+			if (relative) {
+				return relative;
+			}
+		}
+		return this.originalURI.fsPath;
+	}
+
+	private _formatNotebookDiffSummary(added: number, modified: number, deleted: number): string {
+		const parts: string[] = [];
+		if (added > 0) {
+			parts.push(`+${added} cell${added === 1 ? '' : 's'} added`);
+		}
+		if (modified > 0) {
+			parts.push(`${modified} cell${modified === 1 ? '' : 's'} modified`);
+		}
+		if (deleted > 0) {
+			parts.push(`-${deleted} cell${deleted === 1 ? '' : 's'} deleted`);
+		}
+		if (!parts.length) {
+			return 'Notebook changes: none';
+		}
+		return `Notebook changes: ${parts.join(', ')}`;
+	}
+
+	private _generateNotebookSubject(added: number, modified: number, deleted: number): string {
+		const fileName = `${basename(this.originalURI)} notebook`;
+		const explanation = this._telemetryInfo.editExplanation;
+		const fallback = this._buildNotebookFallbackSubject(fileName, added, modified, deleted);
+		if (!explanation) {
+			return fallback;
+		}
+		const normalized = this.normalizeSubjectText(explanation);
+		return normalized ?? fallback;
+	}
+
+	private _generateNotebookDescription(added: number, modified: number, deleted: number): string {
+		const parts: string[] = [];
+		const explanation = (this._telemetryInfo.editExplanation || '').trim();
+		if (explanation) {
+			parts.push(this.ensureSentence(explanation));
+		}
+		const details: string[] = [];
+		if (added) {
+			details.push(`+${added} cell${added === 1 ? '' : 's'} added`);
+		}
+		if (modified) {
+			details.push(`${modified} cell${modified === 1 ? '' : 's'} modified`);
+		}
+		if (deleted) {
+			details.push(`-${deleted} cell${deleted === 1 ? '' : 's'} deleted`);
+		}
+		if (details.length) {
+			parts.push(`Changes: ${details.join(', ')}.`);
+		}
+		if (this._telemetryInfo.command) {
+			parts.push(`Invoked via ${this._telemetryInfo.command}.`);
+		}
+		if (!parts.length) {
+			parts.push(`Applied AI edit to ${basename(this.originalURI)}.`);
+		}
+		return parts.join(' ');
+	}
+
+	private _buildNotebookMetadata(added: number, modified: number, deleted: number): Record<string, unknown> {
+		const metadata: Record<string, unknown> = {
+			cellsAdded: added,
+			cellsModified: modified,
+			cellsDeleted: deleted,
+			sessionId: this._telemetryInfo.sessionId,
+			agentId: this._telemetryInfo.agentId,
+			requestId: this._telemetryInfo.requestId,
+			modeId: this._telemetryInfo.modeId,
+			modelId: this._telemetryInfo.modelId,
+			command: this._telemetryInfo.command
+		};
+		for (const key of Object.keys(metadata)) {
+			if (metadata[key] === undefined) {
+				delete metadata[key];
+			}
+		}
+		return metadata;
+	}
+
+	private _buildNotebookFallbackSubject(fileName: string, added: number, modified: number, deleted: number): string {
+		const totalChanges = added + modified + deleted;
+		if (!totalChanges) {
+			return `Update ${fileName}`;
+		}
+		return `Update ${fileName} (${totalChanges} change${totalChanges === 1 ? '' : 's'})`;
 	}
 }
 

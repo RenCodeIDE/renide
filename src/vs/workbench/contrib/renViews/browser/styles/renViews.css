@@ -123,13 +123,13 @@
 	border: 1px solid var(--vscode-panel-border);
 	border-radius: 8px;
 	padding: 16px;
-	max-height: 320px;
 	overflow: auto;
 }
 
 .monitorx-pane-container .ren-monitorx-changelog-body {
+	flex: 1;
+	min-height: 0;
 	max-height: none;
-	height: 100%;
 }
 
 /* Graph view styles */
@@ -522,10 +522,28 @@
 	font-weight: 600;
 }
 
+.ren-monitorx-changelog-entry-subject {
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--vscode-editor-foreground);
+}
+
 .ren-monitorx-changelog-entry-file {
 	font-size: 13px;
 	color: var(--vscode-editor-foreground);
 	word-break: break-all;
+}
+
+.ren-monitorx-changelog-file {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.ren-monitorx-changelog-file-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
 }
 
 .ren-monitorx-changelog-entry-file.clickable {
@@ -543,7 +561,7 @@
 	color: var(--vscode-descriptionForeground);
 }
 
-.ren-monitorx-changelog-entry-reason {
+.ren-monitorx-changelog-entry-description {
 	margin: 0;
 	font-size: 13px;
 	color: var(--vscode-foreground);
@@ -679,6 +697,100 @@
 	display: flex;
 	flex-direction: column;
 	height: 100%;
+	gap: 16px;
+}
+
+.ren-monitorx-drafts-section,
+.ren-monitorx-history-section {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.ren-monitorx-history-section {
+	flex: 1;
+	min-height: 0;
+}
+
+.ren-monitorx-section-title {
+	font-size: 13px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--vscode-descriptionForeground);
+	margin: 0;
+}
+
+.ren-monitorx-drafts-body,
+.ren-monitorx-changelog-body {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.ren-monitorx-draft-empty {
+	color: var(--vscode-descriptionForeground);
+	font-size: 13px;
+}
+
+.ren-monitorx-draft-list {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+.ren-monitorx-draft-entry {
+	border: 1px dashed var(--vscode-panel-border);
+	background-color: var(--vscode-editorWidget-background);
+	padding: 12px;
+	border-radius: 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.ren-monitorx-draft-entry-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: baseline;
+	gap: 8px;
+}
+
+.ren-monitorx-draft-status {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--vscode-inputValidation-infoForeground);
+}
+
+.ren-monitorx-draft-entry-time {
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.ren-monitorx-draft-subject,
+.ren-monitorx-draft-description {
+	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+	background-color: var(--vscode-input-background);
+	color: var(--vscode-input-foreground);
+	border-radius: 4px;
+	padding: 6px 8px;
+	font-size: 13px;
+	width: 100%;
+	box-sizing: border-box;
+}
+
+.ren-monitorx-draft-subject {
+	font-weight: 600;
+}
+
+.ren-monitorx-draft-description {
+	resize: vertical;
+	min-height: 64px;
+}
+
+.ren-monitorx-draft-description:focus,
+.ren-monitorx-draft-subject:focus {
+	outline: 1px solid var(--vscode-focusBorder);
 }
 
 /* MonitorX chat section styles */

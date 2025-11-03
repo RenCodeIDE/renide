@@ -18,10 +18,12 @@ import { IEditorService, SIDE_GROUP } from '../../../../services/editor/common/e
 import { IResourceEditorInput } from '../../../../../platform/editor/common/editor.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { IRenWorkspaceStore, IMonitorXChangelogEntry } from '../../common/renWorkspaceStore.js';
-import { renderMonitorXChangelog } from './monitorXChangelogRenderer.js';
+import { IRenMonitorXChangelogBuffer, IMonitorXChangelogDraftUpdate } from '../../common/renChangelogBuffer.js';
+import { renderMonitorXChangelog, renderMonitorXChangelogDrafts } from './monitorXChangelogRenderer.js';
 
 export class MonitorXChangelogViewPane extends ViewPane {
 	private bodyContainer!: HTMLElement;
+	private draftsContainer!: HTMLElement;
 	private changelogContainer!: HTMLElement;
 
 	constructor(
@@ -36,6 +38,7 @@ export class MonitorXChangelogViewPane extends ViewPane {
 		@IThemeService themeService: IThemeService,
 		@IHoverService hoverService: IHoverService,
 		@IRenWorkspaceStore private readonly workspaceStore: IRenWorkspaceStore,
+		@IRenMonitorXChangelogBuffer private readonly changelogBuffer: IRenMonitorXChangelogBuffer,
 		@IEditorService private readonly editorService: IEditorService
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
@@ -48,18 +51,49 @@ export class MonitorXChangelogViewPane extends ViewPane {
 		this.bodyContainer.className = 'monitorx-pane-container';
 		container.appendChild(this.bodyContainer);
 
+		const draftsSection = document.createElement('section');
+		draftsSection.className = 'ren-monitorx-drafts-section';
+		const draftsTitle = document.createElement('h3');
+		draftsTitle.className = 'ren-monitorx-section-title';
+		draftsTitle.textContent = localize('monitorx.changelog.drafts.title', "Pending changes");
+		draftsSection.appendChild(draftsTitle);
+
+		this.draftsContainer = document.createElement('div');
+		this.draftsContainer.className = 'ren-monitorx-drafts-body';
+		draftsSection.appendChild(this.draftsContainer);
+		this.bodyContainer.appendChild(draftsSection);
+
+		const historySection = document.createElement('section');
+		historySection.className = 'ren-monitorx-history-section';
+		const historyTitle = document.createElement('h3');
+		historyTitle.className = 'ren-monitorx-section-title';
+		historyTitle.textContent = localize('monitorx.changelog.history.title', "Changelog history");
+		historySection.appendChild(historyTitle);
+
 		this.changelogContainer = document.createElement('div');
 		this.changelogContainer.className = 'ren-monitorx-changelog-body';
-		this.bodyContainer.appendChild(this.changelogContainer);
+		historySection.appendChild(this.changelogContainer);
+		this.bodyContainer.appendChild(historySection);
 
+		this.renderDrafts();
 		this.renderEntries();
 		this._register(this.workspaceStore.onDidChangeChangelog(entries => this.updateEntries(entries)));
+		this._register(this.changelogBuffer.onDidChangeDraft(() => this.renderDrafts()));
 	}
 
 	protected override layoutBody(height: number, width: number): void {
 		this.bodyContainer.style.height = `${height}px`;
 		this.bodyContainer.style.overflow = 'hidden';
-		this.changelogContainer.style.height = '100%';
+	}
+
+	private renderDrafts(): void {
+		const drafts = this.changelogBuffer.listDrafts();
+		renderMonitorXChangelogDrafts(this.draftsContainer, drafts, {
+			emptyMessage: localize('monitorx.changelog.drafts.empty', "No pending MonitorX drafts."),
+			onFileClick: path => this.openFile(path),
+			onSubjectChange: (sessionId, subject) => this.handleDraftUpdate(sessionId, { subject }),
+			onDescriptionChange: (sessionId, description) => this.handleDraftUpdate(sessionId, { description })
+		});
 	}
 
 	private async renderEntries(): Promise<void> {
@@ -79,6 +113,15 @@ export class MonitorXChangelogViewPane extends ViewPane {
 			limit: 50,
 			onFileClick: (path) => this.openFile(path)
 		});
+	}
+
+	private handleDraftUpdate(sessionId: string, update: IMonitorXChangelogDraftUpdate): void {
+		try {
+			this.changelogBuffer.updateDraft(sessionId, update);
+		} catch (error) {
+			console.error('Failed to update MonitorX draft:', error);
+			this.renderDrafts();
+		}
 	}
 }
 

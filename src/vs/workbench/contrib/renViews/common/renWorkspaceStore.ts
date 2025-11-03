@@ -8,18 +8,32 @@ import { Event } from '../../../../base/common/event.js';
 
 export const IRenWorkspaceStore = createDecorator<IRenWorkspaceStore>('renWorkspaceStore');
 
+export interface IMonitorXChangelogFileChange {
+	readonly path: string;
+	readonly diff: string;
+}
+
+export interface IMonitorXChangelogGraphReference {
+	readonly uri?: string;
+	readonly summary?: string;
+}
+
 export interface IMonitorXChangelogEntry {
 	readonly id: string;
-	readonly filePath: string;
-	readonly diff: string;
-	readonly reason: string;
+	readonly subject: string;
+	readonly description: string;
 	readonly timestamp: number;
+	readonly files: readonly IMonitorXChangelogFileChange[];
+	readonly graph?: IMonitorXChangelogGraphReference;
+	readonly metadata?: Record<string, unknown>;
 }
 
 export interface IMonitorXChangelogEntryInput {
-	readonly filePath: string;
-	readonly diff: string;
-	readonly reason: string;
+	readonly subject: string;
+	readonly description: string;
+	readonly files: readonly IMonitorXChangelogFileChange[];
+	readonly graph?: IMonitorXChangelogGraphReference;
+	readonly metadata?: Record<string, unknown>;
 	readonly timestamp?: number;
 }
 

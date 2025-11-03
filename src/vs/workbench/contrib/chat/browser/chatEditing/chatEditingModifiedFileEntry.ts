@@ -26,7 +26,8 @@ import { ICellEditOperation } from '../../../notebook/common/notebookCommon.js';
 import { ChatEditKind, IModifiedEntryTelemetryInfo, IModifiedFileEntry, IModifiedFileEntryEditorIntegration, ISnapshotEntry, ModifiedFileEntryState } from '../../common/chatEditingService.js';
 import { IChatResponseModel } from '../../common/chatModel.js';
 import { ChatUserAction, IChatService } from '../../common/chatService.js';
-import { IRenWorkspaceStore } from '../../../renViews/common/renWorkspaceStore.js';
+import { IRenMonitorXChangelogBuffer, IMonitorXChangelogDraftSeed } from '../../../renViews/common/renChangelogBuffer.js';
+import { IRenWorkspaceStore, IMonitorXChangelogEntryInput } from '../../../renViews/common/renWorkspaceStore.js';
 
 class AutoAcceptControl {
 	constructor(
@@ -107,6 +108,7 @@ export abstract class AbstractChatEditingModifiedFileEntry extends Disposable im
 		@IInstantiationService protected readonly _instantiationService: IInstantiationService,
 		@IAiEditTelemetryService private readonly _aiEditTelemetryService: IAiEditTelemetryService,
 		@IRenWorkspaceStore protected readonly _renWorkspaceStore: IRenWorkspaceStore,
+		@IRenMonitorXChangelogBuffer protected readonly _changelogBuffer: IRenMonitorXChangelogBuffer,
 	) {
 		super();
 
@@ -180,6 +182,7 @@ export abstract class AbstractChatEditingModifiedFileEntry extends Disposable im
 
 	override dispose(): void {
 		if (--this._refCounter === 0) {
+			this._deleteChangelogDraft();
 			super.dispose();
 		}
 	}
@@ -217,17 +220,7 @@ export abstract class AbstractChatEditingModifiedFileEntry extends Disposable im
 			return;
 		}
 
-		// Create changelog entry BEFORE _doAccept() clears the diff
-		// Check both agentId and modeId for reliable detection
-		if (this._telemetryInfo.agentId || this._telemetryInfo.modeId === 'agent') {
-			try {
-				await this._createChangelogEntry();
-			} catch (error) {
-				// Don't fail accept operation if changelog fails
-				console.error('Failed to create changelog entry:', error);
-				// Errors are already logged by the store
-			}
-		}
+		await this._finalizeChangelogEntry();
 
 		await this._doAccept();
 		transaction(tx => {
@@ -237,8 +230,6 @@ export abstract class AbstractChatEditingModifiedFileEntry extends Disposable im
 
 		this._notifySessionAction('accepted');
 	}
-
-	protected abstract _createChangelogEntry(): Promise<void>;
 
 	protected abstract _doAccept(): Promise<void>;
 
@@ -254,6 +245,7 @@ export abstract class AbstractChatEditingModifiedFileEntry extends Disposable im
 			this._stateObs.set(ModifiedFileEntryState.Rejected, tx);
 			this._autoAcceptCtrl.set(undefined, tx);
 		});
+		this._deleteChangelogDraft();
 	}
 
 	protected abstract _doReject(): Promise<void>;
@@ -362,4 +354,93 @@ export abstract class AbstractChatEditingModifiedFileEntry extends Disposable im
 	abstract resetToInitialContent(): Promise<void>;
 
 	abstract initialContent: string;
+
+	protected shouldRecordChangelog(): boolean {
+		return true;
+	}
+
+	protected getChangelogDraftKey(): string {
+		const sessionId = this._telemetryInfo.sessionId ?? 'unknown-session';
+		return `${sessionId}:${this.modifiedURI.toString()}`;
+	}
+
+	protected async storeChangelogDraft(): Promise<void> {
+		if (!this.shouldRecordChangelog()) {
+			this._deleteChangelogDraft();
+			return;
+		}
+		const draftSeed = await this.buildChangelogDraft();
+		if (!draftSeed) {
+			this._deleteChangelogDraft();
+			return;
+		}
+		const key = this.getChangelogDraftKey();
+		const existing = this._changelogBuffer.getDraft(key);
+		const mergedSeed = existing ? {
+			subject: existing.subject || draftSeed.subject,
+			description: existing.description || draftSeed.description,
+			files: draftSeed.files,
+			...(existing.graph ?? draftSeed.graph ? { graph: draftSeed.graph ?? existing.graph } : {}),
+			...(existing.metadata ?? draftSeed.metadata ? { metadata: draftSeed.metadata ?? existing.metadata } : {}),
+			createdAt: existing.createdAt,
+			updatedAt: Date.now()
+		} : draftSeed;
+		this._changelogBuffer.setDraft(key, mergedSeed);
+	}
+
+	private async _finalizeChangelogEntry(): Promise<void> {
+		if (!this.shouldRecordChangelog()) {
+			return;
+		}
+
+		let entryInput: IMonitorXChangelogEntryInput | undefined = this._changelogBuffer.finalizeDraft(this.getChangelogDraftKey());
+		if (!entryInput) {
+			const draftSeed = await this.buildChangelogDraft();
+			if (draftSeed) {
+				this._changelogBuffer.setDraft(this.getChangelogDraftKey(), draftSeed);
+				entryInput = this._changelogBuffer.finalizeDraft(this.getChangelogDraftKey());
+			}
+		}
+		if (!entryInput) {
+			return;
+		}
+		try {
+			await this._renWorkspaceStore.addChangelogEntry(entryInput);
+		} catch (error) {
+			console.error('Failed to create changelog entry:', error);
+		}
+	}
+
+	private _deleteChangelogDraft(): void {
+		this._changelogBuffer.deleteDraft(this.getChangelogDraftKey());
+	}
+
+	protected abstract buildChangelogDraft(): Promise<IMonitorXChangelogDraftSeed | undefined>;
+
+	protected normalizeSubjectText(explanation: string, maxLength = 80): string | undefined {
+		const primaryLine = explanation.split(/\r?\n/).find(line => line.trim().length) ?? '';
+		let subject = primaryLine.trim();
+		if (!subject) {
+			return undefined;
+		}
+		subject = subject.replace(/\s+/g, ' ');
+		if (/[.!?]$/.test(subject)) {
+			subject = subject.slice(0, -1);
+		}
+		if (subject.length > maxLength) {
+			subject = subject.slice(0, maxLength - 3).trimEnd() + '…';
+		}
+		return subject;
+	}
+
+	protected ensureSentence(text: string): string {
+		const normalized = text.replace(/\s+/g, ' ').trim();
+		if (!normalized) {
+			return '';
+		}
+		if (/[.!?]$/.test(normalized)) {
+			return normalized;
+		}
+		return `${normalized}.`;
+	}
 }

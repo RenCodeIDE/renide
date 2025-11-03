@@ -31,9 +31,10 @@ import { ChatEditKind, IModifiedEntryTelemetryInfo, IModifiedFileEntry, IModifie
 import { IChatResponseModel } from '../../common/chatModel.js';
 import { IChatService } from '../../common/chatService.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
-import { relativePath } from '../../../../../base/common/resources.js';
+import { relativePath, basename } from '../../../../../base/common/resources.js';
 import { IDocumentDiff } from '../../../../../editor/common/diff/documentDiffProvider.js';
 import { IRenWorkspaceStore } from '../../../renViews/common/renWorkspaceStore.js';
+import { IRenMonitorXChangelogBuffer, IMonitorXChangelogDraftSeed } from '../../../renViews/common/renChangelogBuffer.js';
 import { ChatEditingCodeEditorIntegration } from './chatEditingCodeEditorIntegration.js';
 import { AbstractChatEditingModifiedFileEntry } from './chatEditingModifiedFileEntry.js';
 import { ChatEditingTextModelChangeService } from './chatEditingTextModelChangeService.js';
@@ -98,6 +99,7 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 		@IInstantiationService instantiationService: IInstantiationService,
 		@IAiEditTelemetryService aiEditTelemetryService: IAiEditTelemetryService,
 		@IRenWorkspaceStore renWorkspaceStore: IRenWorkspaceStore,
+		@IRenMonitorXChangelogBuffer renChangelogBuffer: IRenMonitorXChangelogBuffer,
 		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
 	) {
 		super(
@@ -112,6 +114,7 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 			instantiationService,
 			aiEditTelemetryService,
 			renWorkspaceStore,
+			renChangelogBuffer,
 		);
 
 		this._docFileEditorModel = this._register(resourceRef).object;
@@ -252,6 +255,12 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 				skipSaveParticipants: true,
 			});
 		}
+
+		try {
+			await this.storeChangelogDraft();
+		} catch (error) {
+			console.error('Failed to update MonitorX draft:', error);
+		}
 	}
 
 
@@ -295,37 +304,35 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 		}
 	}
 
-	protected override async _createChangelogEntry(): Promise<void> {
-		// Get the diff - it should already be computed since we're calling this before _doAccept()
-		// The diff is computed when edits are applied via acceptAgentEdits()
+	protected override async buildChangelogDraft(): Promise<IMonitorXChangelogDraftSeed | undefined> {
 		const diffInfo = this._textModelChangeService.diffInfo.get();
 		if (!diffInfo || diffInfo.identical) {
-			return; // No changes to record
+			return undefined;
 		}
 
-		// Get file path relative to workspace
-		const workspace = this._workspaceContextService.getWorkspace();
-		const workspaceFolder = workspace.folders[0];
-		let filePath: string;
-		if (workspaceFolder) {
-			const relative = relativePath(workspaceFolder.uri, this.originalURI);
-			filePath = relative ?? this.originalURI.fsPath;
-		} else {
-			filePath = this.originalURI.fsPath;
-		}
-
-		// Format diff as unified diff string
+		const filePath = this._resolveWorkspaceRelativePath();
 		const diffString = this._formatUnifiedDiff(diffInfo);
+		if (!diffString.trim()) {
+			return undefined;
+		}
 
-		// Get reason from telemetry info, fallback to default
-		const reason = this._telemetryInfo.editExplanation || 'AI edit applied';
+		let linesAdded = 0;
+		let linesRemoved = 0;
+		for (const change of diffInfo.changes) {
+			linesAdded += Math.max(0, change.modified.endLineNumberExclusive - change.modified.startLineNumber);
+			linesRemoved += Math.max(0, change.original.endLineNumberExclusive - change.original.startLineNumber);
+		}
 
-		// Create changelog entry
-		await this._renWorkspaceStore.addChangelogEntry({
-			filePath,
-			diff: diffString,
-			reason
-		});
+		const subject = this._generateSubject(linesAdded, linesRemoved);
+		const description = this._generateDescription(linesAdded, linesRemoved);
+		const metadata = this._buildMetadata(linesAdded, linesRemoved);
+
+		return {
+			subject,
+			description,
+			files: [{ path: filePath, diff: diffString }],
+			metadata
+		};
 	}
 
 	private _formatUnifiedDiff(diff: IDocumentDiff): string {
@@ -396,6 +403,75 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 
 		return lines.join('\n');
 	}
+
+	private _resolveWorkspaceRelativePath(): string {
+		const workspace = this._workspaceContextService.getWorkspace();
+		const workspaceFolder = workspace.folders[0];
+		if (workspaceFolder) {
+			const relative = relativePath(workspaceFolder.uri, this.originalURI);
+			if (relative) {
+				return relative;
+			}
+		}
+		return this.originalURI.fsPath;
+	}
+
+	private _generateSubject(linesAdded: number, linesRemoved: number): string {
+		const fileName = basename(this.originalURI);
+		const explanation = this._telemetryInfo.editExplanation;
+		const fallback = this._buildFallbackSubject(fileName, linesAdded, linesRemoved);
+		if (!explanation) {
+			return fallback;
+		}
+		const normalized = this.normalizeSubjectText(explanation);
+		return normalized ?? fallback;
+	}
+
+	private _generateDescription(linesAdded: number, linesRemoved: number): string {
+		const parts: string[] = [];
+		const explanation = (this._telemetryInfo.editExplanation || '').trim();
+		if (explanation) {
+			parts.push(this.ensureSentence(explanation));
+		}
+		if (linesAdded || linesRemoved) {
+			parts.push(`Lines changed: +${linesAdded}, -${linesRemoved}.`);
+		}
+		if (this._telemetryInfo.command) {
+			parts.push(`Invoked via ${this._telemetryInfo.command}.`);
+		}
+		if (!parts.length) {
+			parts.push(`Applied AI edit to ${basename(this.originalURI)}.`);
+		}
+		return parts.join(' ');
+	}
+
+	private _buildMetadata(linesAdded: number, linesRemoved: number): Record<string, unknown> {
+		const metadata: Record<string, unknown> = {
+			linesAdded,
+			linesRemoved,
+			sessionId: this._telemetryInfo.sessionId,
+			agentId: this._telemetryInfo.agentId,
+			requestId: this._telemetryInfo.requestId,
+			modeId: this._telemetryInfo.modeId,
+			modelId: this._telemetryInfo.modelId,
+			command: this._telemetryInfo.command
+		};
+		for (const key of Object.keys(metadata)) {
+			if (metadata[key] === undefined) {
+				delete metadata[key];
+			}
+		}
+		return metadata;
+	}
+
+	private _buildFallbackSubject(fileName: string, linesAdded: number, linesRemoved: number): string {
+		const delta = linesAdded + linesRemoved;
+		if (delta === 0) {
+			return `Update ${fileName}`;
+		}
+		return `Update ${fileName} (+${linesAdded}/-${linesRemoved})`;
+	}
+
 
 	protected _createEditorIntegration(editor: IEditorPane): IModifiedFileEntryEditorIntegration {
 		const codeEditor = getCodeEditor(editor.getControl());
