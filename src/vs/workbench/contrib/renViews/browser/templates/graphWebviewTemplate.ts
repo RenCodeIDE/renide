@@ -1009,6 +1009,9 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 
 			const renderHeatmap = heatmap => {
 				ensureCy();
+				if (!cy) {
+					return;
+				}
 				heatmapMode = true;
 				selectionMode = false;
 				updateSelectModeButton();

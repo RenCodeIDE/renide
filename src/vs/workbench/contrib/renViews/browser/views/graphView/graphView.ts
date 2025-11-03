@@ -692,6 +692,12 @@ export class GraphView extends Disposable implements IRenView {
 			if (requestId !== this._renderRequestId) {
 				return;
 			}
+			this.logService.info('[GraphView] Built heatmap payload', {
+				mode: payload.mode,
+				hasHeatmap: !!payload.heatmap,
+				modules: payload.heatmap?.modules.length ?? 0,
+				cells: payload.heatmap?.cells.length ?? 0
+			});
 			this._currentGraph = undefined;
 			this._latestHeatmap = payload.heatmap ?? null;
 			this.updateToolbarUI();

@@ -514,7 +514,11 @@ export class GraphDataBuilder {
 		const windowDays = Math.max(1, Math.min(365, Math.floor(options.windowDays || 90)));
 		const granularity = options.granularity ?? 'topLevel';
 
+		this.logService.info('[GraphDataBuilder] Building heatmap', { windowDays, granularity });
+
 		const commits = await this.readGitLog(workspaceRoot.fsPath, windowDays);
+		this.logService.info('[GraphDataBuilder] Read git log', { commits: commits.length });
+
 		const pathCandidates = new Set<string>();
 		for (const commit of commits) {
 			for (const file of commit.files) {
@@ -533,6 +537,8 @@ export class GraphDataBuilder {
 			}
 		}
 		const { filteredCommits, moduleChurnMap, totalCommits, consideredCommits } = this.reduceCommits(commits, granularity, ignoredPaths);
+		this.logService.info('[GraphDataBuilder] Reduced commits', { totalCommits, consideredCommits, modules: moduleChurnMap.size });
+
 		const heatmap = this.buildHeatmapFromCommits(filteredCommits, moduleChurnMap, {
 			granularity,
 			windowDays,
@@ -540,6 +546,8 @@ export class GraphDataBuilder {
 			totalCommits,
 			consideredCommits,
 		});
+
+		this.logService.info('[GraphDataBuilder] Built heatmap', { modules: heatmap.modules.length, cells: heatmap.cells.length });
 
 		const summary: string[] = [];
 		if (heatmap.modules.length) {
