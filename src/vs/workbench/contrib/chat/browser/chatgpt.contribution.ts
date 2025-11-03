@@ -48,7 +48,6 @@ import {
 	ILanguageModelsService,
 	IChatMessage,
 	IChatMessagePart,
-	IChatResponsePart,
 	ChatMessageRole,
 } from "../common/languageModels.js";
 import {
@@ -56,7 +55,6 @@ import {
 	IToolData,
 	CountTokensCallback,
 	IToolInvocation,
-	IToolResult,
 	IToolResultTextPart,
 } from "../common/languageModelToolsService.js";
 import {
@@ -207,6 +205,11 @@ interface IParsedCodeBlock {
 	readonly content: string;
 }
 
+interface ServerToolResult {
+	readonly toolCallId: string;
+	readonly content: Array<{ type: "text"; value: string }>;
+}
+
 interface ServerRequestOptions {
 	readonly context?: string;
 	readonly modelName?: string;
@@ -215,7 +218,7 @@ interface ServerRequestOptions {
 		description?: string;
 		parameters?: unknown;
 	}>;
-	readonly toolResults?: IToolResult[];
+	readonly toolResults?: ServerToolResult[];
 }
 
 interface IDEStreamPart {
@@ -232,7 +235,7 @@ async function sendChatGPTRequest(
 	requestService: IRequestService,
 	accessToken: string | undefined,
 	serverAddress: string,
-	endpoint: "/api/agent/chat" | "/api/agent/tools",
+	endpoint: "/api/agent/tools",
 	messages: IChatMessage[],
 	token: CancellationToken,
 	options?: ServerRequestOptions,
@@ -260,7 +263,9 @@ async function sendChatGPTRequest(
 	if (options?.modelName) {
 		payload["modelName"] = options.modelName;
 	}
-	if (options?.tools && options.tools.length > 0) {
+	// Tools endpoint requires tools array (even if empty, but server validates min 1)
+	// Always include tools if provided (for /api/agent/tools endpoint)
+	if (options?.tools !== undefined) {
 		payload["tools"] = options.tools;
 	}
 	if (options?.toolResults && options.toolResults.length > 0) {
@@ -365,6 +370,10 @@ async function sendChatGPTRequest(
 				}
 				textAccumulator.length = 0;
 			}
+			const toolCallCountInFinal = aggregatedParts.filter(p => p.toolCall !== undefined).length;
+			logService?.info(
+				`[chatgpt-server] Finalizing response: ${aggregatedParts.length} total parts, ${toolCallCountInFinal} tool call(s)`,
+			);
 			deferred.complete({ parts: aggregatedParts, finishReason, usage });
 		}
 		stream.resolve();
@@ -458,15 +467,20 @@ async function sendChatGPTRequest(
 				case "tool_use":
 					if (part.name && part.toolCallId && part.parameters !== undefined) {
 						// Tool calls are complete in IDE format, emit immediately
-						newParts.push({
+						const toolCallPart = {
 							toolCall: {
 								id: part.toolCallId,
 								name: part.name,
 								args: part.parameters as Record<string, unknown>,
 							},
-						});
-						logService?.debug(
-							`[chatgpt-server] Received tool_use part: ${part.name} (id: ${part.toolCallId})`,
+						};
+						newParts.push(toolCallPart);
+						logService?.info(
+							`[chatgpt-server] Received tool_use part: ${part.name} (id: ${part.toolCallId}), parameters: ${JSON.stringify(Object.keys(part.parameters))}`,
+						);
+					} else {
+						logService?.warn(
+							`[chatgpt-server] Received incomplete tool_use part: name=${part.name}, toolCallId=${part.toolCallId}, parameters=${part.parameters !== undefined}`,
 						);
 					}
 					break;
@@ -489,6 +503,12 @@ async function sendChatGPTRequest(
 		}
 
 		if (newParts.length) {
+			const toolCallCount = newParts.filter(p => p.toolCall !== undefined).length;
+			if (toolCallCount > 0) {
+				logService?.info(
+					`[chatgpt-server] Adding ${toolCallCount} tool call(s) to aggregatedParts (total parts now: ${aggregatedParts.length + newParts.length})`,
+				);
+			}
 			aggregatedParts.push(...newParts);
 			stream.emitOne(newParts);
 		}
@@ -659,7 +679,7 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 
 		const maxIterations = 10;
 		let iteration = 0;
-		let toolResults: IToolResult[] | undefined = undefined;
+		let toolResults: ServerToolResult[] | undefined = undefined;
 
 		try {
 			while (iteration < maxIterations) {
@@ -707,6 +727,13 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				const responseData = await streamingResponse.result;
 				const responseParts = responseData.parts;
 
+				this.logService.info(
+					`[chatgpt-server] Response received: ${responseParts.length} parts total`,
+				);
+				this.logService.debug(
+					`[chatgpt-server] Response parts breakdown: text=${responseParts.filter(p => p.text !== undefined).length}, toolCall=${responseParts.filter(p => p.toolCall !== undefined).length}`,
+				);
+
 				// Extract text and tool calls from response
 				const textParts = responseParts.filter(
 					(part) => part.text !== undefined,
@@ -714,6 +741,15 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				const toolCallParts = responseParts.filter(
 					(part) => part.toolCall !== undefined,
 				);
+
+				this.logService.info(
+					`[chatgpt-server] Filtered tool calls: ${toolCallParts.length} tool call(s) found`,
+				);
+				if (toolCallParts.length > 0) {
+					this.logService.debug(
+						`[chatgpt-server] Tool calls: ${JSON.stringify(toolCallParts.map(p => ({ name: p.toolCall?.name, id: p.toolCall?.id })))}`,
+					);
+				}
 
 				// Add assistant message with text
 				if (textParts.length > 0) {
@@ -725,7 +761,7 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 
 				// Handle tool calls
 				if (toolCallParts.length > 0) {
-					// Add assistant message with tool calls
+					// Add assistant message with tool calls so the next request has proper ordering
 					const toolCalls: OpenAIToolCall[] = toolCallParts.map((part) => ({
 						id: part.toolCall!.id,
 						type: "function",
@@ -760,9 +796,8 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						};
 					}
 
-					// Execute tool calls
-					const toolResultsForNextRequest: IToolResult[] = [];
-					const toolResponseMessages: OpenAIMessage[] = [];
+					// Execute tool calls and collect server-format results
+					const toolResultsForNextRequest: ServerToolResult[] = [];
 
 					for (const callPart of toolCallParts) {
 						if (token.isCancellationRequested) {
@@ -770,38 +805,27 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						}
 
 						const toolName = callPart.toolCall!.name;
+						this.logService.info(
+							`[chatgpt-server] Looking up tool name "${toolName}" in nameToToolId map`,
+						);
+						this.logService.debug(
+							`[chatgpt-server] Available tool names in map: ${Array.from(nameToToolId.keys()).join(", ")}`,
+						);
 						const toolId = nameToToolId.get(toolName);
 						if (!toolId) {
-							this.logService.warn(
-								`[chatgpt-server] model requested unknown tool name ${toolName}`,
+							this.logService.error(
+								`[chatgpt-server] model requested unknown tool name "${toolName}". Available names: ${Array.from(nameToToolId.keys()).join(", ")}`,
 							);
-							// Create error tool result
+							// Create server-format error tool result
 							toolResultsForNextRequest.push({
+								toolCallId: callPart.toolCall!.id,
 								content: [{
-									kind: "text",
-									value: localize(
+									type: "text", value: localize(
 										"chatgpt.unknownToolCall",
 										"ChatGPT requested unknown tool {0}.",
 										toolName,
-									),
+									)
 								}],
-								toolResultError: localize(
-									"chatgpt.unknownToolCall",
-									"ChatGPT requested unknown tool {0}.",
-									toolName,
-								),
-							});
-							// Also add to messages for backward compatibility
-							toolResponseMessages.push({
-								role: "tool",
-								content: JSON.stringify({
-									error: localize(
-										"chatgpt.unknownToolCall",
-										"ChatGPT requested unknown tool {0}.",
-										toolName,
-									),
-								}),
-								tool_call_id: callPart.toolCall!.id,
 							});
 							continue;
 						}
@@ -827,14 +851,14 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 							this.logService.info(
 								`[chatgpt-server] tool ${toolId} completed successfully`,
 							);
-							// Store IToolResult for next request
-							toolResultsForNextRequest.push(result);
-							// Also create message for backward compatibility (though we won't use it)
-							const toolResult = this.createToolResponse(result);
-							toolResponseMessages.push({
-								role: "tool",
-								content: toolResult,
-								tool_call_id: callId,
+							// Convert to server-format tool result
+							const textOutput = (result.content ?? [])
+								.filter((part): part is IToolResultTextPart => part.kind === "text")
+								.map((part) => part.value)
+								.join("\n");
+							toolResultsForNextRequest.push({
+								toolCallId: callId,
+								content: [{ type: "text", value: textOutput }],
 							});
 						} catch (error) {
 							const message =
@@ -842,19 +866,10 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 							this.logService.error(
 								`[chatgpt-server] tool ${toolId} failed: ${message}`,
 							);
-							// Create error tool result
+							// Create server-format error tool result
 							toolResultsForNextRequest.push({
-								content: [{
-									kind: "text",
-									value: message,
-								}],
-								toolResultError: message,
-							});
-							// Also add to messages for backward compatibility
-							toolResponseMessages.push({
-								role: "tool",
-								content: JSON.stringify({ error: message }),
-								tool_call_id: callId,
+								toolCallId: callId,
+								content: [{ type: "text", value: message }],
 							});
 						}
 					}
@@ -868,14 +883,13 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						);
 					}
 
-					// Set tool results for next iteration
+					// Set server-format tool results for next iteration
 					toolResults = toolResultsForNextRequest;
 					this.logService.info(
 						`[chatgpt-server] Collected ${toolResults.length} tool results for next request`,
 					);
 
-					// Add tool responses to messages for backward compatibility
-					messages.push(...toolResponseMessages);
+					// Do not embed tool results in messages; send via toolResults next
 					iteration++;
 					continue;
 				}
@@ -1097,20 +1111,25 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 	private getAllowedToolData(requestId: string): IToolData[] {
 		const selected = this.requestTools.get(requestId);
 		if (!selected) {
+			// No tools explicitly selected - return ALL registered tools (like Gemini)
+			const allTools = Array.from(this.languageModelToolsService.getTools());
 			this.logService.debug(
-				`[chatgpt] no tools selected for request ${requestId}`,
+				`[chatgpt] no tools selected for request ${requestId}, using all ${allTools.length} registered tools`,
 			);
-			return [];
+			return allTools;
 		}
 		const allowedIds = Object.keys(selected).filter(
 			(id) => selected[id] === true,
 		);
 		if (!allowedIds.length) {
+			// Tools selected but none enabled - return ALL registered tools (like Gemini)
+			const allTools = Array.from(this.languageModelToolsService.getTools());
 			this.logService.debug(
-				`[chatgpt] tool selection for request ${requestId} contained no enabled entries`,
+				`[chatgpt] tool selection for request ${requestId} contained no enabled entries, using all ${allTools.length} registered tools`,
 			);
-			return [];
+			return allTools;
 		}
+		// Filter to only selected tools
 		const allowedSet = new Set(allowedIds);
 		const allowedTools: IToolData[] = [];
 		for (const tool of this.languageModelToolsService.getTools()) {
@@ -1245,7 +1264,7 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				content.push({ type: "text", value: msg.content });
 			}
 
-			// Handle tool calls in assistant messages
+			// Include tool calls so the following toolResults are valid against provider ordering
 			if (msg.tool_calls && msg.tool_calls.length > 0) {
 				for (const toolCall of msg.tool_calls) {
 					try {
@@ -1275,7 +1294,7 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		token: CancellationToken,
 		model: string,
 		context?: string,
-		toolResults?: IToolResult[],
+		toolResults?: ServerToolResult[],
 	): Promise<ChatGPTStreamingResponse> {
 		const toolNames = tools.map((f) => f.function.name);
 		this.logService.info(
@@ -1303,27 +1322,19 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			parameters: tool.function.parameters,
 		}));
 
-		// Determine endpoint:
-		// - Use /api/agent/tools if we have tools available (required for tool calling)
-		// - Use /api/agent/tools if we have toolResults (meaning tools were used previously)
-		// - Otherwise use /api/agent/chat
-		// NOTE: /api/agent/tools endpoint requires tools array, so we must have tools OR toolResults
-		const hasTools = serverTools.length > 0;
+		// Always use /api/agent/tools endpoint (never use /api/agent/chat)
+		const endpoint: "/api/agent/tools" = "/api/agent/tools";
 		const hasToolResults = toolResults && toolResults.length > 0;
-		const endpoint: "/api/agent/chat" | "/api/agent/tools" =
-			(hasTools || hasToolResults) ? "/api/agent/tools" : "/api/agent/chat";
 
-		this.logService.debug(
+		this.logService.info(
 			`[chatgpt-server] Using endpoint: ${endpoint} (tools=${serverTools.length}, toolResults=${toolResults?.length || 0})`,
 		);
+		this.logService.debug(
+			`[chatgpt-server] Tools being sent: ${serverTools.map((t) => t.name).join(", ") || "none"}`,
+		);
 
-		// Ensure we always send tools when using /api/agent/tools endpoint
-		// (required by server schema validation)
-		if (endpoint === "/api/agent/tools" && !hasTools && hasToolResults) {
-			this.logService.warn(
-				`[chatgpt-server] Using /api/agent/tools without tools array but with toolResults. This may fail server validation.`,
-			);
-		}
+		// Always send tools (should always have at least one from getAllowedToolData)
+		const toolsToSend = serverTools;
 
 		const response = await sendChatGPTRequest(
 			this.requestService,
@@ -1335,8 +1346,8 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			{
 				context,
 				modelName: model,
-				// Always send tools if available (required for /api/agent/tools endpoint)
-				tools: hasTools ? serverTools : undefined,
+				// Always send tools (required for /api/agent/tools endpoint)
+				tools: toolsToSend,
 				toolResults: hasToolResults ? toolResults : undefined,
 			},
 			this.logService,
@@ -1389,36 +1400,7 @@ class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		};
 	}
 
-	private createToolResponse(result?: IToolResult): string {
-		if (!result) {
-			return JSON.stringify({
-				error: localize(
-					"chatgpt.toolNoResult",
-					"Tool call produced no result.",
-				),
-			});
-		}
-
-		const response: Record<string, unknown> = {};
-		const textOutput = (result.content ?? [])
-			.filter((part): part is IToolResultTextPart => part.kind === "text")
-			.map((part) => part.value)
-			.join("\n")
-			.trim();
-		if (textOutput.length) {
-			response["text"] = textOutput;
-		}
-		if (result.toolResultError) {
-			response["error"] = result.toolResultError;
-		}
-		if (result.toolMetadata !== undefined) {
-			response["metadata"] = result.toolMetadata;
-		}
-		if (!Object.keys(response).length) {
-			response["text"] = "";
-		}
-		return JSON.stringify(response);
-	}
+	// Removed legacy tool response builder; server expects toolResults array
 
 	private async buildMessages(
 		request: IChatAgentRequest,
@@ -1985,114 +1967,7 @@ class ChatGPTAgentContribution
 				}
 			},
 			async sendChatRequest(modelId, messages, _from, _options, token) {
-				logService.info(
-					`[chatgpt-server] sendChatRequest called: modelId=${modelId}, messages=${messages.length}`,
-				);
-				const selectedModelConfig = CHATGPT_MODELS.find(
-					(m) => m.identifier === modelId,
-				);
-				const modelToUse =
-					selectedModelConfig?.id ||
-					CHATGPT_MODELS.find((m) => m.isDefault)?.id ||
-					"gpt-5-nano-2025-08-07";
-				logService.info(
-					`[chatgpt-server] Resolved model to use: ${modelToUse} (from identifier ${modelId})`,
-				);
-				try {
-					// Get access token
-					const accessToken = await secretStorageService.get("ren.auth.accessToken");
-					if (!accessToken) {
-						throw new Error(
-							localize(
-								"chatgpt.noAuthToken",
-								"Authentication token is missing. Please sign in to use ChatGPT.",
-							),
-						);
-					}
-
-					const response = await sendChatGPTRequest(
-						requestService,
-						accessToken,
-						normalizedServerAddress,
-						"/api/agent/chat",
-						messages, // Already in IDE format
-						token,
-						{
-							modelName: modelToUse,
-						},
-						logService,
-					);
-					logService.info(
-						`[chatgpt] sendChatRequest succeeded for model ${modelToUse}`,
-					);
-					let sawText = false;
-					let functionCallName: string | undefined;
-
-					const stream = (async function* (): AsyncIterable<
-						IChatResponsePart | IChatResponsePart[]
-					> {
-						for await (const chunk of response.stream) {
-							if (token.isCancellationRequested) {
-								break;
-							}
-							const chatParts: IChatResponsePart[] = [];
-							for (const part of chunk) {
-								if (part.text !== undefined && part.text.length > 0) {
-									sawText = true;
-									chatParts.push({ type: "text", value: part.text });
-								} else if (part.toolCall !== undefined) {
-									functionCallName = part.toolCall.name;
-								}
-							}
-							if (chatParts.length === 1) {
-								yield chatParts[0];
-							} else if (chatParts.length > 1) {
-								yield chatParts;
-							}
-						}
-						if (
-							!sawText &&
-							functionCallName &&
-							!token.isCancellationRequested
-						) {
-							yield {
-								type: "text",
-								value: localize(
-									"chatgpt.provider.functionCall",
-									"ChatGPT wants to run tool {0}, but tools are only available in agent mode. Retry there or disable tool usage.",
-									functionCallName,
-								),
-							};
-						}
-					})();
-
-					return {
-						stream,
-						result: response.result
-							.then((): IChatAgentResult => {
-								logService.info(
-									`[chatgpt] Request completed successfully for model ${modelToUse}`,
-								);
-								return {
-									details: "chatgpt-response",
-									metadata: { model: modelToUse },
-								};
-							})
-							.catch((error) => {
-								logService.error(
-									`[chatgpt] Request failed for model ${modelToUse}:`,
-									error,
-								);
-								throw error;
-							}),
-					};
-				} catch (error) {
-					logService.error(
-						`[chatgpt] Error in sendChatRequest for model ${modelToUse}:`,
-						error,
-					);
-					throw error;
-				}
+				throw new Error('OpenAI models must run in agent mode. Use ChatGPT agent.');
 			},
 			async provideTokenCount(_modelId, message, _token) {
 				if (typeof message === "string") {

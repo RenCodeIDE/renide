@@ -23,7 +23,9 @@ export async function resolveMarketplaceHeaders(version: string,
 
 	const headers: IHeaders = {
 		'X-Market-Client-Id': `VSCode ${version}`,
-		'User-Agent': `VSCode ${version} (${productService.nameShort})`
+		'User-Agent': `VSCode ${version} (${productService.nameShort})`,
+		'Accept': 'application/json;api-version=3.0-preview.1',
+		'Content-Type': 'application/json'
 	};
 
 	if (supportsTelemetry(productService, environmentService) && getTelemetryLevel(configurationService) === TelemetryLevel.USAGE) {

@@ -5,6 +5,7 @@
 
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
+import { env } from '../../../../base/common/process.js';
 import { IContextKey, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { IProductService } from '../../../../platform/product/common/productService.js';
@@ -50,7 +51,28 @@ export class RenAuthService extends Disposable implements IRenAuthService {
 		@IContextKeyService contextKeyService: IContextKeyService
 	) {
 		super();
-		this.apiClient = new RenApiClient(this.requestService, this.productService, this.logService);
+
+		// Read SERVER_ADDRESS from environment (which gets userEnv from preload script)
+		const serverAddress = env["SERVER_ADDRESS"];
+
+		if (serverAddress) {
+			let normalizedServerAddress = serverAddress.trim();
+			// Add protocol if missing
+			if (!normalizedServerAddress.startsWith('http://') && !normalizedServerAddress.startsWith('https://')) {
+				this.logService.warn(
+					`[RenAuth] SERVER_ADDRESS missing protocol, assuming https://. Original: ${normalizedServerAddress}`
+				);
+				normalizedServerAddress = `https://${normalizedServerAddress}`;
+			}
+			// Remove trailing slash
+			normalizedServerAddress = normalizedServerAddress.replace(/\/+$/, '');
+
+			this.logService.info(`[RenAuth] Using SERVER_ADDRESS from environment: ${normalizedServerAddress}`);
+			this.apiClient = new RenApiClient(this.requestService, this.productService, this.logService, normalizedServerAddress);
+		} else {
+			this.logService.info('[RenAuth] SERVER_ADDRESS not found in environment, using product.json apiBaseUrl');
+			this.apiClient = new RenApiClient(this.requestService, this.productService, this.logService);
+		}
 		this._contextKey = RenAuthContextKey.bindTo(contextKeyService);
 		this._register(this.secretStorageService.onDidChangeSecret((key) => {
 			if (key === REN_AUTH_STORAGE_KEYS.ACCESS_TOKEN || key === REN_AUTH_STORAGE_KEYS.REFRESH_TOKEN) {

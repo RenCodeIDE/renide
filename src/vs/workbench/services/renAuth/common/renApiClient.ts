@@ -10,12 +10,16 @@ import { IRequestService, asJson, asText, isSuccess } from '../../../../platform
 import { IRenUser } from './renAuth.js';
 
 export class RenApiClient {
+	private readonly serverAddress: string | undefined;
 
 	constructor(
 		private readonly requestService: IRequestService,
 		private readonly productService: IProductService,
-		private readonly logService: ILogService
-	) { }
+		private readonly logService: ILogService,
+		serverAddress?: string
+	) {
+		this.serverAddress = serverAddress;
+	}
 
 	async login(email: string, password: string): Promise<ILoginResponse> {
 		const url = this.getEndpoint('/api/auth/login');
@@ -238,10 +242,20 @@ export class RenApiClient {
 	}
 
 	private getEndpoint(path: string): string {
-		const baseUrl = this.productService.renAccount?.apiBaseUrl;
+		// Prefer SERVER_ADDRESS from environment if available, otherwise fall back to product.json
+		let baseUrl = this.serverAddress;
+
 		if (!baseUrl) {
-			throw new Error('Ren API base URL not configured in product.json');
+			baseUrl = this.productService.renAccount?.apiBaseUrl;
 		}
+
+		if (!baseUrl) {
+			throw new Error('Ren API base URL not configured. Set SERVER_ADDRESS environment variable or configure apiBaseUrl in product.json');
+		}
+
+		// Normalize the URL (ensure it doesn't end with a slash)
+		baseUrl = baseUrl.trim().replace(/\/+$/, '');
+
 		return `${baseUrl}${path}`;
 	}
 }

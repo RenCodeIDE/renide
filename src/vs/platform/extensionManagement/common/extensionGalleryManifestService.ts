@@ -43,11 +43,11 @@ export class ExtensionGalleryManifestService extends Disposable implements IExte
 
 		const resources = [
 			{
-				id: `${extensionsGallery.serviceUrl}/extensionquery`,
+				id: `${extensionsGallery.serviceUrl}/extensionquery?api-version=3.0-preview.1`,
 				type: ExtensionGalleryResourceType.ExtensionQueryService
 			},
 			{
-				id: `${extensionsGallery.serviceUrl}/vscode/{publisher}/{name}/latest`,
+				id: `${extensionsGallery.serviceUrl}/{publisher}/{name}/latest`,
 				type: ExtensionGalleryResourceType.ExtensionLatestVersionUri
 			},
 			{

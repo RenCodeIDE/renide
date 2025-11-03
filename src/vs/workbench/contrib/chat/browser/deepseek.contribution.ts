@@ -500,14 +500,15 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 	private readonly requestTools = new Map<string, UserSelectedTools>();
 	private readonly fallbackCountTokens: CountTokensCallback = async (input: string, _token: CancellationToken) => input.length;
 
-	constructor(
-		private readonly requestService: IRequestService,
-		private readonly apiKey: string,
-		private readonly logService: ILogService,
-		private readonly textModelService: ITextModelService,
-		private readonly languageModelToolsService: ILanguageModelToolsService,
-		private readonly languageModelsService: ILanguageModelsService
-	) { }
+    constructor(
+        private readonly requestService: IRequestService,
+        private readonly apiKey: string,
+        private readonly logService: ILogService,
+        private readonly textModelService: ITextModelService,
+        private readonly languageModelToolsService: ILanguageModelToolsService,
+        private readonly languageModelsService: ILanguageModelsService,
+        private readonly chatAgentService: IChatAgentService
+    ) { }
 
 	private resolveModelFromRequest(userSelectedModelId?: string): string {
 		if (userSelectedModelId) {
@@ -526,14 +527,24 @@ class DeepSeekAgentImplementation implements IChatAgentImplementation {
 			return { details: 'cancelled' };
 		}
 
-		// Check if user selected a model from a different vendor
-		if (request.userSelectedModelId) {
-			const selectedModelMetadata = this.languageModelsService.lookupLanguageModel(request.userSelectedModelId);
-			if (selectedModelMetadata && selectedModelMetadata.vendor !== 'google') {
-				// Delegate to language models service for cross-vendor model
-				return this.invokeViaLanguageModelsService(request, progress, history, token, request.userSelectedModelId);
-			}
-		}
+        // Check if user selected a model from a different vendor
+        if (request.userSelectedModelId) {
+            const selectedModelMetadata = this.languageModelsService.lookupLanguageModel(request.userSelectedModelId);
+            if (selectedModelMetadata && selectedModelMetadata.vendor !== 'google') {
+                // If the selected model is OpenAI, route through the ChatGPT agent so tools execute
+                if (selectedModelMetadata.vendor === 'openai' || request.userSelectedModelId.startsWith('openai/')) {
+                    return this.chatAgentService.invokeAgent(
+                        'chatgpt.local',
+                        request,
+                        progress,
+                        history,
+                        token,
+                    );
+                }
+                // Otherwise, delegate to language models service for cross-vendor model
+                return this.invokeViaLanguageModelsService(request, progress, history, token, request.userSelectedModelId);
+            }
+        }
 
 		// Resolve the model to use from request
 		const modelToUse = this.resolveModelFromRequest(request.userSelectedModelId);
@@ -1315,7 +1326,7 @@ class DeepSeekAgentContribution extends Disposable implements IWorkbenchContribu
 		});
 		this._register(registration);
 
-		const implementation = new DeepSeekAgentImplementation(this.requestService, apiKey, logService, textModelService, languageModelToolsService, languageModelsService);
+        const implementation = new DeepSeekAgentImplementation(this.requestService, apiKey, logService, textModelService, languageModelToolsService, languageModelsService, this.chatAgentService);
 		this._register(this.chatAgentService.registerAgentImplementation(agentId, implementation));
 
 		const enabledKey = contextKeyService.createKey(ChatContextKeys.enabled.key, true);

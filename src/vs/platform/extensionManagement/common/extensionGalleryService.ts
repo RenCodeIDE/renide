@@ -500,6 +500,29 @@ function toExtension(galleryExtension: IRawGalleryExtension, version: IRawGaller
 		coreTranslations: getCoreTranslationAssets(version)
 	};
 
+	// Prefer resourceUrlTemplate (e.g., Open VSX) when available to build asset URLs
+	const resourceTemplate = productService.extensionsGallery?.resourceUrlTemplate;
+	if (resourceTemplate) {
+		const computedVersion = version.targetPlatform && version.targetPlatform !== TargetPlatform.UNDEFINED && version.targetPlatform !== TargetPlatform.UNKNOWN && version.targetPlatform !== TargetPlatform.UNIVERSAL
+			? `${version.version}+${version.targetPlatform}`
+			: version.version;
+		const makeUrl = (path: string): IGalleryExtensionAsset => {
+			const url = resourceTemplate
+				.replace('{publisher}', encodeURIComponent(galleryExtension.publisher.publisherName))
+				.replace('{name}', encodeURIComponent(galleryExtension.extensionName))
+				.replace('{version}', encodeURIComponent(computedVersion))
+				.replace('{path}', path);
+			return { uri: url, fallbackUri: url };
+		};
+
+		// Override or fill common assets with deterministic file paths
+		assets.manifest = makeUrl('extension/package.json');
+		assets.readme = assets.readme ?? makeUrl('README.md');
+		assets.changelog = assets.changelog ?? makeUrl('CHANGELOG.md');
+		assets.license = assets.license ?? makeUrl('LICENSE');
+		assets.icon = assets.icon ?? makeUrl('icon.png');
+	}
+
 	const detailsViewUri = getExtensionGalleryManifestResourceUri(extensionGalleryManifest, galleryExtension.linkType ?? ExtensionGalleryResourceType.ExtensionDetailsViewUri);
 	const publisherViewUri = getExtensionGalleryManifestResourceUri(extensionGalleryManifest, galleryExtension.publisher.linkType ?? ExtensionGalleryResourceType.PublisherViewUri);
 	const ratingViewUri = getExtensionGalleryManifestResourceUri(extensionGalleryManifest, galleryExtension.ratingLinkType ?? ExtensionGalleryResourceType.ExtensionRatingViewUri);
@@ -1629,13 +1652,70 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 		return '';
 	}
 
-	async getManifest(extension: IGalleryExtension, token: CancellationToken): Promise<IExtensionManifest | null> {
-		if (extension.assets.manifest) {
-			const context = await this.getAsset(extension.identifier.id, extension.assets.manifest, AssetType.Manifest, extension.version, {}, token);
-			const text = await asTextOrError(context);
-			return text ? JSON.parse(text) : null;
+	private async tryGetManifestFromResource(extension: IGalleryExtension, manifestAsset: IGalleryExtensionAsset, token: CancellationToken): Promise<IExtensionManifest | null | undefined> {
+		const url = this.buildResourceUrl(extension, extension.version, 'extension/package.json', manifestAsset);
+		if (!url) {
+			return undefined;
 		}
-		return null;
+		try {
+			const headers = await this.commonHeadersPromise;
+			const options: IRequestOptions = { type: 'GET', url, timeout: REQUEST_TIME_OUT, headers };
+			const context = await this.requestService.request(options, token);
+			if (context.res.statusCode !== 200) {
+				return undefined;
+			}
+			const contentType = String(context.res.headers['content-type'] || '').toLowerCase();
+			if (!contentType.includes('application/json')) {
+				return undefined;
+			}
+			const text = await asTextOrError(context);
+			if (!text) {
+				return null;
+			}
+			const trimmed = text.trimStart();
+			if (trimmed.startsWith('<')) {
+				return undefined;
+			}
+			return JSON.parse(text);
+		} catch {
+			return undefined;
+		}
+	}
+
+	async getManifest(extension: IGalleryExtension, token: CancellationToken): Promise<IExtensionManifest | null> {
+		const manifestAsset = extension.assets.manifest;
+		if (!manifestAsset) {
+			return null;
+		}
+		if (this.productService.extensionsGallery?.resourceUrlTemplate) {
+			const manifest = await this.tryGetManifestFromResource(extension, manifestAsset, token);
+			if (manifest !== undefined) {
+				return manifest;
+			}
+		}
+		const context = await this.getAsset(extension.identifier.id, manifestAsset, AssetType.Manifest, extension.version, {}, token);
+		const text = await asTextOrError(context);
+		if (!text) {
+			return null;
+		}
+		const trimmed = text.trimStart();
+		if (trimmed.startsWith('<')) {
+			const manifest = this.productService.extensionsGallery?.resourceUrlTemplate
+				? await this.tryGetManifestFromResource(extension, manifestAsset, token)
+				: undefined;
+			if (manifest !== undefined) {
+				return manifest;
+			}
+			return null;
+		}
+		try {
+			return JSON.parse(text);
+		} catch {
+			const manifest = this.productService.extensionsGallery?.resourceUrlTemplate
+				? await this.tryGetManifestFromResource(extension, manifestAsset, token)
+				: undefined;
+			return manifest ?? null;
+		}
 	}
 
 	async getCoreTranslation(extension: IGalleryExtension, languageId: string): Promise<ITranslation | null> {
@@ -1663,6 +1743,86 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 
 	async getAllCompatibleVersions(extensionIdentifier: IExtensionIdentifier, includePreRelease: boolean, targetPlatform: TargetPlatform): Promise<IGalleryExtensionVersion[]> {
 		return this.getVersions(extensionIdentifier, { version: includePreRelease ? VersionKind.Latest : VersionKind.Release, targetPlatform });
+	}
+
+	private extractTargetPlatformFromUrl(url?: string): string | undefined {
+		if (!url) {
+			return undefined;
+		}
+		try {
+			const parsed = new URL(url);
+			const tp = parsed.searchParams.get('targetPlatform');
+			return tp ? decodeURIComponent(tp) : undefined;
+		} catch {
+			const queryIndex = url.indexOf('?');
+			if (queryIndex === -1) {
+				return undefined;
+			}
+			const query = url.substring(queryIndex + 1).split('&');
+			for (const pair of query) {
+				const [key, value] = pair.split('=');
+				if (key === 'targetPlatform' && value) {
+					return decodeURIComponent(value);
+				}
+			}
+		}
+		return undefined;
+	}
+
+	private extractTargetPlatformFromAsset(asset?: IGalleryExtensionAsset | null): string | undefined {
+		if (!asset) {
+			return undefined;
+		}
+		return this.extractTargetPlatformFromUrl(asset.uri) ?? this.extractTargetPlatformFromUrl(asset.fallbackUri);
+	}
+
+	private normalizeTargetPlatform(targetPlatform?: string | TargetPlatform): string | undefined {
+		if (!targetPlatform) {
+			return undefined;
+		}
+		const value = String(targetPlatform);
+		if (!value) {
+			return undefined;
+		}
+		const lower = value.toLowerCase();
+		if (lower === 'undefined' || lower === 'unknown' || lower === 'universal') {
+			return undefined;
+		}
+		return value;
+	}
+
+	private resolveTargetPlatform(asset?: IGalleryExtensionAsset | null, fallback?: string | TargetPlatform): string {
+		return this.extractTargetPlatformFromAsset(asset)
+			?? this.normalizeTargetPlatform(fallback)
+			?? TargetPlatform.DARWIN_ARM64;
+	}
+
+	private computeVersionWithPlatform(version: string, targetPlatform?: string): string {
+		if (!targetPlatform || version.includes('+')) {
+			return version;
+		}
+		return `${version}+${targetPlatform}`;
+	}
+
+	private buildResourceUrlFromIdentifier(extensionIdentifier: string, version: string, path: string, asset?: IGalleryExtensionAsset | null, defaultTargetPlatform?: string | TargetPlatform): string | undefined {
+		const template = this.productService.extensionsGallery?.resourceUrlTemplate;
+		if (!template) {
+			return undefined;
+		}
+		const [publisherPart, namePart] = extensionIdentifier.split('.', 2);
+		const publisher = encodeURIComponent(publisherPart ?? '');
+		const name = encodeURIComponent(namePart ?? '');
+		const targetPlatform = this.resolveTargetPlatform(asset, defaultTargetPlatform);
+		const versionWithPlatform = this.computeVersionWithPlatform(version, targetPlatform);
+		return template
+			.replace('{publisher}', publisher)
+			.replace('{name}', name)
+			.replace('{version}', encodeURIComponent(versionWithPlatform))
+			.replace('{path}', path);
+	}
+
+	private buildResourceUrl(extension: IGalleryExtension, version: string, path: string, asset?: IGalleryExtensionAsset | null): string | undefined {
+		return this.buildResourceUrlFromIdentifier(extension.identifier.id, version, path, asset, extension.properties.targetPlatform);
 	}
 
 	private async getVersions(extensionIdentifier: IExtensionIdentifier, onlyCompatible?: { version: VersionKind; targetPlatform: TargetPlatform }): Promise<IGalleryExtensionVersion[]> {
@@ -1747,10 +1907,34 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 		const fallbackUrl = asset.fallbackUri;
 		const firstOptions = { ...options, url, timeout: REQUEST_TIME_OUT };
 
+		// Early-bypass for manifest: if legacy HTML endpoint detected, jump straight to Open VSX file API
+		if (this.productService.extensionsGallery?.resourceUrlTemplate && assetType === AssetType.Manifest) {
+			const looksLegacy = /\/vscode\/asset\//.test(url) || /Microsoft\.VisualStudio\.Code\.Manifest$/i.test(url);
+			if (looksLegacy) {
+				const ovsx = this.buildResourceUrlFromIdentifier(extension, extensionVersion, 'extension/package.json', asset);
+				if (ovsx) {
+					return this.requestService.request({ ...options, url: ovsx, timeout: REQUEST_TIME_OUT }, token);
+				}
+			}
+		}
+
 		let context;
 		try {
 			context = await this.requestService.request(firstOptions, token);
 			if (context.res.statusCode === 200) {
+				// For manifest, require JSON; otherwise allow as-is
+				if (assetType === AssetType.Manifest) {
+					const contentType = String(context.res.headers['content-type'] || '').toLowerCase();
+					if (!contentType.includes('application/json')) {
+						// Retry via Open VSX template
+						if (this.productService.extensionsGallery?.resourceUrlTemplate) {
+							const ovsx = this.buildResourceUrlFromIdentifier(extension, extensionVersion, 'extension/package.json', asset);
+							if (ovsx) {
+								return this.requestService.request({ ...options, url: ovsx, timeout: REQUEST_TIME_OUT }, token);
+							}
+						}
+					}
+				}
 				return context;
 			}
 			const message = await asTextOrError(context);
@@ -1791,7 +1975,47 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 				endToEndId: this.getHeaderValue(context?.res.headers, END_END_ID_HEADER_NAME),
 			});
 
+			// Try provider-declared fallback first
 			const fallbackOptions = { ...options, url: fallbackUrl, timeout: REQUEST_TIME_OUT };
+			try {
+				const resp = await this.requestService.request(fallbackOptions, token);
+				const ct = String(resp.res.headers['content-type'] || '').toLowerCase();
+				const okForManifest = assetType !== AssetType.Manifest || ct.includes('application/json');
+				if (resp.res.statusCode === 200 && okForManifest) {
+					return resp;
+				}
+			} catch {
+				// ignore and continue to Open VSX fallback
+			}
+
+			// If Open VSX resource template is configured, synthesize a deterministic URL for known asset types
+			let path: string | undefined;
+			switch (assetType) {
+				case AssetType.Manifest:
+					path = 'extension/package.json';
+					break;
+				case AssetType.Details:
+					path = 'README.md';
+					break;
+				case AssetType.Changelog:
+					path = 'CHANGELOG.md';
+					break;
+				case AssetType.License:
+					path = 'LICENSE';
+					break;
+				case AssetType.Icon:
+					path = 'icon.png';
+					break;
+			}
+			if (path) {
+				const urlFromTemplate = this.buildResourceUrlFromIdentifier(extension, extensionVersion, path, asset);
+				if (urlFromTemplate) {
+					const ovsxOptions = { ...options, url: urlFromTemplate, timeout: REQUEST_TIME_OUT };
+					return this.requestService.request(ovsxOptions, token);
+				}
+			}
+
+			// Last attempt: return provider fallback (may be HTML; caller will handle)
 			return this.requestService.request(fallbackOptions, token);
 		}
 	}
