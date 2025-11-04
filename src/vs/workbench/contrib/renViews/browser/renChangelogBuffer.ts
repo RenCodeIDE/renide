@@ -8,6 +8,7 @@ import { Emitter, Event } from '../../../../base/common/event.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IRenMonitorXChangelogBuffer, IMonitorXChangelogDraft, IMonitorXChangelogDraftSeed, IMonitorXChangelogDraftUpdate, IMonitorXDraftChangeEvent } from '../common/renChangelogBuffer.js';
 import { IMonitorXChangelogEntryInput, IMonitorXChangelogFileChange, IMonitorXChangelogGraphReference } from '../common/renWorkspaceStore.js';
+import { IMonitorXChangelogFilter, matchesFilter } from '../common/renChangelogFilter.js';
 
 interface IInternalDraft {
 	readonly sessionId: string;
@@ -32,17 +33,39 @@ export class RenMonitorXChangelogBuffer extends Disposable implements IRenMonito
 		return draft ? this.toExternalDraft(draft) : undefined;
 	}
 
-	listDrafts(): readonly IMonitorXChangelogDraft[] {
-		return Array.from(this.drafts.values(), draft => this.toExternalDraft(draft));
+	listDrafts(filter?: IMonitorXChangelogFilter): readonly IMonitorXChangelogDraft[] {
+		const allDrafts = Array.from(this.drafts.values(), draft => this.toExternalDraft(draft));
+		if (!filter) {
+			return allDrafts;
+		}
+		return allDrafts.filter(draft => {
+			return matchesFilter({
+				subject: draft.subject,
+				description: draft.description,
+				files: draft.files,
+				metadata: draft.metadata,
+				createdAt: draft.createdAt,
+				updatedAt: draft.updatedAt
+			}, filter);
+		});
 	}
 
 	setDraft(sessionId: string, seed: IMonitorXChangelogDraftSeed): IMonitorXChangelogDraft {
+		if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+			console.log('[MonitorX Buffer] setDraft called', { sessionId, hasSubject: !!seed.subject, filesCount: seed.files?.length, subject: seed.subject?.substring(0, 50) });
+		}
 		const subject = this.normalizeSubject(seed.subject);
 		const files = this.normalizeFiles(seed.files);
 		if (!files.length) {
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				console.error('[MonitorX Buffer] setDraft: No files', { sessionId, filesInput: seed.files });
+			}
 			throw new Error('MonitorX changelog drafts require at least one file change.');
 		}
 		if (!subject) {
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				console.error('[MonitorX Buffer] setDraft: Empty subject', { sessionId, subjectInput: seed.subject });
+			}
 			throw new Error('MonitorX changelog drafts require a non-empty subject.');
 		}
 		const description = this.normalizeDescription(seed.description);
@@ -60,6 +83,9 @@ export class RenMonitorXChangelogBuffer extends Disposable implements IRenMonito
 			...(metadata ? { metadata } : {})
 		};
 		this.drafts.set(sessionId, draft);
+		if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+			console.log('[MonitorX Buffer] setDraft: draft stored, emitting change', { sessionId, draftCount: this.drafts.size });
+		}
 		this.emitChange(sessionId, draft);
 		return this.toExternalDraft(draft);
 	}
@@ -135,6 +161,9 @@ export class RenMonitorXChangelogBuffer extends Disposable implements IRenMonito
 	}
 
 	private emitChange(sessionId: string, draft: IInternalDraft | undefined): void {
+		if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+			console.log('[MonitorX Buffer] emitChange: firing event', { sessionId, hasDraft: !!draft, draftSubject: draft?.subject?.substring(0, 50) });
+		}
 		this._onDidChangeDraft.fire({ sessionId, draft: draft ? this.toExternalDraft(draft) : undefined });
 	}
 

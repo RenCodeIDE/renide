@@ -1161,13 +1161,10 @@ export class ChatEditingModifiedNotebookEntry extends AbstractChatEditingModifie
 
 	private _generateNotebookSubject(added: number, modified: number, deleted: number): string {
 		const fileName = `${basename(this.originalURI)} notebook`;
-		const explanation = this._telemetryInfo.editExplanation;
 		const fallback = this._buildNotebookFallbackSubject(fileName, added, modified, deleted);
-		if (!explanation) {
-			return fallback;
-		}
-		const normalized = this.normalizeSubjectText(explanation);
-		return normalized ?? fallback;
+		const raw = this._telemetryInfo.editExplanation;
+		const subject = typeof raw === 'string' ? raw.trim() : '';
+		return subject || fallback;
 	}
 
 	private _generateNotebookDescription(added: number, modified: number, deleted: number): string {

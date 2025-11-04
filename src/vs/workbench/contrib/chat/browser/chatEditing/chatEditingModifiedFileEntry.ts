@@ -365,49 +365,129 @@ export abstract class AbstractChatEditingModifiedFileEntry extends Disposable im
 	}
 
 	protected async storeChangelogDraft(): Promise<void> {
+		if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+			console.log('[MonitorX] storeChangelogDraft: called');
+		}
 		if (!this.shouldRecordChangelog()) {
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				console.log('[MonitorX] storeChangelogDraft: shouldRecordChangelog returned false');
+			}
 			this._deleteChangelogDraft();
 			return;
 		}
 		const draftSeed = await this.buildChangelogDraft();
-		if (!draftSeed) {
+		if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+			console.log('[MonitorX] storeChangelogDraft: buildChangelogDraft result', { hasSeed: !!draftSeed, hasSubject: !!draftSeed?.subject, filesCount: draftSeed?.files?.length, subject: draftSeed?.subject?.substring(0, 50) });
+		}
+		if (!draftSeed || !draftSeed.subject || !draftSeed.files || draftSeed.files.length === 0) {
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				console.warn('[MonitorX] storeChangelogDraft: Invalid draftSeed', { hasSeed: !!draftSeed, hasSubject: !!draftSeed?.subject, filesCount: draftSeed?.files?.length });
+			}
 			this._deleteChangelogDraft();
 			return;
 		}
 		const key = this.getChangelogDraftKey();
 		const existing = this._changelogBuffer.getDraft(key);
+		if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+			console.log('[MonitorX] storeChangelogDraft: key and existing', { key, hasExisting: !!existing, existingSubject: existing?.subject?.substring(0, 50) });
+		}
+		const mergedSubject = existing?.subject?.trim() || draftSeed.subject.trim();
+		const mergedDescription = existing?.description?.trim() || draftSeed.description.trim();
+		if (!mergedSubject) {
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				console.error('[MonitorX] storeChangelogDraft: Merged subject is empty', { key, existingSubject: existing?.subject, seedSubject: draftSeed.subject });
+			}
+			return;
+		}
 		const mergedSeed = existing ? {
-			subject: existing.subject || draftSeed.subject,
-			description: existing.description || draftSeed.description,
+			subject: mergedSubject,
+			description: mergedDescription,
 			files: draftSeed.files,
 			...(existing.graph ?? draftSeed.graph ? { graph: draftSeed.graph ?? existing.graph } : {}),
 			...(existing.metadata ?? draftSeed.metadata ? { metadata: draftSeed.metadata ?? existing.metadata } : {}),
 			createdAt: existing.createdAt,
 			updatedAt: Date.now()
 		} : draftSeed;
-		this._changelogBuffer.setDraft(key, mergedSeed);
+		try {
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				console.log('[MonitorX] storeChangelogDraft: calling setDraft', { key, subject: mergedSeed.subject.substring(0, 50), filesCount: mergedSeed.files.length });
+			}
+			this._changelogBuffer.setDraft(key, mergedSeed);
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				const afterDraft = this._changelogBuffer.getDraft(key);
+				console.log('[MonitorX] storeChangelogDraft: setDraft succeeded', { key, hasDraft: !!afterDraft, draftSubject: afterDraft?.subject?.substring(0, 50) });
+			}
+		} catch (error) {
+			console.error('[MonitorX] storeChangelogDraft failed:', error, { key, subject: mergedSeed.subject, filesCount: mergedSeed.files.length });
+		}
 	}
 
 	private async _finalizeChangelogEntry(): Promise<void> {
 		if (!this.shouldRecordChangelog()) {
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				console.log('[MonitorX] _finalizeChangelogEntry: shouldRecordChangelog returned false');
+			}
 			return;
 		}
 
-		let entryInput: IMonitorXChangelogEntryInput | undefined = this._changelogBuffer.finalizeDraft(this.getChangelogDraftKey());
+		const key = this.getChangelogDraftKey();
+		if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+			console.log('[MonitorX] _finalizeChangelogEntry: called', { key });
+		}
+		let entryInput: IMonitorXChangelogEntryInput | undefined = this._changelogBuffer.finalizeDraft(key);
 		if (!entryInput) {
-			const draftSeed = await this.buildChangelogDraft();
-			if (draftSeed) {
-				this._changelogBuffer.setDraft(this.getChangelogDraftKey(), draftSeed);
-				entryInput = this._changelogBuffer.finalizeDraft(this.getChangelogDraftKey());
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				console.log('[MonitorX] _finalizeChangelogEntry: No draft in buffer, trying to build one', { key });
+			}
+			// Retry a few times to wait for diff to be computed
+			let draftSeed: IMonitorXChangelogDraftSeed | undefined;
+			for (let attempt = 0; attempt < 5; attempt++) {
+				if (attempt > 0) {
+					await new Promise(resolve => setTimeout(resolve, 100));
+				}
+				draftSeed = await this.buildChangelogDraft();
+				if (draftSeed && draftSeed.subject && draftSeed.files && draftSeed.files.length > 0) {
+					break;
+				}
+				if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+					console.log('[MonitorX] _finalizeChangelogEntry: Retry attempt', { attempt, hasSeed: !!draftSeed });
+				}
+			}
+			if (draftSeed && draftSeed.subject && draftSeed.files && draftSeed.files.length > 0) {
+				try {
+					this._changelogBuffer.setDraft(key, draftSeed);
+					entryInput = this._changelogBuffer.finalizeDraft(key);
+				} catch (error) {
+					if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+						console.error('[MonitorX] _finalizeChangelogEntry: Failed to set draft', error, { key, subject: draftSeed.subject });
+					}
+				}
+			} else {
+				if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+					console.warn('[MonitorX] _finalizeChangelogEntry: Cannot build valid draft on finalize after retries', { key, hasSeed: !!draftSeed, hasSubject: !!draftSeed?.subject, filesCount: draftSeed?.files?.length });
+				}
+			}
+		} else {
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				console.log('[MonitorX] _finalizeChangelogEntry: Found draft in buffer', { key, subject: entryInput.subject?.substring(0, 50) });
 			}
 		}
 		if (!entryInput) {
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				console.warn('[MonitorX] _finalizeChangelogEntry: No entry to finalize', { key });
+			}
 			return;
 		}
 		try {
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				console.log('[MonitorX] _finalizeChangelogEntry: Adding to workspace store', { key, subject: entryInput.subject?.substring(0, 50) });
+			}
 			await this._renWorkspaceStore.addChangelogEntry(entryInput);
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				console.log('[MonitorX] _finalizeChangelogEntry: Successfully added to workspace store', { key });
+			}
 		} catch (error) {
-			console.error('Failed to create changelog entry:', error);
+			console.error('[MonitorX] Failed to create changelog entry:', error, { key, subject: entryInput.subject });
 		}
 	}
 

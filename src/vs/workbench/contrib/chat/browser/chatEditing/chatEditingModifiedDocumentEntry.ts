@@ -256,10 +256,17 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 			});
 		}
 
-		try {
-			await this.storeChangelogDraft();
-		} catch (error) {
-			console.error('Failed to update MonitorX draft:', error);
+		if (isLastEdits) {
+			try {
+				if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+					console.log('[MonitorX] acceptAgentEdits: calling storeChangelogDraft', { isLastEdits, resource: resource.toString() });
+				}
+				// Wait a bit for diff to compute (it's async but not awaited in acceptAgentEdits)
+				await new Promise(resolve => setTimeout(resolve, 100));
+				await this.storeChangelogDraft();
+			} catch (error) {
+				console.error('[MonitorX] acceptAgentEdits: Failed to update MonitorX draft:', error);
+			}
 		}
 	}
 
@@ -306,13 +313,25 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 
 	protected override async buildChangelogDraft(): Promise<IMonitorXChangelogDraftSeed | undefined> {
 		const diffInfo = this._textModelChangeService.diffInfo.get();
+		if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+			console.log('[MonitorX] buildChangelogDraft: called', { hasDiffInfo: !!diffInfo, isIdentical: diffInfo?.identical, uri: this.originalURI.toString() });
+		}
 		if (!diffInfo || diffInfo.identical) {
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				console.warn('[MonitorX] buildChangelogDraft: No diffInfo or identical', { hasDiffInfo: !!diffInfo, isIdentical: diffInfo?.identical });
+			}
 			return undefined;
 		}
 
 		const filePath = this._resolveWorkspaceRelativePath();
 		const diffString = this._formatUnifiedDiff(diffInfo);
+		if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+			console.log('[MonitorX] buildChangelogDraft: diffString generated', { filePath, diffLength: diffString.length, diffTrimmed: diffString.trim().length });
+		}
 		if (!diffString.trim()) {
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				console.warn('[MonitorX] buildChangelogDraft: Empty diffString', { filePath });
+			}
 			return undefined;
 		}
 
@@ -418,18 +437,23 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 
 	private _generateSubject(linesAdded: number, linesRemoved: number): string {
 		const fileName = basename(this.originalURI);
-		const explanation = this._telemetryInfo.editExplanation;
 		const fallback = this._buildFallbackSubject(fileName, linesAdded, linesRemoved);
-		if (!explanation) {
-			return fallback;
-		}
-		const normalized = this.normalizeSubjectText(explanation);
-		return normalized ?? fallback;
+		const raw = this._telemetryInfo.editExplanation;
+		const subject = typeof raw === 'string' ? raw.trim() : '';
+		return subject || fallback;
 	}
 
 	private _generateDescription(linesAdded: number, linesRemoved: number): string {
 		const parts: string[] = [];
 		const explanation = (this._telemetryInfo.editExplanation || '').trim();
+		if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+			console.log('[MonitorX changelog]', {
+				file: this.originalURI.toString(),
+				explanation,
+				linesAdded,
+				linesRemoved
+			});
+		}
 		if (explanation) {
 			parts.push(this.ensureSentence(explanation));
 		}

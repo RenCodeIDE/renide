@@ -12,14 +12,13 @@ export interface IMonitorXRenderOptions {
 	readonly limit?: number;
 	readonly emptyMessage?: string;
 	readonly onFileClick?: (filePath: string) => void;
+	readonly onViewDiff?: (file: IMonitorXChangelogFileChange) => void;
 }
 
 export interface IMonitorXDraftRenderOptions extends IMonitorXRenderOptions {
 	readonly onSubjectChange?: (sessionId: string, subject: string) => void;
 	readonly onDescriptionChange?: (sessionId: string, description: string) => void;
 }
-
-const MAX_DIFF_DISPLAY_LENGTH = 800;
 
 export function renderMonitorXChangelog(target: HTMLElement, entries: IMonitorXChangelogEntry[], options: IMonitorXRenderOptions = {}): void {
 	target.textContent = '';
@@ -96,57 +95,25 @@ function appendFileSection(container: HTMLElement, file: IMonitorXChangelogFileC
 	}
 
 	header.appendChild(label);
+
+	const viewBtn = document.createElement('button');
+	viewBtn.type = 'button';
+	viewBtn.className = 'ren-monitorx-view-diff';
+	viewBtn.textContent = 'View diff';
+	if (options.onViewDiff && file.diff) {
+		viewBtn.onclick = (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			options.onViewDiff!(file);
+		};
+	} else {
+		viewBtn.disabled = true;
+	}
+	header.appendChild(viewBtn);
+
 	section.appendChild(header);
 
-	if (file.diff) {
-		section.appendChild(renderDiff(file.diff));
-	}
-
 	container.appendChild(section);
-}
-
-function renderDiff(diffText: string): HTMLElement {
-	const diffBlock = document.createElement('div');
-	diffBlock.className = 'ren-monitorx-changelog-entry-diff';
-
-	let text = diffText;
-	const truncated = text.length > MAX_DIFF_DISPLAY_LENGTH;
-	if (truncated) {
-		const truncatedText = text.slice(0, MAX_DIFF_DISPLAY_LENGTH);
-		const lastNewline = truncatedText.lastIndexOf('\n');
-		text = lastNewline > 0 ? truncatedText.slice(0, lastNewline + 1) : truncatedText;
-	}
-
-	const diffLines = text.split('\n');
-	for (const line of diffLines) {
-		const lineSpan = document.createElement('span');
-		lineSpan.className = 'monitorx-diff-line';
-
-		if (line.startsWith('+')) {
-			lineSpan.classList.add('monitorx-diff-line-add');
-			lineSpan.textContent = line;
-		} else if (line.startsWith('-')) {
-			lineSpan.classList.add('monitorx-diff-line-delete');
-			lineSpan.textContent = line;
-		} else if (line.startsWith('@@')) {
-			lineSpan.classList.add('monitorx-diff-hunk-header');
-			lineSpan.textContent = line;
-		} else {
-			lineSpan.textContent = line;
-		}
-
-		diffBlock.appendChild(lineSpan);
-		diffBlock.appendChild(document.createElement('br'));
-	}
-
-	if (truncated) {
-		const ellipsis = document.createElement('span');
-		ellipsis.className = 'monitorx-diff-line';
-		ellipsis.textContent = '…';
-		diffBlock.appendChild(ellipsis);
-	}
-
-	return diffBlock;
 }
 
 export function renderMonitorXChangelogDrafts(target: HTMLElement, drafts: readonly IMonitorXChangelogDraft[], options: IMonitorXDraftRenderOptions = {}): void {

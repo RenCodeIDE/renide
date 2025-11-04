@@ -8,6 +8,7 @@ import { Event, Emitter } from '../../../../base/common/event.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IMonitorXChangelogEntryInput, IMonitorXChangelogFileChange, IMonitorXChangelogGraphReference } from './renWorkspaceStore.js';
+import { IMonitorXChangelogFilter } from './renChangelogFilter.js';
 
 export interface IMonitorXChangelogDraft {
 	readonly sessionId: string;
@@ -51,7 +52,7 @@ export interface IRenMonitorXChangelogBuffer {
 	readonly onDidChangeDraft: Event<IMonitorXDraftChangeEvent>;
 
 	getDraft(sessionId: string): IMonitorXChangelogDraft | undefined;
-	listDrafts(): readonly IMonitorXChangelogDraft[];
+	listDrafts(filter?: IMonitorXChangelogFilter): readonly IMonitorXChangelogDraft[];
 	setDraft(sessionId: string, seed: IMonitorXChangelogDraftSeed): IMonitorXChangelogDraft;
 	updateDraft(sessionId: string, update: IMonitorXChangelogDraftUpdate): IMonitorXChangelogDraft | undefined;
 	deleteDraft(sessionId: string): void;

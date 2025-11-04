@@ -5,6 +5,7 @@
 
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { Event } from '../../../../base/common/event.js';
+import { IMonitorXChangelogFilter } from './renChangelogFilter.js';
 
 export const IRenWorkspaceStore = createDecorator<IRenWorkspaceStore>('renWorkspaceStore');
 
@@ -81,6 +82,6 @@ export interface IRenWorkspaceStore {
 	// MonitorX changelog APIs
 	addChangelogEntry(entry: IMonitorXChangelogEntryInput): Promise<IMonitorXChangelogEntry>;
 	getRecentChangelogEntries(limit?: number): Promise<IMonitorXChangelogEntry[]>;
-	getAllChangelogEntries(): Promise<IMonitorXChangelogEntry[]>;
+	getAllChangelogEntries(filter?: IMonitorXChangelogFilter): Promise<IMonitorXChangelogEntry[]>;
 }
 

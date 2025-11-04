@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IRenWorkspaceStore, IMonitorXChangelogEntry, IMonitorXChangelogEntryInput, IMonitorXChangelogFileChange, IMonitorXChangelogGraphReference } from '../common/renWorkspaceStore.js';
+import { IMonitorXChangelogFilter, matchesFilter } from '../common/renChangelogFilter.js';
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { VSBuffer } from '../../../../base/common/buffer.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
@@ -227,9 +228,13 @@ export class RenWorkspaceStore extends Disposable implements IRenWorkspaceStore 
 		return this.cloneChangelogEntries(recent);
 	}
 
-	async getAllChangelogEntries(): Promise<IMonitorXChangelogEntry[]> {
+	async getAllChangelogEntries(filter?: IMonitorXChangelogFilter): Promise<IMonitorXChangelogEntry[]> {
 		await this.ensureChangelogLoaded();
-		return this.cloneChangelogEntries();
+		const entries = this.cloneChangelogEntries();
+		if (!filter) {
+			return entries;
+		}
+		return entries.filter(entry => matchesFilter(entry, filter));
 	}
 
 	// Helper method to get storage key with prefix
