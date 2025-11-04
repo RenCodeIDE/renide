@@ -28,8 +28,16 @@ interface IMonitorXChatMessageDom {
 	readonly userBubble: HTMLElement;
 	readonly assistantBubble: HTMLElement;
 	readonly pendingElement: HTMLElement;
+	readonly userRow: HTMLElement;
+	readonly assistantRow: HTMLElement;
+	readonly userTimestamp?: HTMLElement;
+	readonly assistantTimestamp?: HTMLElement;
+	readonly userCopyButton?: HTMLElement;
+	assistantCopyButton?: HTMLElement; // Not readonly - we update it when response arrives
+	readonly typingIndicator?: HTMLElement;
 	responseListener?: IDisposable;
 	responseMarkdown?: IRenderedMarkdown;
+	readonly request: IChatRequestModel;
 }
 
 export class MonitorXChatController extends Disposable {
@@ -43,6 +51,7 @@ export class MonitorXChatController extends Disposable {
 	private readonly inputArea: HTMLTextAreaElement;
 	private readonly sendButton: HTMLButtonElement;
 	private readonly composer: HTMLElement;
+	private readonly suggestedPromptsContainer: HTMLElement;
 
 	private _isSending = false;
 
@@ -79,6 +88,13 @@ export class MonitorXChatController extends Disposable {
 		this.inputArea.placeholder = "Ask MonitorX Assistant";
 		this.inputArea.setAttribute("aria-label", "Chat input");
 		this.composer.appendChild(this.inputArea);
+
+		// Suggested prompts container
+		this.suggestedPromptsContainer = document.createElement("div");
+		this.suggestedPromptsContainer.className = "ren-monitorx-chat-suggested-prompts";
+		this.composer.appendChild(this.suggestedPromptsContainer);
+
+		this.renderSuggestedPrompts();
 
 		const composerFooter = document.createElement("div");
 		composerFooter.className = "ren-monitorx-chat-composer-footer";
@@ -134,11 +150,35 @@ export class MonitorXChatController extends Disposable {
 			this.updateComposerState();
 			this.updateCharacterCount();
 			this.autoResizeTextarea();
+			this.updateSuggestedPromptsVisibility();
 		};
 		this.inputArea.addEventListener("input", onInputChange);
 		this._register(
 			toDisposable(() =>
 				this.inputArea.removeEventListener("input", onInputChange)
+			)
+		);
+
+		const onInputFocus = () => {
+			this.updateSuggestedPromptsVisibility();
+		};
+		this.inputArea.addEventListener("focus", onInputFocus);
+		this._register(
+			toDisposable(() =>
+				this.inputArea.removeEventListener("focus", onInputFocus)
+			)
+		);
+
+		const onInputBlur = () => {
+			// Delay hiding to allow clicking on prompts
+			setTimeout(() => {
+				this.updateSuggestedPromptsVisibility();
+			}, 200);
+		};
+		this.inputArea.addEventListener("blur", onInputBlur);
+		this._register(
+			toDisposable(() =>
+				this.inputArea.removeEventListener("blur", onInputBlur)
 			)
 		);
 
@@ -185,6 +225,10 @@ export class MonitorXChatController extends Disposable {
 		this.inputArea.focus();
 	}
 
+	isInputFocused(): boolean {
+		return document.activeElement === this.inputArea;
+	}
+
 	private setModel(model: IChatModel): void {
 		if (this._model === model) {
 			return;
@@ -223,7 +267,11 @@ export class MonitorXChatController extends Disposable {
 	private onModelChange(event: IChatChangeEvent): void {
 		switch (event.kind) {
 			case "addRequest": {
-				this.ensureMessageItem(event.request);
+				const item = this.ensureMessageItem(event.request);
+				// Show typing indicator immediately when request is added
+				if (item.typingIndicator) {
+					item.typingIndicator.style.display = "";
+				}
 				this.updateEmptyState();
 				this.scrollToBottom();
 				break;
@@ -262,18 +310,86 @@ export class MonitorXChatController extends Disposable {
 		}
 	}
 
+	private formatMessageTimestamp(timestamp: number): string {
+		const now = Date.now();
+		const diffMs = now - timestamp;
+		const diffMins = Math.floor(diffMs / 60000);
+		const diffHours = Math.floor(diffMs / 3600000);
+		const diffDays = Math.floor(diffMs / 86400000);
+
+		if (diffMins < 1) {
+			return "Just now";
+		} else if (diffMins < 60) {
+			return `${diffMins}m ago`;
+		} else if (diffHours < 24) {
+			return `${diffHours}h ago`;
+		} else if (diffDays < 7) {
+			return `${diffDays}d ago`;
+		} else {
+			return new Date(timestamp).toLocaleString();
+		}
+	}
+
+	private async copyToClipboard(text: string): Promise<boolean> {
+		try {
+			await navigator.clipboard.writeText(text);
+			return true;
+		} catch (error) {
+			console.error("Failed to copy to clipboard:", error);
+			return false;
+		}
+	}
+
+	private createCopyButton(
+		text: string,
+		onCopy: () => void
+	): HTMLElement {
+		const copyButton = document.createElement("button");
+		copyButton.className = "ren-monitorx-chat-message-copy";
+		copyButton.setAttribute("aria-label", "Copy message");
+		copyButton.setAttribute("title", "Copy message");
+
+		const copyIcon = document.createElement("span");
+		copyIcon.className = "codicon codicon-copy";
+		copyButton.appendChild(copyIcon);
+
+		copyButton.addEventListener("click", async (e) => {
+			e.stopPropagation();
+			const success = await this.copyToClipboard(text);
+			if (success) {
+				// Visual feedback: change icon to checkmark
+				copyIcon.className = "codicon codicon-check";
+				copyButton.setAttribute("aria-label", "Copied!");
+				setTimeout(() => {
+					copyIcon.className = "codicon codicon-copy";
+					copyButton.setAttribute("aria-label", "Copy message");
+				}, 2000);
+			}
+			onCopy();
+		});
+
+		return copyButton;
+	}
+
 	private ensureMessageItem(
 		request: IChatRequestModel
 	): IMonitorXChatMessageDom {
 		let entry = this.messageItems.get(request.id);
 		if (entry) {
 			entry.userBubble.textContent = request.message.text;
+			// Update timestamp if it exists
+			if (entry.userTimestamp) {
+				entry.userTimestamp.textContent = this.formatMessageTimestamp(
+					request.timestamp
+				);
+			}
 			return entry;
 		}
 
 		const root = document.createElement("div");
 		root.className = "ren-monitorx-chat-message";
 
+		// User message row
 		const userRow = document.createElement("div");
 		userRow.className = "ren-monitorx-chat-message-row user";
 
@@ -282,13 +398,30 @@ export class MonitorXChatController extends Disposable {
 		userLabel.textContent = request.username || "You";
 		userRow.appendChild(userLabel);
 
+		// User bubble container (for hover effects)
+		const userBubbleContainer = document.createElement("div");
+		userBubbleContainer.className = "ren-monitorx-chat-bubble-container";
+
 		const userBubble = document.createElement("div");
 		userBubble.className = "ren-monitorx-chat-bubble user";
 		userBubble.textContent = request.message.text;
-		userRow.appendChild(userBubble);
+
+		// Copy button for user message
+		const userCopyButton = this.createCopyButton(request.message.text, () => {});
+		userBubbleContainer.appendChild(userBubble);
+		userBubbleContainer.appendChild(userCopyButton);
+
+		userRow.appendChild(userBubbleContainer);
+
+		// User timestamp
+		const userTimestamp = document.createElement("div");
+		userTimestamp.className = "ren-monitorx-chat-message-timestamp";
+		userTimestamp.textContent = this.formatMessageTimestamp(request.timestamp);
+		userRow.appendChild(userTimestamp);
 
 		root.appendChild(userRow);
 
+		// Assistant message row
 		const assistantRow = document.createElement("div");
 		assistantRow.className = "ren-monitorx-chat-message-row assistant";
 
@@ -297,20 +430,67 @@ export class MonitorXChatController extends Disposable {
 		assistantLabel.textContent = "Assistant";
 		assistantRow.appendChild(assistantLabel);
 
+		// Assistant bubble container
+		const assistantBubbleContainer = document.createElement("div");
+		assistantBubbleContainer.className = "ren-monitorx-chat-bubble-container";
+
 		const assistantBubble = document.createElement("div");
 		assistantBubble.className = "ren-monitorx-chat-bubble assistant";
-		assistantRow.appendChild(assistantBubble);
+
+		// Typing indicator (shown while waiting for response)
+		const typingIndicator = document.createElement("div");
+		typingIndicator.className = "ren-monitorx-chat-typing-indicator";
+		typingIndicator.setAttribute("aria-label", "AI is thinking");
+		const typingDots = document.createElement("span");
+		typingDots.className = "ren-monitorx-chat-typing-dots";
+		typingDots.textContent = "●";
+		typingIndicator.appendChild(typingDots);
+		typingIndicator.appendChild(document.createTextNode(" AI is thinking..."));
 
 		const pending = document.createElement("div");
 		pending.className = "ren-monitorx-chat-pending";
-		pending.textContent = "Waiting for response…";
+		pending.appendChild(typingIndicator);
+
+		assistantBubbleContainer.appendChild(assistantBubble);
 		assistantBubble.appendChild(pending);
+
+		// Copy button for assistant (will be added when response is ready)
+		const assistantCopyButton = document.createElement("button");
+		assistantCopyButton.className =
+			"ren-monitorx-chat-message-copy ren-monitorx-chat-message-copy-hidden";
+		assistantCopyButton.setAttribute("aria-label", "Copy message");
+		assistantCopyButton.setAttribute("title", "Copy message");
+		const assistantCopyIcon = document.createElement("span");
+		assistantCopyIcon.className = "codicon codicon-copy";
+		assistantCopyButton.appendChild(assistantCopyIcon);
+
+		assistantBubbleContainer.appendChild(assistantCopyButton);
+		assistantRow.appendChild(assistantBubbleContainer);
+
+		// Assistant timestamp (will be updated when response completes)
+		const assistantTimestamp = document.createElement("div");
+		assistantTimestamp.className = "ren-monitorx-chat-message-timestamp";
+		assistantTimestamp.textContent = "";
+		assistantRow.appendChild(assistantTimestamp);
 
 		root.appendChild(assistantRow);
 
 		this.conversationContainer.appendChild(root);
 
-		entry = { root, userBubble, assistantBubble, pendingElement: pending };
+		entry = {
+			root,
+			userBubble,
+			assistantBubble,
+			pendingElement: pending,
+			userRow,
+			assistantRow,
+			userTimestamp,
+			assistantTimestamp,
+			userCopyButton,
+			assistantCopyButton,
+			typingIndicator,
+			request,
+		};
 		this.messageItems.set(request.id, entry);
 		return entry;
 	}
@@ -322,14 +502,34 @@ export class MonitorXChatController extends Disposable {
 		entry.responseListener?.dispose();
 		entry.responseMarkdown?.dispose();
 
+		// Hide typing indicator when response starts
+		if (entry.typingIndicator) {
+			entry.typingIndicator.style.display = "none";
+		}
+
 		const render = () => {
 			entry.responseMarkdown?.dispose();
 			clearNode(entry.assistantBubble);
 
 			const markdown = response.response.getMarkdown();
 			if (!markdown) {
+				// Still waiting for response
+				if (entry.typingIndicator) {
+					entry.typingIndicator.style.display = "";
+				}
 				entry.assistantBubble.appendChild(entry.pendingElement);
+				// Update copy button to be hidden
+				if (entry.assistantCopyButton) {
+					entry.assistantCopyButton.classList.add(
+						"ren-monitorx-chat-message-copy-hidden"
+					);
+				}
 				return;
+			}
+
+			// Response is ready - hide typing indicator
+			if (entry.typingIndicator) {
+				entry.typingIndicator.style.display = "none";
 			}
 
 			const rendered = this.markdownRenderer.render(
@@ -343,10 +543,61 @@ export class MonitorXChatController extends Disposable {
 			);
 			entry.responseMarkdown = rendered;
 			entry.assistantBubble.appendChild(rendered.element);
+
+			// Update copy button for assistant response
+			if (entry.assistantCopyButton) {
+				entry.assistantCopyButton.classList.remove(
+					"ren-monitorx-chat-message-copy-hidden"
+				);
+
+				// Update copy button handler with actual response text
+				// Remove old listeners by cloning
+				const newCopyButton = entry.assistantCopyButton.cloneNode(
+					true
+				) as HTMLElement;
+				newCopyButton.className = entry.assistantCopyButton.className;
+				newCopyButton.setAttribute("aria-label", "Copy message");
+				newCopyButton.setAttribute("title", "Copy message");
+
+				const newCopyIcon = newCopyButton.querySelector(
+					".codicon"
+				) as HTMLElement;
+				if (newCopyIcon) {
+					newCopyButton.addEventListener("click", async (e) => {
+						e.stopPropagation();
+						const success = await this.copyToClipboard(markdown);
+						if (success) {
+							newCopyIcon.className = "codicon codicon-check";
+							newCopyButton.setAttribute("aria-label", "Copied!");
+							setTimeout(() => {
+								newCopyIcon.className = "codicon codicon-copy";
+								newCopyButton.setAttribute("aria-label", "Copy message");
+							}, 2000);
+						}
+					});
+				}
+
+				entry.assistantCopyButton.replaceWith(newCopyButton);
+				entry.assistantCopyButton = newCopyButton;
+			}
+
+			// Update assistant timestamp when response completes
+			if (entry.assistantTimestamp && response.isComplete) {
+				entry.assistantTimestamp.textContent = this.formatMessageTimestamp(
+					Date.now()
+				);
+			}
 		};
 
 		render();
-		entry.responseListener = response.onDidChange(() => render());
+		entry.responseListener = response.onDidChange(() => {
+			render();
+			// Update typing indicator visibility based on response state
+			if (entry.typingIndicator) {
+				const isInProgress = !response.isComplete && !response.isCanceled;
+				entry.typingIndicator.style.display = isInProgress ? "" : "none";
+			}
+		});
 		this._register(entry.responseListener);
 	}
 
@@ -463,5 +714,53 @@ export class MonitorXChatController extends Disposable {
 	private showStatus(message: string): void {
 		this.statusMessage.textContent = message;
 		this.statusMessage.classList.toggle("hidden", !message);
+	}
+
+	private readonly suggestedPrompts = [
+		"Explain this code",
+		"Fix bugs in my code",
+		"Generate unit tests",
+		"Write documentation",
+		"Refactor code",
+		"Optimize performance",
+		"Add error handling",
+		"Review code quality",
+	];
+
+	private renderSuggestedPrompts(): void {
+		clearNode(this.suggestedPromptsContainer);
+
+		const promptGrid = document.createElement("div");
+		promptGrid.className = "ren-monitorx-chat-suggested-prompts-grid";
+
+		for (const prompt of this.suggestedPrompts) {
+			const promptButton = document.createElement("button");
+			promptButton.className = "ren-monitorx-chat-suggested-prompt";
+			promptButton.textContent = prompt;
+			promptButton.setAttribute("aria-label", `Use prompt: ${prompt}`);
+			promptButton.addEventListener("click", () => {
+				this.inputArea.value = prompt;
+				this.inputArea.focus();
+				this.updateComposerState();
+				this.updateCharacterCount();
+				this.autoResizeTextarea();
+				this.updateSuggestedPromptsVisibility();
+			});
+			promptGrid.appendChild(promptButton);
+		}
+
+		this.suggestedPromptsContainer.appendChild(promptGrid);
+		this.updateSuggestedPromptsVisibility();
+	}
+
+	private updateSuggestedPromptsVisibility(): void {
+		const isEmpty = this.inputArea.value.trim().length === 0;
+		const isFocused = document.activeElement === this.inputArea;
+		const shouldShow = isEmpty && isFocused;
+
+		this.suggestedPromptsContainer.classList.toggle(
+			"ren-monitorx-chat-suggested-prompts-visible",
+			shouldShow
+		);
 	}
 }

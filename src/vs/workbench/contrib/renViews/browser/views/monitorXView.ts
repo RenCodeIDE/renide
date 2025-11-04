@@ -30,6 +30,10 @@ export class MonitorXView extends Disposable implements IRenView {
 	private _chatHistoryContainer: HTMLElement | null = null;
 	private _chatHistoryExpanded: ISettableObservable<boolean> | undefined;
 	private _searchFilter: string = "";
+	private _sectionCollapsedStates: Map<
+		ChatSessionRecency,
+		ISettableObservable<boolean>
+	> = new Map();
 
 	constructor(
 		@IRenWorkspaceStore private readonly workspaceStore: IRenWorkspaceStore,
@@ -210,12 +214,143 @@ export class MonitorXView extends Disposable implements IRenView {
 		);
 		await this._chatController.initialize();
 		await this.renderChatHistory();
+
+		// Setup keyboard shortcuts
+		this.setupKeyboardShortcuts(contentArea, searchInput);
+	}
+
+	private setupKeyboardShortcuts(
+		container: HTMLElement,
+		searchInput: HTMLInputElement
+	): void {
+		const onKeyDown = (event: KeyboardEvent) => {
+			// Only handle shortcuts when the view is visible and focused
+			if (!this._container || !this._container.contains(document.activeElement)) {
+				return;
+			}
+
+			const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
+			const modKey = isMac ? event.metaKey : event.ctrlKey;
+
+			// Cmd/Ctrl + K: Focus search input
+			if (modKey && event.key === "k" && !event.shiftKey && !event.altKey) {
+				event.preventDefault();
+				searchInput.focus();
+				searchInput.select();
+				return;
+			}
+
+			// Cmd/Ctrl + N: Start new chat
+			if (modKey && event.key === "n" && !event.shiftKey && !event.altKey) {
+				event.preventDefault();
+				void this.startNewChat();
+				return;
+			}
+
+			// Esc: Context-aware
+			if (event.key === "Escape" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+				// If search input is focused, clear search
+				if (document.activeElement === searchInput) {
+					searchInput.value = "";
+					this._searchFilter = "";
+					void this.renderChatHistory();
+					searchInput.blur();
+					// Focus chat input
+					this._chatController?.focusInput();
+					return;
+				}
+				// If chat input is focused, clear it
+				// (This is handled by the chat controller itself)
+			}
+
+			// Arrow Up/Down: Navigate history (when not in input)
+			if (
+				(event.key === "ArrowUp" || event.key === "ArrowDown") &&
+				document.activeElement !== searchInput &&
+				!this._chatController?.isInputFocused()
+			) {
+				event.preventDefault();
+				this.navigateHistory(event.key === "ArrowDown");
+				return;
+			}
+
+			// Enter: Select highlighted history item
+			if (
+				event.key === "Enter" &&
+				!event.shiftKey &&
+				!event.ctrlKey &&
+				!event.metaKey &&
+				!event.altKey &&
+				this._selectedHistoryIndex >= 0 &&
+				document.activeElement !== searchInput &&
+				!this._chatController?.isInputFocused()
+			) {
+				event.preventDefault();
+				const historyItems = Array.from(
+					this._chatHistoryContainer?.querySelectorAll<HTMLElement>(
+						".ren-monitorx-chat-history-item"
+					) ?? []
+				);
+				if (historyItems[this._selectedHistoryIndex]) {
+					historyItems[this._selectedHistoryIndex].click();
+				}
+				return;
+			}
+		};
+
+		container.addEventListener("keydown", onKeyDown);
+		this._register({
+			dispose: () => container.removeEventListener("keydown", onKeyDown),
+		});
+	}
+
+	private _selectedHistoryIndex: number = -1;
+
+	private navigateHistory(down: boolean): void {
+		if (!this._chatHistoryContainer) {
+			return;
+		}
+
+		const historyItems = Array.from(
+			this._chatHistoryContainer.querySelectorAll<HTMLElement>(
+				".ren-monitorx-chat-history-item"
+			)
+		);
+
+		if (historyItems.length === 0) {
+			return;
+		}
+
+		if (down) {
+			this._selectedHistoryIndex =
+				(this._selectedHistoryIndex + 1) % historyItems.length;
+		} else {
+			this._selectedHistoryIndex =
+				this._selectedHistoryIndex <= 0
+					? historyItems.length - 1
+					: this._selectedHistoryIndex - 1;
+		}
+
+		// Update visual selection
+		historyItems.forEach((item, index) => {
+			item.classList.toggle("active", index === this._selectedHistoryIndex);
+			if (index === this._selectedHistoryIndex) {
+				item.scrollIntoView({ block: "nearest", behavior: "smooth" });
+				item.focus();
+			}
+		});
+
+		// Enter to select - handled by the main keyboard handler
+		// The Enter key will be caught by the container's keydown handler
 	}
 
 	private async renderChatHistory(): Promise<void> {
 		if (!this._chatHistoryContainer) {
 			return;
 		}
+
+		// Reset selected history index when re-rendering
+		this._selectedHistoryIndex = -1;
 
 		// Clear existing history
 		this._chatHistoryContainer.textContent = "";
@@ -425,9 +560,61 @@ export class MonitorXView extends Disposable implements IRenView {
 		section.className = "ren-monitorx-chat-history-section";
 		section.setAttribute("data-recency", recency);
 
-		// Create section header with icon, title, and badge
+		// Get or create collapsed state for this section
+		let collapsedState = this._sectionCollapsedStates.get(recency);
+		if (!collapsedState) {
+			const storedState =
+				this.workspaceStore.getBoolean(
+					`monitorx.chatSectionCollapsed.${recency}`,
+					false
+				) ?? false;
+			collapsedState = observableValue(this, storedState);
+			this._sectionCollapsedStates.set(recency, collapsedState);
+
+			// Persist state changes
+			this._register(
+				autorun((reader) => {
+					const collapsed = collapsedState!.read(reader);
+					this.workspaceStore.setBoolean(
+						`monitorx.chatSectionCollapsed.${recency}`,
+						collapsed
+					);
+				})
+			);
+		}
+
+		// Create section header with icon, title, badge, and collapse button
 		const header = document.createElement("div");
 		header.className = "ren-monitorx-chat-history-section-header";
+
+		// Collapse/expand button
+		const collapseButton = document.createElement("button");
+		collapseButton.className = "ren-monitorx-chat-history-section-collapse";
+		collapseButton.setAttribute("aria-label", `Toggle ${sectionTitle} section`);
+		collapseButton.setAttribute("aria-expanded", "true");
+
+		const collapseIcon = document.createElement("span");
+		collapseIcon.className = "codicon codicon-chevron-down";
+		collapseButton.appendChild(collapseIcon);
+
+		// Update icon based on state
+		this._register(
+			autorun((reader) => {
+				const collapsed = collapsedState!.read(reader);
+				collapseIcon.className = collapsed
+					? "codicon codicon-chevron-right"
+					: "codicon codicon-chevron-down";
+				collapseButton.setAttribute("aria-expanded", (!collapsed).toString());
+			})
+		);
+
+		collapseButton.addEventListener("click", (e) => {
+			e.stopPropagation();
+			const current = collapsedState!.get();
+			collapsedState!.set(!current, undefined);
+		});
+
+		header.appendChild(collapseButton);
 
 		// Add icon
 		const icon = document.createElement("span");
@@ -456,6 +643,16 @@ export class MonitorXView extends Disposable implements IRenView {
 		// Create items container
 		const itemsContainer = document.createElement("div");
 		itemsContainer.className = "ren-monitorx-chat-history-items";
+		itemsContainer.setAttribute("data-recency", recency);
+
+		// Update visibility based on collapsed state
+		this._register(
+			autorun((reader) => {
+				const collapsed = collapsedState!.read(reader);
+				itemsContainer.style.display = collapsed ? "none" : "";
+				section.classList.toggle("collapsed", collapsed);
+			})
+		);
 
 		// Create history items
 		items.forEach((item: IChatDetail) => {
