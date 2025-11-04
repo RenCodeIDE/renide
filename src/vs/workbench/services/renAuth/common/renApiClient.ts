@@ -256,6 +256,11 @@ export class RenApiClient {
 		// Normalize the URL (ensure it doesn't end with a slash)
 		baseUrl = baseUrl.trim().replace(/\/+$/, '');
 
+		// If baseUrl already ends with /api and path starts with /api/, remove the duplicate /api
+		if (baseUrl.endsWith('/api') && path.startsWith('/api/')) {
+			path = path.substring(4); // Remove '/api' from the beginning of path
+		}
+
 		return `${baseUrl}${path}`;
 	}
 }

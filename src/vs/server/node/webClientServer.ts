@@ -136,7 +136,21 @@ const STATIC_PATH = `/static`;
 const CALLBACK_PATH = `/callback`;
 const WEB_EXTENSION_PATH = `/web-extension-resource`;
 const OPEN_VSX_PROXY_PATH = `/openvsx`;
-const OPEN_VSX_API_BASE_URL = "https://open-vsx.org/api";
+
+function getOpenVsxApiBaseUrl(): string {
+	const serverAddress = process.env['SERVER_ADDRESS'];
+	if (serverAddress) {
+		let normalizedServerAddress = serverAddress.trim();
+		if (!normalizedServerAddress.startsWith('http://') && !normalizedServerAddress.startsWith('https://')) {
+			normalizedServerAddress = `https://${normalizedServerAddress}`;
+		}
+		normalizedServerAddress = normalizedServerAddress.replace(/\/+$/, '');
+		return `${normalizedServerAddress}/openvsx`;
+	}
+	return "https://open-vsx.org";
+}
+
+const OPEN_VSX_API_BASE_URL = getOpenVsxApiBaseUrl();
 
 export class WebClientServer {
 	private readonly _webExtensionResourceUrlTemplate: URI | undefined;
@@ -370,85 +384,203 @@ export class WebClientServer {
 			res.writeHead(204, corsHeaders);
 			return void res.end();
 		}
-		if (method !== "GET") {
-			return serveError(
-				req,
-				res,
-				405,
-				"Method not allowed. Only GET is supported.",
-				corsHeaders
-			);
-		}
 
 		const normalizedResourcePath = resourcePath.startsWith("/")
 			? resourcePath
 			: `/${resourcePath}`;
-		const segments = normalizedResourcePath.substring(1).split("/");
-		if (
-			segments.length < 5 ||
-			!segments[0] ||
-			!segments[1] ||
-			!segments[2] ||
-			segments[3] !== "file" ||
-			!segments[4]
-		) {
-			return serveError(
-				req,
-				res,
-				400,
-				"Invalid Open VSX asset path.",
-				corsHeaders
-			);
-		}
 
-		const searchParams = new url.URLSearchParams();
-		const query = parsedUrl.query;
-		for (const key in query) {
-			const value = query[key];
-			if (Array.isArray(value)) {
-				for (const entry of value) {
-					searchParams.append(key, entry);
+		// Check if this is an API endpoint (like /api/extensionquery) or a file path
+		const isApiEndpoint = normalizedResourcePath.startsWith("/api/");
+
+		if (isApiEndpoint) {
+			// Handle API endpoints (POST requests for marketplace API)
+			if (method !== "POST" && method !== "GET") {
+				return serveError(
+					req,
+					res,
+					405,
+					`Method not allowed. Only POST and GET are supported for API endpoints.`,
+					corsHeaders
+				);
+			}
+
+			const searchParams = new url.URLSearchParams();
+			const query = parsedUrl.query;
+			for (const key in query) {
+				const value = query[key];
+				if (Array.isArray(value)) {
+					for (const entry of value) {
+						searchParams.append(key, entry);
+					}
+				} else if (typeof value === "string") {
+					searchParams.append(key, value);
+				} else if (typeof value !== "undefined" && value !== null) {
+					searchParams.append(key, String(value));
 				}
-			} else if (typeof value === "string") {
-				searchParams.append(key, value);
-			} else if (typeof value !== "undefined" && value !== null) {
-				searchParams.append(key, String(value));
 			}
-		}
-		const queryString = searchParams.toString();
-		const upstreamUrl = `${OPEN_VSX_API_BASE_URL}${normalizedResourcePath}${
-			queryString ? `?${queryString}` : ""
-		}`;
-
-		const headers: IHeaders = {};
-		const forwardHeader = (header: string) => {
-			const value = req.headers[header];
-			if (!value) {
-				return;
+			const queryString = searchParams.toString();
+			// OPEN_VSX_API_BASE_URL is the base (e.g., https://open-vsx.org or ${SERVER_ADDRESS}/openvsx)
+			// normalizedResourcePath already includes /api/ (e.g., /api/extensionquery)
+			// If OPEN_VSX_API_BASE_URL already ends with /api, remove duplicate /api from path
+			let normalizedPath = normalizedResourcePath;
+			if (OPEN_VSX_API_BASE_URL.endsWith('/api') && normalizedResourcePath.startsWith('/api/')) {
+				normalizedPath = normalizedResourcePath.substring(4); // Remove '/api' from the beginning
 			}
-			headers[header] = Array.isArray(value) ? value[0] : value;
-		};
-		forwardHeader("accept");
-		forwardHeader("accept-encoding");
-		forwardHeader("if-none-match");
-		forwardHeader("if-modified-since");
+			const upstreamUrl = `${OPEN_VSX_API_BASE_URL}${normalizedPath}${
+				queryString ? `?${queryString}` : ""
+			}`;
 
-		let context;
-		try {
-			context = await this._requestService.request(
-				{
-					type: "GET",
-					url: upstreamUrl,
-					headers,
-				},
-				CancellationToken.None
-			);
-		} catch (error) {
-			this._logService.error(error);
-			return serveError(
-				req,
-				res,
-				502,
+			const headers: IHeaders = {};
+			const forwardHeader = (header: string) => {
+				const value = req.headers[header];
+				if (!value) {
+					return;
+				}
+				headers[header] = Array.isArray(value) ? value[0] : value;
+			};
+			forwardHeader("accept");
+			forwardHeader("accept-encoding");
+			forwardHeader("content-type");
+			forwardHeader("x-market-client-id");
+			forwardHeader("user-agent");
+			forwardHeader("x-market-user-id");
+			forwardHeader("vscode-sessionid");
+
+			// Read request body for POST requests
+			let body: string | undefined;
+			if (method === "POST") {
+				const chunks: Buffer[] = [];
+				for await (const chunk of req) {
+					chunks.push(chunk);
+				}
+				body = Buffer.concat(chunks).toString('utf8');
+			}
+
+			let context;
+			try {
+				context = await this._requestService.request(
+					{
+						type: method as "GET" | "POST",
+						url: upstreamUrl,
+						headers,
+						data: body,
+					},
+					CancellationToken.None
+				);
+			} catch (error) {
+				const errorMessage = error instanceof Error ? error.message : String(error);
+				return serveError(
+					req,
+					res,
+					502,
+					`Failed to proxy request to marketplace: ${errorMessage}`,
+					corsHeaders
+				);
+			}
+
+			const responseHeaders: Record<string, string | string[]> = Object.create(null);
+			const setResponseHeader = (header: string) => {
+				const value = context.res.headers[header];
+				if (value) {
+					responseHeaders[header] = value;
+				} else if (header !== header.toLowerCase()) {
+					setResponseHeader(header.toLowerCase());
+				}
+			};
+			setResponseHeader("Content-Type");
+			setResponseHeader("Cache-Control");
+			for (const key in corsHeaders) {
+				responseHeaders[key] = corsHeaders[key];
+			}
+
+			res.writeHead(context.res.statusCode || 200, responseHeaders);
+			const buffer = await streamToBuffer(context.stream);
+			return void res.end(buffer.buffer);
+		} else {
+			// Handle file paths (GET requests for extension assets)
+			if (method !== "GET") {
+				return serveError(
+					req,
+					res,
+					405,
+					"Method not allowed. Only GET is supported for file paths.",
+					corsHeaders
+				);
+			}
+
+			const segments = normalizedResourcePath.substring(1).split("/");
+			if (
+				segments.length < 5 ||
+				!segments[0] ||
+				!segments[1] ||
+				!segments[2] ||
+				segments[3] !== "file" ||
+				!segments[4]
+			) {
+				return serveError(
+					req,
+					res,
+					400,
+					"Invalid Open VSX asset path.",
+					corsHeaders
+				);
+			}
+
+			const searchParams = new url.URLSearchParams();
+			const query = parsedUrl.query;
+			for (const key in query) {
+				const value = query[key];
+				if (Array.isArray(value)) {
+					for (const entry of value) {
+						searchParams.append(key, entry);
+					}
+				} else if (typeof value === "string") {
+					searchParams.append(key, value);
+				} else if (typeof value !== "undefined" && value !== null) {
+					searchParams.append(key, String(value));
+				}
+			}
+			const queryString = searchParams.toString();
+			// OPEN_VSX_API_BASE_URL is the base (e.g., https://open-vsx.org or ${SERVER_ADDRESS}/openvsx)
+			// For file paths, normalizedResourcePath is like /publisher/name/version/file/path
+			// So we need to add /api/ prefix, but check if base URL already ends with /api
+			let apiPrefix = '/api';
+			if (OPEN_VSX_API_BASE_URL.endsWith('/api')) {
+				apiPrefix = ''; // Base URL already includes /api, don't add it again
+			}
+			const upstreamUrl = `${OPEN_VSX_API_BASE_URL}${apiPrefix}${normalizedResourcePath}${
+				queryString ? `?${queryString}` : ""
+			}`;
+
+			const headers: IHeaders = {};
+			const forwardHeader = (header: string) => {
+				const value = req.headers[header];
+				if (!value) {
+					return;
+				}
+				headers[header] = Array.isArray(value) ? value[0] : value;
+			};
+			forwardHeader("accept");
+			forwardHeader("accept-encoding");
+			forwardHeader("if-none-match");
+			forwardHeader("if-modified-since");
+
+			let context;
+			try {
+				context = await this._requestService.request(
+					{
+						type: "GET",
+						url: upstreamUrl,
+						headers,
+					},
+					CancellationToken.None
+				);
+			} catch (error) {
+				this._logService.error(error);
+				return serveError(
+					req,
+					res,
+					502,
 				"Failed to fetch Open VSX resource.",
 				corsHeaders
 			);
@@ -707,6 +839,44 @@ export class WebClientServer {
 			this._productService.extensionsGallery
 				? (() => {
 						const gallery = { ...this._productService.extensionsGallery };
+
+						// Helper to rewrite URLs to use server's proxy endpoint
+						const rewriteToServerProxy = (url: string | undefined, pathSuffix: string): string | undefined => {
+							if (!url) {
+								return undefined;
+							}
+							try {
+								const parsed = URI.parse(url);
+								// Check if this is an Open VSX URL (either open-vsx.org or any URL containing /openvsx/)
+								const isOpenVSX =
+									parsed.authority.includes("open-vsx.org") ||
+									parsed.path.includes("/openvsx/") ||
+									parsed.path.includes("/vscode/gallery") ||
+									parsed.path.includes("/vscode/item");
+
+								if (isOpenVSX) {
+									// Rewrite to use server's proxy endpoint
+									return URI.from({
+										scheme: "http",
+										authority: remoteAuthority,
+										path: `${openVsxRoute}${pathSuffix}`,
+									}).toString(true);
+								}
+
+								// For other URLs, use the web extension route
+								return parsed
+									.with({
+										scheme: "http",
+										authority: remoteAuthority,
+										path: `${webExtensionRoute}/${parsed.authority}${parsed.path}`,
+									})
+									.toString(true);
+							} catch (error) {
+								this._logService.error(error);
+								return undefined;
+							}
+						};
+
 						const buildTemplate = (template: string | undefined) => {
 							if (!template) {
 								return undefined;
@@ -768,6 +938,76 @@ export class WebClientServer {
 								return undefined;
 							}
 						};
+
+						// Rewrite serviceUrl to point to server's proxy endpoint for marketplace API
+						// The marketplace API calls: serviceUrl + "/extensionquery"
+						// So we need to rewrite serviceUrl to point to the proxy endpoint
+						if (gallery.serviceUrl) {
+							try {
+								const parsed = URI.parse(gallery.serviceUrl);
+								// Check if this is an Open VSX URL
+								const isOpenVSX =
+									parsed.authority.includes("open-vsx.org") ||
+									parsed.path.includes("/vscode/gallery") ||
+									parsed.path.includes("/openvsx/");
+
+								if (isOpenVSX) {
+									// Rewrite to use server's proxy endpoint
+									// The client will call: serviceUrl + "/extensionquery"
+									// Which becomes: http://remoteAuthority/openvsx/api/extensionquery
+									gallery.serviceUrl = URI.from({
+										scheme: "http",
+										authority: remoteAuthority,
+										path: `${openVsxRoute}/api`,
+									}).toString(true);
+								}
+							} catch (error) {
+								this._logService.error('Error rewriting serviceUrl', error);
+							}
+						}
+
+						// Rewrite itemUrl to point to server's proxy endpoint
+						if (gallery.itemUrl) {
+							try {
+								const parsed = URI.parse(gallery.itemUrl);
+								const isOpenVSX =
+									parsed.authority.includes("open-vsx.org") ||
+									parsed.path.includes("/vscode/item") ||
+									parsed.path.includes("/openvsx/");
+
+								if (isOpenVSX) {
+									gallery.itemUrl = URI.from({
+										scheme: "http",
+										authority: remoteAuthority,
+										path: `${openVsxRoute}/api/item`,
+									}).toString(true);
+								}
+							} catch (error) {
+								this._logService.error('Error rewriting itemUrl', error);
+							}
+						}
+
+						// Rewrite publisherUrl to point to server's proxy endpoint
+						if (gallery.publisherUrl) {
+							try {
+								const parsed = URI.parse(gallery.publisherUrl);
+								const isOpenVSX =
+									parsed.authority.includes("open-vsx.org") ||
+									parsed.path.includes("/publishers/") ||
+									parsed.path.includes("/openvsx/");
+
+								if (isOpenVSX) {
+									gallery.publisherUrl = URI.from({
+										scheme: "http",
+										authority: remoteAuthority,
+										path: `${openVsxRoute}/api/publishers`,
+									}).toString(true);
+								}
+							} catch (error) {
+								this._logService.error('Error rewriting publisherUrl', error);
+							}
+						}
+
 						const resourceTemplate = buildTemplate(gallery.resourceUrlTemplate);
 						if (resourceTemplate) {
 							gallery.resourceUrlTemplate = resourceTemplate;

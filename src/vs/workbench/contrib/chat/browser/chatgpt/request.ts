@@ -28,7 +28,18 @@ export async function sendChatGPTRequest(
 	logService?: ILogService,
 	modelType: 'openai' | 'gemini' = 'openai',
 ): Promise<ChatGPTStreamingResponse> {
-	const url = `${serverAddress}${endpoint}`;
+	// Normalize serverAddress (remove trailing slashes)
+	const normalizedServerAddress = serverAddress.trim().replace(/\/+$/, '');
+
+	// If serverAddress already ends with /api and endpoint starts with /api/, remove the duplicate /api
+	let normalizedEndpoint: string;
+	if (normalizedServerAddress.endsWith('/api') && endpoint.startsWith('/api/')) {
+		normalizedEndpoint = endpoint.substring(4); // Remove '/api' from the beginning of endpoint
+	} else {
+		normalizedEndpoint = endpoint;
+	}
+
+	const url = `${normalizedServerAddress}${normalizedEndpoint}`;
 
 	if (!accessToken) {
 		throw new Error(
