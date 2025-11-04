@@ -3,15 +3,25 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { CancellationToken } from '../../../../../base/common/cancellation.js';
-import { Disposable, DisposableStore, IDisposable, toDisposable } from '../../../../../base/common/lifecycle.js';
-import { MarkdownString } from '../../../../../base/common/htmlContent.js';
-import { clearNode } from '../../../../../base/browser/dom.js';
-import { ChatAgentLocation } from '../../../chat/common/constants.js';
-import { IChatService } from '../../../chat/common/chatService.js';
-import { IChatModel, IChatRequestModel, IChatResponseModel, IChatChangeEvent } from '../../../chat/common/chatModel.js';
-import { IMarkdownRendererService } from '../../../../../platform/markdown/browser/markdownRenderer.js';
-import { IRenderedMarkdown } from '../../../../../base/browser/markdownRenderer.js';
+import { CancellationToken } from "../../../../../base/common/cancellation.js";
+import {
+	Disposable,
+	DisposableStore,
+	IDisposable,
+	toDisposable,
+} from "../../../../../base/common/lifecycle.js";
+import { MarkdownString } from "../../../../../base/common/htmlContent.js";
+import { clearNode } from "../../../../../base/browser/dom.js";
+import { ChatAgentLocation } from "../../../chat/common/constants.js";
+import { IChatService } from "../../../chat/common/chatService.js";
+import {
+	IChatModel,
+	IChatRequestModel,
+	IChatResponseModel,
+	IChatChangeEvent,
+} from "../../../chat/common/chatModel.js";
+import { IMarkdownRendererService } from "../../../../../platform/markdown/browser/markdownRenderer.js";
+import { IRenderedMarkdown } from "../../../../../base/browser/markdownRenderer.js";
 
 interface IMonitorXChatMessageDom {
 	readonly root: HTMLElement;
@@ -42,59 +52,95 @@ export class MonitorXChatController extends Disposable {
 		private readonly markdownRenderer: IMarkdownRendererService
 	) {
 		super();
-		this.container.classList.add('ren-monitorx-chat-panel');
+		this.container.classList.add("ren-monitorx-chat-panel");
 
-		this.conversationContainer = document.createElement('div');
-		this.conversationContainer.className = 'ren-monitorx-chat-messages';
+		this.conversationContainer = document.createElement("div");
+		this.conversationContainer.className = "ren-monitorx-chat-messages";
 		this.container.appendChild(this.conversationContainer);
 
-		this.emptyState = document.createElement('div');
-		this.emptyState.className = 'ren-monitorx-chat-empty-state';
-		this.emptyState.textContent = 'Start a new conversation to get help from the AI assistant.';
+		this.emptyState = document.createElement("div");
+		this.emptyState.className = "ren-monitorx-chat-empty-state";
+		this.emptyState.textContent =
+			"Start a new conversation to get help from the AI assistant.";
 		this.conversationContainer.appendChild(this.emptyState);
 
-		this.statusMessage = document.createElement('div');
-		this.statusMessage.className = 'ren-monitorx-chat-status';
-		this.statusMessage.classList.add('hidden');
+		this.statusMessage = document.createElement("div");
+		this.statusMessage.className = "ren-monitorx-chat-status";
+		this.statusMessage.classList.add("hidden");
 		this.container.appendChild(this.statusMessage);
 
-		this.composer = document.createElement('div');
-		this.composer.className = 'ren-monitorx-chat-composer';
+		this.composer = document.createElement("div");
+		this.composer.className = "ren-monitorx-chat-composer";
 		this.container.appendChild(this.composer);
 
-		this.inputArea = document.createElement('textarea');
-		this.inputArea.className = 'ren-monitorx-chat-input';
+		this.inputArea = document.createElement("textarea");
+		this.inputArea.className = "ren-monitorx-chat-input";
 		this.inputArea.rows = 2;
-		this.inputArea.placeholder = 'Ask MonitorX Assistant';
+		this.inputArea.placeholder = "Ask MonitorX Assistant";
+		this.inputArea.setAttribute("aria-label", "Chat input");
 		this.composer.appendChild(this.inputArea);
 
-		const composerFooter = document.createElement('div');
-		composerFooter.className = 'ren-monitorx-chat-composer-footer';
+		const composerFooter = document.createElement("div");
+		composerFooter.className = "ren-monitorx-chat-composer-footer";
 		this.composer.appendChild(composerFooter);
 
-		const hint = document.createElement('span');
-		hint.className = 'ren-monitorx-chat-hint';
-		hint.textContent = 'Press Enter to send, Shift+Enter for newline';
-		composerFooter.appendChild(hint);
+		const footerLeft = document.createElement("div");
+		footerLeft.className = "ren-monitorx-chat-composer-footer-left";
 
-		this.sendButton = document.createElement('button');
-		this.sendButton.type = 'button';
-		this.sendButton.className = 'ren-monitorx-chat-send-button';
-		this.sendButton.textContent = 'Send';
+		const hint = document.createElement("span");
+		hint.className = "ren-monitorx-chat-hint";
+		hint.textContent = "Press Enter to send, Shift+Enter for newline";
+		footerLeft.appendChild(hint);
+
+		const characterCount = document.createElement("div");
+		characterCount.className = "ren-monitorx-chat-character-count";
+		characterCount.textContent = "0";
+		characterCount.setAttribute("aria-live", "polite");
+		footerLeft.appendChild(characterCount);
+
+		composerFooter.appendChild(footerLeft);
+
+		this.sendButton = document.createElement("button");
+		this.sendButton.type = "button";
+		this.sendButton.className = "ren-monitorx-chat-send-button";
+		this.sendButton.setAttribute("aria-label", "Send message");
+		
+		const sendIcon = document.createElement("span");
+		sendIcon.className = "codicon codicon-send";
+		this.sendButton.appendChild(sendIcon);
+		
+		const sendText = document.createTextNode(" Send");
+		this.sendButton.appendChild(sendText);
+		
 		composerFooter.appendChild(this.sendButton);
 
-
 		const onSendClick = () => this.handleSend();
-		this.sendButton.addEventListener('click', onSendClick);
-		this._register(toDisposable(() => this.sendButton.removeEventListener('click', onSendClick)));
+		this.sendButton.addEventListener("click", onSendClick);
+		this._register(
+			toDisposable(() =>
+				this.sendButton.removeEventListener("click", onSendClick)
+			)
+		);
 
 		const onInputKeyDown = (event: KeyboardEvent) => this.onInputKeyDown(event);
-		this.inputArea.addEventListener('keydown', onInputKeyDown);
-		this._register(toDisposable(() => this.inputArea.removeEventListener('keydown', onInputKeyDown)));
+		this.inputArea.addEventListener("keydown", onInputKeyDown);
+		this._register(
+			toDisposable(() =>
+				this.inputArea.removeEventListener("keydown", onInputKeyDown)
+			)
+		);
 
-		const onInputChange = () => this.updateComposerState();
-		this.inputArea.addEventListener('input', onInputChange);
-		this._register(toDisposable(() => this.inputArea.removeEventListener('input', onInputChange)));
+		const onInputChange = () => {
+			this.updateComposerState();
+			this.updateCharacterCount();
+			this.autoResizeTextarea();
+		};
+		this.inputArea.addEventListener("input", onInputChange);
+		this._register(
+			toDisposable(() =>
+				this.inputArea.removeEventListener("input", onInputChange)
+			)
+		);
 
 		this.updateComposerState();
 	}
@@ -105,14 +151,20 @@ export class MonitorXChatController extends Disposable {
 
 	async initialize(): Promise<void> {
 		if (!this._model) {
-			const model = this.chatService.startSession(ChatAgentLocation.Chat, CancellationToken.None);
+			const model = this.chatService.startSession(
+				ChatAgentLocation.Chat,
+				CancellationToken.None
+			);
 			this.setModel(model);
 		}
 		this.renderFromModel();
 	}
 
 	async startNewSession(): Promise<void> {
-		const model = this.chatService.startSession(ChatAgentLocation.Chat, CancellationToken.None);
+		const model = this.chatService.startSession(
+			ChatAgentLocation.Chat,
+			CancellationToken.None
+		);
 		this.setModel(model);
 		this.clearComposer();
 	}
@@ -120,7 +172,9 @@ export class MonitorXChatController extends Disposable {
 	async loadSession(sessionId: string): Promise<void> {
 		const model = await this.chatService.getOrRestoreSession(sessionId);
 		if (!model) {
-			this.showStatus('Unable to load that conversation. It may have been removed.');
+			this.showStatus(
+				"Unable to load that conversation. It may have been removed."
+			);
 			return;
 		}
 		this.setModel(model);
@@ -137,15 +191,19 @@ export class MonitorXChatController extends Disposable {
 		}
 		this.modelDisposables.clear();
 		this._model = model;
-		this.modelDisposables.add(model.onDidDispose(() => {
-			if (this._model === model) {
-				this._model = undefined;
-				this.modelDisposables.clear();
-				this.clearMessages();
-				this.updateEmptyState();
-			}
-		}));
-		this.modelDisposables.add(model.onDidChange((event) => this.onModelChange(event)));
+		this.modelDisposables.add(
+			model.onDidDispose(() => {
+				if (this._model === model) {
+					this._model = undefined;
+					this.modelDisposables.clear();
+					this.clearMessages();
+					this.updateEmptyState();
+				}
+			})
+		);
+		this.modelDisposables.add(
+			model.onDidChange((event) => this.onModelChange(event))
+		);
 		this.renderFromModel();
 	}
 
@@ -164,25 +222,25 @@ export class MonitorXChatController extends Disposable {
 
 	private onModelChange(event: IChatChangeEvent): void {
 		switch (event.kind) {
-			case 'addRequest': {
+			case "addRequest": {
 				this.ensureMessageItem(event.request);
 				this.updateEmptyState();
 				this.scrollToBottom();
 				break;
 			}
-			case 'changedRequest': {
+			case "changedRequest": {
 				const item = this.messageItems.get(event.request.id);
 				if (item) {
 					item.userBubble.textContent = event.request.message.text;
 				}
 				break;
 			}
-			case 'removeRequest': {
+			case "removeRequest": {
 				this.removeMessageItem(event.requestId);
 				this.updateEmptyState();
 				break;
 			}
-			case 'addResponse': {
+			case "addResponse": {
 				const item = this.messageItems.get(event.response.requestId);
 				if (item) {
 					this.attachResponse(item, event.response);
@@ -190,7 +248,7 @@ export class MonitorXChatController extends Disposable {
 				}
 				break;
 			}
-			case 'completedRequest': {
+			case "completedRequest": {
 				const response = event.request.response;
 				if (response) {
 					const item = this.messageItems.get(event.request.id);
@@ -204,46 +262,48 @@ export class MonitorXChatController extends Disposable {
 		}
 	}
 
-	private ensureMessageItem(request: IChatRequestModel): IMonitorXChatMessageDom {
+	private ensureMessageItem(
+		request: IChatRequestModel
+	): IMonitorXChatMessageDom {
 		let entry = this.messageItems.get(request.id);
 		if (entry) {
 			entry.userBubble.textContent = request.message.text;
 			return entry;
 		}
 
-		const root = document.createElement('div');
-		root.className = 'ren-monitorx-chat-message';
+		const root = document.createElement("div");
+		root.className = "ren-monitorx-chat-message";
 
-		const userRow = document.createElement('div');
-		userRow.className = 'ren-monitorx-chat-message-row user';
+		const userRow = document.createElement("div");
+		userRow.className = "ren-monitorx-chat-message-row user";
 
-		const userLabel = document.createElement('span');
-		userLabel.className = 'ren-monitorx-chat-label';
-		userLabel.textContent = request.username || 'You';
+		const userLabel = document.createElement("span");
+		userLabel.className = "ren-monitorx-chat-label";
+		userLabel.textContent = request.username || "You";
 		userRow.appendChild(userLabel);
 
-		const userBubble = document.createElement('div');
-		userBubble.className = 'ren-monitorx-chat-bubble user';
+		const userBubble = document.createElement("div");
+		userBubble.className = "ren-monitorx-chat-bubble user";
 		userBubble.textContent = request.message.text;
 		userRow.appendChild(userBubble);
 
 		root.appendChild(userRow);
 
-		const assistantRow = document.createElement('div');
-		assistantRow.className = 'ren-monitorx-chat-message-row assistant';
+		const assistantRow = document.createElement("div");
+		assistantRow.className = "ren-monitorx-chat-message-row assistant";
 
-		const assistantLabel = document.createElement('span');
-		assistantLabel.className = 'ren-monitorx-chat-label';
-		assistantLabel.textContent = 'Assistant';
+		const assistantLabel = document.createElement("span");
+		assistantLabel.className = "ren-monitorx-chat-label";
+		assistantLabel.textContent = "Assistant";
 		assistantRow.appendChild(assistantLabel);
 
-		const assistantBubble = document.createElement('div');
-		assistantBubble.className = 'ren-monitorx-chat-bubble assistant';
+		const assistantBubble = document.createElement("div");
+		assistantBubble.className = "ren-monitorx-chat-bubble assistant";
 		assistantRow.appendChild(assistantBubble);
 
-		const pending = document.createElement('div');
-		pending.className = 'ren-monitorx-chat-pending';
-		pending.textContent = 'Waiting for response…';
+		const pending = document.createElement("div");
+		pending.className = "ren-monitorx-chat-pending";
+		pending.textContent = "Waiting for response…";
 		assistantBubble.appendChild(pending);
 
 		root.appendChild(assistantRow);
@@ -255,7 +315,10 @@ export class MonitorXChatController extends Disposable {
 		return entry;
 	}
 
-	private attachResponse(entry: IMonitorXChatMessageDom, response: IChatResponseModel): void {
+	private attachResponse(
+		entry: IMonitorXChatMessageDom,
+		response: IChatResponseModel
+	): void {
 		entry.responseListener?.dispose();
 		entry.responseMarkdown?.dispose();
 
@@ -269,9 +332,15 @@ export class MonitorXChatController extends Disposable {
 				return;
 			}
 
-			const rendered = this.markdownRenderer.render(new MarkdownString(markdown, { supportThemeIcons: true, isTrusted: true }), {
-				fillInIncompleteTokens: true,
-			});
+			const rendered = this.markdownRenderer.render(
+				new MarkdownString(markdown, {
+					supportThemeIcons: true,
+					isTrusted: true,
+				}),
+				{
+					fillInIncompleteTokens: true,
+				}
+			);
 			entry.responseMarkdown = rendered;
 			entry.assistantBubble.appendChild(rendered.element);
 		};
@@ -304,12 +373,13 @@ export class MonitorXChatController extends Disposable {
 
 	private updateEmptyState(): void {
 		const hasMessages = this.messageItems.size > 0;
-		this.emptyState.classList.toggle('hidden', hasMessages);
+		this.emptyState.classList.toggle("hidden", hasMessages);
 	}
 
 	private scrollToBottom(): void {
 		queueMicrotask(() => {
-			this.conversationContainer.scrollTop = this.conversationContainer.scrollHeight;
+			this.conversationContainer.scrollTop =
+				this.conversationContainer.scrollHeight;
 		});
 	}
 
@@ -324,20 +394,24 @@ export class MonitorXChatController extends Disposable {
 		}
 
 		if (!this._model) {
-			this.showStatus('Unable to start chat session. Try again later.');
+			this.showStatus("Unable to start chat session. Try again later.");
 			return;
 		}
 
 		this._isSending = true;
 		this.updateComposerState();
-		this.showStatus('');
+		this.showStatus("");
 
 		try {
-			await this.chatService.sendRequest(this._model.sessionId, message, { location: ChatAgentLocation.Chat });
-			this.inputArea.value = '';
+			await this.chatService.sendRequest(this._model.sessionId, message, {
+				location: ChatAgentLocation.Chat,
+			});
+			this.inputArea.value = "";
 		} catch (error) {
-			console.error('MonitorX chat send failed', error);
-			this.showStatus('Sending message failed. Check your connection and try again.');
+			console.error("MonitorX chat send failed", error);
+			this.showStatus(
+				"Sending message failed. Check your connection and try again."
+			);
 		} finally {
 			this._isSending = false;
 			this.updateComposerState();
@@ -345,7 +419,7 @@ export class MonitorXChatController extends Disposable {
 	}
 
 	private onInputKeyDown(event: KeyboardEvent): void {
-		if (event.key === 'Enter' && !event.shiftKey) {
+		if (event.key === "Enter" && !event.shiftKey) {
 			event.preventDefault();
 			this.handleSend();
 		}
@@ -354,20 +428,40 @@ export class MonitorXChatController extends Disposable {
 	private updateComposerState(): void {
 		const trimmed = this.inputArea.value.trim();
 		this.sendButton.disabled = this._isSending || trimmed.length === 0;
-		this.inputArea.classList.toggle('sending', this._isSending);
+		this.inputArea.classList.toggle("sending", this._isSending);
+	}
+
+	private updateCharacterCount(): void {
+		const count = this.inputArea.value.length;
+		const characterCount = this.composer.querySelector(
+			".ren-monitorx-chat-character-count"
+		);
+		if (characterCount) {
+			characterCount.textContent = count.toString();
+			characterCount.classList.toggle(
+				"ren-monitorx-chat-character-count-warning",
+				count > 2000
+			);
+		}
+	}
+
+	private autoResizeTextarea(): void {
+		this.inputArea.style.height = "auto";
+		const newHeight = Math.min(this.inputArea.scrollHeight, 200); // Max 200px
+		this.inputArea.style.height = `${newHeight}px`;
+		this.inputArea.style.overflowY =
+			this.inputArea.scrollHeight > 200 ? "auto" : "hidden";
 	}
 
 	private clearComposer(): void {
-		this.inputArea.value = '';
+		this.inputArea.value = "";
 		this._isSending = false;
 		this.updateComposerState();
-		this.showStatus('');
+		this.showStatus("");
 	}
 
 	private showStatus(message: string): void {
 		this.statusMessage.textContent = message;
-		this.statusMessage.classList.toggle('hidden', !message);
+		this.statusMessage.classList.toggle("hidden", !message);
 	}
 }
-
-

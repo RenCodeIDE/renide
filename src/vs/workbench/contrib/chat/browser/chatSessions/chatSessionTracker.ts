@@ -130,6 +130,12 @@ export class ChatSessionTracker extends Disposable {
 	}
 
 	private modelToStatus(model: IChatModel): ChatSessionStatus | undefined {
+		// Use the new observable if available
+		if ('sessionStatusObs' in model && model.sessionStatusObs) {
+			return model.sessionStatusObs.get();
+		}
+
+		// Fallback to existing logic for backward compatibility
 		if (model.requestInProgress) {
 			return ChatSessionStatus.InProgress;
 		}

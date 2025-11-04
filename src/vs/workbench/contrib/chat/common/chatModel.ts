@@ -12,7 +12,7 @@ import { ResourceMap } from '../../../../base/common/map.js';
 import { revive } from '../../../../base/common/marshalling.js';
 import { Schemas } from '../../../../base/common/network.js';
 import { equals } from '../../../../base/common/objects.js';
-import { IObservable, ObservablePromise, autorunSelfDisposable, observableFromEvent, observableSignalFromEvent } from '../../../../base/common/observable.js';
+import { IObservable, ObservablePromise, autorunSelfDisposable, observableFromEvent, observableSignalFromEvent, observableValue, autorun } from '../../../../base/common/observable.js';
 import { basename, isEqual } from '../../../../base/common/resources.js';
 import { ThemeIcon } from '../../../../base/common/themables.js';
 import { URI, UriComponents, UriDto, isUriComponents } from '../../../../base/common/uri.js';
@@ -31,6 +31,7 @@ import { ChatRequestTextPart, IParsedChatRequest, reviveParsedChatRequest } from
 import { ChatAgentVoteDirection, ChatAgentVoteDownReason, ChatResponseClearToPreviousToolInvocationReason, IChatAgentMarkdownContentWithVulnerability, IChatClearToPreviousToolInvocation, IChatCodeCitation, IChatCommandButton, IChatConfirmation, IChatContentInlineReference, IChatContentReference, IChatEditingSessionAction, IChatElicitationRequest, IChatExtensionsContent, IChatFollowup, IChatLocationData, IChatMarkdownContent, IChatMcpServersStarting, IChatMultiDiffData, IChatNotebookEdit, IChatPrepareToolInvocationPart, IChatProgress, IChatProgressMessage, IChatPullRequestContent, IChatResponseCodeblockUriPart, IChatResponseProgressFileTreeData, IChatSessionContext, IChatTask, IChatTaskSerialized, IChatTextEdit, IChatThinkingPart, IChatToolInvocation, IChatToolInvocationSerialized, IChatTreeData, IChatUndoStop, IChatUsedContext, IChatWarningMessage, isIUsedContext } from './chatService.js';
 import { ChatRequestToolReferenceEntry, IChatRequestVariableEntry } from './chatVariableEntries.js';
 import { ChatAgentLocation, ChatModeKind } from './constants.js';
+import { ChatSessionStatus, ChatSessionRecency } from './chatSessionsService.js';
 
 
 export const CHAT_ATTACHABLE_IMAGE_MIME_TYPES: Record<string, string> = {
@@ -1061,6 +1062,8 @@ export interface IChatModel extends IDisposable {
 	readonly hasCustomTitle: boolean;
 	readonly requestInProgress: boolean;
 	readonly requestInProgressObs: IObservable<boolean>;
+	readonly sessionStatusObs?: IObservable<ChatSessionStatus>;
+	readonly sessionRecencyObs?: IObservable<ChatSessionRecency>;
 	readonly inputPlaceholder?: string;
 	readonly editingSessionObs?: ObservablePromise<IChatEditingSession> | undefined;
 	readonly editingSession?: IChatEditingSession | undefined;
@@ -1159,6 +1162,9 @@ export interface ISerializableChatData3 extends Omit<ISerializableChatData2, 've
 	version: 3;
 	customTitle: string | undefined;
 	inputType?: string;
+	lastAgentResponseStartTime?: number;
+	lastAgentResponseEndTime?: number;
+	lastActivityTime?: number;
 }
 
 /**
@@ -1369,6 +1375,16 @@ export class ChatModel extends Disposable implements IChatModel {
 
 	readonly requestInProgressObs: IObservable<boolean>;
 
+	// Status and recency tracking
+	readonly sessionStatusObs: IObservable<ChatSessionStatus>;
+	readonly sessionRecencyObs: IObservable<ChatSessionRecency>;
+	private readonly _sessionStatusObs = observableValue<ChatSessionStatus>(this, ChatSessionStatus.Completed);
+	private readonly _sessionRecencyObs = observableValue<ChatSessionRecency>(this, ChatSessionRecency.Stale);
+
+	// Timestamp tracking
+	private _lastAgentResponseStartTime: number | undefined;  // When agent started responding
+	private _lastAgentResponseEndTime: number | undefined;     // When agent stopped responding
+	private _lastActivityTime: number;                        // Last activity (user or agent)
 
 	get hasRequests(): boolean {
 		return this._requests.length > 0;
@@ -1488,11 +1504,158 @@ export class ChatModel extends Disposable implements IChatModel {
 		this._initialLocation = initialData?.initialLocation ?? initialModelProps.initialLocation;
 		this._canUseTools = initialModelProps.canUseTools;
 
+		// Initialize timestamps from existing data or restore from persisted data
+		if (isValid && initialData && 'lastActivityTime' in initialData) {
+			this._lastAgentResponseStartTime = initialData.lastAgentResponseStartTime;
+			this._lastAgentResponseEndTime = initialData.lastAgentResponseEndTime;
+			this._lastActivityTime = initialData.lastActivityTime ?? this._creationDate;
+		} else {
+			this._lastActivityTime = this._creationDate;
+		}
+		this._initializeTimestamps();
+
 		const lastResponse = observableFromEvent(this, this.onDidChange, () => this._requests.at(-1)?.response);
 
 		this.requestInProgressObs = lastResponse.map((response, r) => {
 			return response?.isInProgress.read(r) ?? false;
 		});
+
+		// Expose observables
+		this.sessionStatusObs = this._sessionStatusObs;
+		this.sessionRecencyObs = this._sessionRecencyObs;
+
+		// Listen to request in progress changes
+		this._register(autorun(reader => {
+			this.requestInProgressObs.read(reader);
+			this._updateSessionStatus();
+		}));
+
+		// Listen to response changes
+		this._register(this.onDidChange(e => {
+			if (e.kind === 'addRequest' ||
+				e.kind === 'completedRequest' ||
+				e.kind === 'removeRequest') {
+				this._updateSessionStatus();
+			}
+		}));
+
+		// Initial status update
+		this._updateSessionStatus();
+	}
+
+	private _initializeTimestamps(): void {
+		const requests = this.getRequests();
+		if (requests.length === 0) {
+			if (this._lastActivityTime === undefined) {
+				this._lastActivityTime = this._creationDate;
+			}
+			return;
+		}
+
+		// Find the last completed response
+		for (let i = requests.length - 1; i >= 0; i--) {
+			const request = requests[i];
+			if (request.response?.isComplete) {
+				// Use request timestamp as proxy for response end time if not already set
+				// (we don't have exact end time for persisted chats)
+				if (this._lastAgentResponseEndTime === undefined) {
+					this._lastAgentResponseEndTime = request.timestamp;
+				}
+				if (this._lastActivityTime === undefined) {
+					this._lastActivityTime = request.timestamp;
+				}
+				break;
+			}
+		}
+
+		// If no completed response, use last request timestamp
+		if (this._lastActivityTime === undefined) {
+			const lastRequest = requests[requests.length - 1];
+			this._lastActivityTime = lastRequest.timestamp;
+		}
+	}
+
+	private _updateSessionStatus(): void {
+		let status: ChatSessionStatus;
+		let recency: ChatSessionRecency = ChatSessionRecency.Stale; // Initialize with default
+		const now = Date.now();
+		const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+		// Safeguard: ensure timestamps are valid
+		if (!this._lastActivityTime || this._lastActivityTime > now) {
+			this._lastActivityTime = this._creationDate ?? now;
+		}
+
+		if (this._lastAgentResponseEndTime && this._lastAgentResponseEndTime > now) {
+			this._lastAgentResponseEndTime = undefined; // Invalid timestamp, reset
+		}
+
+		// Check if any request is in progress
+		if (this.requestInProgress) {
+			status = ChatSessionStatus.InProgress;
+			recency = ChatSessionRecency.Active;
+
+			// Update agent response start time if not already set
+			if (!this._lastAgentResponseStartTime) {
+				this._lastAgentResponseStartTime = now;
+			}
+			this._lastActivityTime = now;
+		} else {
+			const requests = this.getRequests();
+			if (requests.length === 0) {
+				status = ChatSessionStatus.Completed; // Empty chat, default to completed
+				recency = ChatSessionRecency.Stale;
+			} else {
+				const lastRequest = requests[requests.length - 1];
+				if (lastRequest?.response) {
+					if (lastRequest.response.isCanceled ||
+						lastRequest.response.result?.errorDetails) {
+						status = ChatSessionStatus.Failed;
+						// Recency will be calculated below for Failed status
+					} else if (lastRequest.response.isComplete) {
+						status = ChatSessionStatus.Completed;
+						// Recency will be calculated below for Completed status
+					} else {
+						status = ChatSessionStatus.InProgress;
+						recency = ChatSessionRecency.Active;
+						if (!this._lastAgentResponseStartTime) {
+							this._lastAgentResponseStartTime = now;
+						}
+						this._lastActivityTime = now;
+					}
+
+					// Calculate recency for completed/failed responses
+					if (status === ChatSessionStatus.Completed || status === ChatSessionStatus.Failed) {
+						// Use agent response end time if available, otherwise use request timestamp
+						const endTime = this._lastAgentResponseEndTime ?? lastRequest.timestamp;
+						const timeSinceLastActivity = now - endTime;
+
+						if (timeSinceLastActivity < ONE_DAY_MS) {
+							recency = ChatSessionRecency.Recent;
+						} else {
+							recency = ChatSessionRecency.Stale;
+						}
+
+						// Update last activity time to the most recent of user message or agent response
+						this._lastActivityTime = Math.max(
+							lastRequest.timestamp,
+							endTime
+						);
+					}
+				} else {
+					// Request exists but no response yet
+					status = ChatSessionStatus.InProgress;
+					recency = ChatSessionRecency.Active;
+					if (!this._lastAgentResponseStartTime) {
+						this._lastAgentResponseStartTime = now;
+					}
+					this._lastActivityTime = Math.max(this._lastActivityTime, lastRequest.timestamp);
+				}
+			}
+		}
+
+		this._sessionStatusObs.set(status, undefined);
+		this._sessionRecencyObs.set(recency, undefined);
 	}
 
 	startEditingSession(isGlobalEditingSession?: boolean): void {
@@ -1698,11 +1861,12 @@ export class ChatModel extends Disposable implements IChatModel {
 	addRequest(message: IParsedChatRequest, variableData: IChatRequestVariableData, attempt: number, modeInfo?: IChatRequestModeInfo, chatAgent?: IChatAgentData, slashCommand?: IChatAgentCommand, confirmation?: string, locationData?: IChatLocationData, attachments?: IChatRequestVariableEntry[], isCompleteAddedRequest?: boolean, modelId?: string): ChatRequestModel {
 		const editedFileEvents = [...this.currentEditedFileEvents.values()];
 		this.currentEditedFileEvents.clear();
+		const requestTimestamp = Date.now();
 		const request = new ChatRequestModel({
 			session: this,
 			message,
 			variableData,
-			timestamp: Date.now(),
+			timestamp: requestTimestamp,
 			attempt,
 			modeInfo,
 			confirmation,
@@ -1723,7 +1887,19 @@ export class ChatModel extends Disposable implements IChatModel {
 		});
 
 		this._requests.push(request);
-		this._lastMessageDate = Date.now();
+		this._lastMessageDate = requestTimestamp;
+
+		// Update last activity time to user's message timestamp
+		this._lastActivityTime = Math.max(this._lastActivityTime, requestTimestamp);
+
+		// Reset agent response timestamps (new request means new response cycle)
+		this._lastAgentResponseStartTime = undefined;
+		this._lastAgentResponseEndTime = undefined;
+
+		// Update status IMMEDIATELY - this ensures UI shows InProgress right away
+		this._updateSessionStatus();
+
+		// Fire event AFTER status update
 		this._onDidChange.fire({ kind: 'addRequest', request });
 		return request;
 	}
@@ -1804,6 +1980,20 @@ export class ChatModel extends Disposable implements IChatModel {
 		if (request.response) {
 			request.response.cancel();
 		}
+
+		// Track when agent stopped responding (due to cancellation)
+		this._lastAgentResponseEndTime = Date.now();
+		this._lastAgentResponseStartTime = undefined; // Reset start time
+
+		// Update last activity time
+		const requestTime = request.timestamp;
+		this._lastActivityTime = Math.max(
+			this._lastActivityTime,
+			requestTime,
+			this._lastAgentResponseEndTime
+		);
+
+		this._updateSessionStatus();
 	}
 
 	setResponse(request: ChatRequestModel, result: IChatAgentResult): void {
@@ -1825,6 +2015,20 @@ export class ChatModel extends Disposable implements IChatModel {
 		}
 
 		request.response.complete();
+
+		// Track when agent stopped responding
+		this._lastAgentResponseEndTime = Date.now();
+		this._lastAgentResponseStartTime = undefined; // Reset start time
+
+		// Update last activity time
+		const requestTime = request.timestamp;
+		this._lastActivityTime = Math.max(
+			this._lastActivityTime,
+			requestTime,
+			this._lastAgentResponseEndTime
+		);
+
+		this._updateSessionStatus();
 		this._onDidChange.fire({ kind: 'completedRequest', request });
 	}
 
@@ -1913,7 +2117,10 @@ export class ChatModel extends Disposable implements IChatModel {
 			creationDate: this._creationDate,
 			isImported: this._isImported,
 			lastMessageDate: this._lastMessageDate,
-			customTitle: this._customTitle
+			customTitle: this._customTitle,
+			lastAgentResponseStartTime: this._lastAgentResponseStartTime,
+			lastAgentResponseEndTime: this._lastAgentResponseEndTime,
+			lastActivityTime: this._lastActivityTime
 		};
 	}
 

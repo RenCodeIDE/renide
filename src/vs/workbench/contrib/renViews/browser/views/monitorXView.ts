@@ -11,22 +11,31 @@ import { IRenWorkspaceStore } from "../../common/renWorkspaceStore.js";
 import { IChatService, IChatDetail } from "../../../chat/common/chatService.js";
 import { IMarkdownRendererService } from "../../../../../platform/markdown/browser/markdownRenderer.js";
 import { MonitorXChatController } from "./monitorXChatController.js";
-import { observableValue, autorun, ISettableObservable } from "../../../../../base/common/observable.js";
+import {
+	observableValue,
+	autorun,
+	ISettableObservable,
+} from "../../../../../base/common/observable.js";
 import { ButtonWithIcon } from "../../../../../base/browser/ui/button/button.js";
 import { Codicon } from "../../../../../base/common/codicons.js";
 import { $ } from "../../../../../base/browser/dom.js";
+import {
+	ChatSessionRecency,
+	ChatSessionStatus,
+} from "../../../chat/common/chatSessionsService.js";
 
 export class MonitorXView extends Disposable implements IRenView {
 	private _container: HTMLElement | null = null;
 	private _chatController: MonitorXChatController | undefined;
 	private _chatHistoryContainer: HTMLElement | null = null;
 	private _chatHistoryExpanded: ISettableObservable<boolean> | undefined;
+	private _searchFilter: string = "";
 
 	constructor(
 		@IRenWorkspaceStore private readonly workspaceStore: IRenWorkspaceStore,
 		@IChatService private readonly chatService: IChatService,
 		@IMarkdownRendererService
-		private readonly markdownRendererService: IMarkdownRendererService,
+		private readonly markdownRendererService: IMarkdownRendererService
 	) {
 		super();
 	}
@@ -68,42 +77,111 @@ export class MonitorXView extends Disposable implements IRenView {
 		// Sidebar header with toggle button
 		const sidebarHeader = document.createElement("div");
 		sidebarHeader.className = "ren-monitorx-chat-sidebar-header";
-		const toggleButtonEl = $('.ren-monitorx-chat-sidebar-toggle');
+		const toggleButtonEl = $(".ren-monitorx-chat-sidebar-toggle");
 		const toggleButton = this._register(new ButtonWithIcon(toggleButtonEl, {}));
-		toggleButton.label = 'Chat History';
+		toggleButton.label = "Chat History";
 		sidebarHeader.appendChild(toggleButtonEl);
 
 		// Sidebar content (history list)
 		const sidebarContent = document.createElement("div");
 		sidebarContent.className = "ren-monitorx-chat-sidebar-content";
-		this._chatHistoryContainer = sidebarContent;
+
+		// Add search input
+		const searchContainer = document.createElement("div");
+		searchContainer.className = "ren-monitorx-chat-history-search-container";
+
+		const searchInput = document.createElement("input");
+		searchInput.type = "text";
+		searchInput.className = "ren-monitorx-chat-history-search-input";
+		searchInput.placeholder = "Search conversations...";
+		searchInput.setAttribute("aria-label", "Search chat history");
+
+		// Search icon
+		const searchIcon = document.createElement("span");
+		searchIcon.className = "codicon codicon-search";
+		searchIcon.setAttribute("aria-hidden", "true");
+
+		const searchWrapper = document.createElement("div");
+		searchWrapper.className = "ren-monitorx-chat-history-search-wrapper";
+		searchWrapper.appendChild(searchIcon);
+		searchWrapper.appendChild(searchInput);
+		searchContainer.appendChild(searchWrapper);
+
+		// Clear search button (hidden by default)
+		const clearButton = document.createElement("button");
+		clearButton.className = "ren-monitorx-chat-history-search-clear";
+		clearButton.setAttribute("aria-label", "Clear search");
+		const clearIcon = document.createElement("span");
+		clearIcon.className = "codicon codicon-close";
+		clearButton.appendChild(clearIcon);
+		clearButton.style.display = "none";
+		clearButton.onclick = () => {
+			searchInput.value = "";
+			this._searchFilter = "";
+			clearButton.style.display = "none";
+			void this.renderChatHistory();
+		};
+		searchContainer.appendChild(clearButton);
+
+		// Search input handler
+		let searchTimeout: ReturnType<typeof setTimeout> | undefined;
+		searchInput.addEventListener("input", () => {
+			this._searchFilter = searchInput.value.trim().toLowerCase();
+			clearButton.style.display = this._searchFilter ? "flex" : "none";
+
+			// Debounce search
+			if (searchTimeout) {
+				clearTimeout(searchTimeout);
+			}
+			searchTimeout = setTimeout(() => {
+				void this.renderChatHistory();
+			}, 300);
+		});
+
+		sidebarContent.appendChild(searchContainer);
+		this._chatHistoryContainer = document.createElement("div");
+		this._chatHistoryContainer.className = "ren-monitorx-chat-history-list";
+		sidebarContent.appendChild(this._chatHistoryContainer);
 
 		sidebar.appendChild(sidebarHeader);
 		sidebar.appendChild(sidebarContent);
 
 		// Initialize sidebar state from workspace storage
-		const storedState = this.workspaceStore.getBoolean('monitorx.chatHistoryExpanded', true) ?? true;
+		const storedState =
+			this.workspaceStore.getBoolean("monitorx.chatHistoryExpanded", true) ??
+			true;
 		this._chatHistoryExpanded = observableValue(this, storedState);
 
 		// Persist state changes to workspace storage
-		this._register(autorun(reader => {
+		this._register(
+			autorun((reader) => {
 			const expanded = this._chatHistoryExpanded!.read(reader);
-			this.workspaceStore.setBoolean('monitorx.chatHistoryExpanded', expanded);
-		}));
+				this.workspaceStore.setBoolean(
+					"monitorx.chatHistoryExpanded",
+					expanded
+				);
+			})
+		);
 
 		// React to state changes - update UI
-		this._register(autorun(reader => {
+		this._register(
+			autorun((reader) => {
 			const expanded = this._chatHistoryExpanded!.read(reader);
-			toggleButton.icon = expanded ? Codicon.chevronLeft : Codicon.chevronRight;
-			sidebar.classList.toggle('collapsed', !expanded);
-			sidebarContent.style.display = expanded ? '' : 'none';
-		}));
+				toggleButton.icon = expanded
+					? Codicon.chevronLeft
+					: Codicon.chevronRight;
+				sidebar.classList.toggle("collapsed", !expanded);
+				sidebarContent.style.display = expanded ? "" : "none";
+			})
+		);
 
 		// Toggle button click handler
-		this._register(toggleButton.onDidClick(() => {
+		this._register(
+			toggleButton.onDidClick(() => {
 			const current = this._chatHistoryExpanded!.get();
 			this._chatHistoryExpanded!.set(!current, undefined);
-		}));
+			})
+		);
 
 		// Main chat panel container
 		const chatPanelWrapper = document.createElement("div");
@@ -127,8 +205,8 @@ export class MonitorXView extends Disposable implements IRenView {
 			new MonitorXChatController(
 				chatPanel,
 				this.chatService,
-				this.markdownRendererService,
-			),
+				this.markdownRendererService
+			)
 		);
 		await this._chatController.initialize();
 		await this.renderChatHistory();
@@ -146,54 +224,338 @@ export class MonitorXView extends Disposable implements IRenView {
 			// Get chat history
 			const history = await this.chatService.getHistory();
 
-			// Sort by last message date, most recent first
-			const sortedHistory = history.sort(
-				(a: IChatDetail, b: IChatDetail) =>
-					b.lastMessageDate - a.lastMessageDate,
-			);
+			if (history.length === 0) {
+				const emptyState = document.createElement("div");
+				emptyState.className = "ren-monitorx-chat-history-empty";
 
-			// Limit to 10 most recent
-			const recentHistory = sortedHistory.slice(0, 10);
+				const icon = document.createElement("span");
+				icon.className = "codicon codicon-comment-discussion";
+				icon.setAttribute("aria-hidden", "true");
+				emptyState.appendChild(icon);
 
-			if (recentHistory.length === 0) {
-				const emptyMessage = document.createElement("div");
-				emptyMessage.textContent = "No past conversations";
-				emptyMessage.className = "ren-monitorx-chat-history-empty";
-				this._chatHistoryContainer.appendChild(emptyMessage);
+				const message = document.createElement("div");
+				message.className = "ren-monitorx-chat-history-empty-message";
+				message.textContent = "No past conversations";
+				emptyState.appendChild(message);
+
+				const hint = document.createElement("div");
+				hint.className = "ren-monitorx-chat-history-empty-hint";
+				hint.textContent = "Start a new chat to begin your conversation";
+				emptyState.appendChild(hint);
+
+				this._chatHistoryContainer.appendChild(emptyState);
 				return;
 			}
 
 			const activeSessionId = this._chatController?.sessionId;
+			const now = Date.now();
+			const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
-			// Create history list
-			recentHistory.forEach((item: IChatDetail) => {
+			// Filter history by search term if provided
+			let filteredHistory = history;
+			if (this._searchFilter) {
+				filteredHistory = history.filter((item) => {
+					const title = (item.title || "").toLowerCase();
+					return title.includes(this._searchFilter);
+				});
+			}
+
+			// Group history items by recency
+			const activeItems: IChatDetail[] = [];
+			const recentItems: IChatDetail[] = [];
+			const staleItems: IChatDetail[] = [];
+
+			for (const item of filteredHistory) {
+				const model = this.chatService.getSession(item.sessionId);
+				let recency: ChatSessionRecency;
+
+				if (model && model.sessionRecencyObs) {
+					// Use the model's recency observable if available
+					recency = model.sessionRecencyObs.get();
+				} else {
+					// Determine recency from lastMessageDate and status
+					if (model && model.sessionStatusObs) {
+						const status = model.sessionStatusObs.get();
+						if (status === ChatSessionStatus.InProgress) {
+							recency = ChatSessionRecency.Active;
+						} else {
+							// Completed or Failed - check if recent
+							const timeSinceLastActivity = now - item.lastMessageDate;
+							recency =
+								timeSinceLastActivity < ONE_DAY_MS
+									? ChatSessionRecency.Recent
+									: ChatSessionRecency.Stale;
+						}
+					} else {
+						// Model not loaded - determine from timestamp
+						const timeSinceLastActivity = now - item.lastMessageDate;
+						recency =
+							timeSinceLastActivity < ONE_DAY_MS
+								? ChatSessionRecency.Recent
+								: ChatSessionRecency.Stale;
+					}
+				}
+
+				// Group into appropriate array
+				if (recency === ChatSessionRecency.Active) {
+					activeItems.push(item);
+				} else if (recency === ChatSessionRecency.Recent) {
+					recentItems.push(item);
+				} else {
+					staleItems.push(item);
+				}
+			}
+
+			// Sort each group by last message date (most recent first)
+			activeItems.sort((a, b) => b.lastMessageDate - a.lastMessageDate);
+			recentItems.sort((a, b) => b.lastMessageDate - a.lastMessageDate);
+			staleItems.sort((a, b) => b.lastMessageDate - a.lastMessageDate);
+
+			// Show message if no results from search
+			if (this._searchFilter && filteredHistory.length === 0) {
+				const noResults = document.createElement("div");
+				noResults.className = "ren-monitorx-chat-history-empty";
+
+				const icon = document.createElement("span");
+				icon.className = "codicon codicon-search";
+				icon.setAttribute("aria-hidden", "true");
+				noResults.appendChild(icon);
+
+				const message = document.createElement("div");
+				message.className = "ren-monitorx-chat-history-empty-message";
+				message.textContent = "No conversations found";
+				noResults.appendChild(message);
+
+				const hint = document.createElement("div");
+				hint.className = "ren-monitorx-chat-history-empty-hint";
+				hint.textContent = "Try a different search term";
+				noResults.appendChild(hint);
+
+				this._chatHistoryContainer.appendChild(noResults);
+				return;
+			}
+
+			// Render sections
+			this.renderHistorySection(
+				"Active",
+				activeItems,
+				activeSessionId,
+				ChatSessionRecency.Active
+			);
+			this.renderHistorySection(
+				"Recent",
+				recentItems,
+				activeSessionId,
+				ChatSessionRecency.Recent
+			);
+			this.renderHistorySection(
+				"Stale",
+				staleItems,
+				activeSessionId,
+				ChatSessionRecency.Stale
+			);
+		} catch (error) {
+			console.error("Failed to render chat history:", error);
+		}
+	}
+
+	private getSectionIcon(recency: ChatSessionRecency): string {
+		switch (recency) {
+			case ChatSessionRecency.Active:
+				return "play-circle";
+			case ChatSessionRecency.Recent:
+				return "clock";
+			case ChatSessionRecency.Stale:
+				return "folder";
+			default:
+				return "circle";
+		}
+	}
+
+	private formatRelativeTime(timestamp: number): string {
+		const now = Date.now();
+		const diffMs = now - timestamp;
+		const diffMins = Math.floor(diffMs / 60000);
+		const diffHours = Math.floor(diffMs / 3600000);
+		const diffDays = Math.floor(diffMs / 86400000);
+
+		if (diffMins < 1) {
+			return "Just now";
+		} else if (diffMins < 60) {
+			return `${diffMins}m ago`;
+		} else if (diffHours < 24) {
+			return `${diffHours}h ago`;
+		} else if (diffDays < 7) {
+			return `${diffDays}d ago`;
+		} else {
+			return new Date(timestamp).toLocaleDateString();
+		}
+	}
+
+	private getPreviewText(item: IChatDetail): string {
+		// Try to get the last message from the model if available
+		const model = this.chatService.getSession(item.sessionId);
+		if (model) {
+			const requests = model.getRequests();
+			if (requests.length > 0) {
+				const lastRequest = requests[requests.length - 1];
+				const messageText = lastRequest.message.text || "";
+				// Return first line or first 60 characters
+				const firstLine = messageText.split("\n")[0];
+				return firstLine.length > 60
+					? firstLine.substring(0, 60) + "..."
+					: firstLine;
+			}
+		}
+		return "";
+	}
+
+	private renderHistorySection(
+		sectionTitle: string,
+		items: IChatDetail[],
+		activeSessionId: string | undefined,
+		recency: ChatSessionRecency
+	): void {
+		if (!this._chatHistoryContainer || items.length === 0) {
+			return;
+		}
+
+		// Create section container
+		const section = document.createElement("div");
+		section.className = "ren-monitorx-chat-history-section";
+		section.setAttribute("data-recency", recency);
+
+		// Create section header with icon, title, and badge
+		const header = document.createElement("div");
+		header.className = "ren-monitorx-chat-history-section-header";
+
+		// Add icon
+		const icon = document.createElement("span");
+		icon.className = `codicon codicon-${this.getSectionIcon(recency)}`;
+		icon.setAttribute("aria-hidden", "true");
+		header.appendChild(icon);
+
+		// Add title
+		const titleSpan = document.createElement("span");
+		titleSpan.className = "ren-monitorx-chat-history-section-title";
+		titleSpan.textContent = sectionTitle;
+		header.appendChild(titleSpan);
+
+		// Add badge with count
+		const badge = document.createElement("span");
+		badge.className = "ren-monitorx-chat-history-section-badge";
+		badge.textContent = items.length.toString();
+		badge.setAttribute(
+			"aria-label",
+			`${items.length} items in ${sectionTitle}`
+		);
+		header.appendChild(badge);
+
+		section.appendChild(header);
+
+		// Create items container
+		const itemsContainer = document.createElement("div");
+		itemsContainer.className = "ren-monitorx-chat-history-items";
+
+		// Create history items
+		items.forEach((item: IChatDetail) => {
 				const historyItem = document.createElement("div");
 				historyItem.className = "ren-monitorx-chat-history-item";
+			historyItem.setAttribute("role", "button");
+			historyItem.setAttribute("tabindex", "0");
+			historyItem.setAttribute(
+				"aria-label",
+				`${item.title || "Untitled Chat"}, ${this.formatRelativeTime(
+					item.lastMessageDate
+				)}`
+			);
 				if (item.sessionId === activeSessionId) {
 					historyItem.classList.add("active");
+				}
+
+			// Get status indicator
+			const model = this.chatService.getSession(item.sessionId);
+			let statusClass = "";
+			let statusIcon = "";
+			if (model && model.sessionStatusObs) {
+				const status = model.sessionStatusObs.get();
+				if (status === ChatSessionStatus.InProgress) {
+					statusClass = "status-in-progress";
+					statusIcon = "sync";
+				} else if (status === ChatSessionStatus.Completed) {
+					statusClass = "status-completed";
+					statusIcon = "check";
+				} else if (status === ChatSessionStatus.Failed) {
+					statusClass = "status-failed";
+					statusIcon = "error";
+				}
+			}
+
+			// Item content wrapper
+			const contentWrapper = document.createElement("div");
+			contentWrapper.className = "ren-monitorx-chat-history-item-content";
+
+			// Title with status indicator
+			const titleRow = document.createElement("div");
+			titleRow.className = "ren-monitorx-chat-history-item-header";
+
+			if (statusIcon) {
+				const statusIndicator = document.createElement("span");
+				statusIndicator.className = `codicon codicon-${statusIcon} ren-monitorx-chat-history-status-indicator ${statusClass}`;
+				statusIndicator.setAttribute("aria-hidden", "true");
+				titleRow.appendChild(statusIndicator);
 				}
 
 				const title = document.createElement("div");
 				title.className = "ren-monitorx-chat-history-title";
 				title.textContent = item.title || "Untitled Chat";
+			titleRow.appendChild(title);
+			contentWrapper.appendChild(titleRow);
+
+			// Preview text
+			const preview = this.getPreviewText(item);
+			if (preview) {
+				const previewElement = document.createElement("div");
+				previewElement.className = "ren-monitorx-chat-history-preview";
+				previewElement.textContent = preview;
+				contentWrapper.appendChild(previewElement);
+			}
+
+			// Metadata row (date and relative time)
+			const metadataRow = document.createElement("div");
+			metadataRow.className = "ren-monitorx-chat-history-metadata";
+
+			const relativeTime = document.createElement("div");
+			relativeTime.className = "ren-monitorx-chat-history-relative-time";
+			relativeTime.textContent = this.formatRelativeTime(item.lastMessageDate);
+			metadataRow.appendChild(relativeTime);
 
 				const date = document.createElement("div");
 				date.className = "ren-monitorx-chat-history-date";
 				date.textContent = new Date(item.lastMessageDate).toLocaleDateString();
+			metadataRow.appendChild(date);
 
-				historyItem.appendChild(title);
-				historyItem.appendChild(date);
+			contentWrapper.appendChild(metadataRow);
+			historyItem.appendChild(contentWrapper);
 
 				// Click to load session
 				historyItem.onclick = () => {
 					void this.loadChatSession(item.sessionId);
 				};
 
-				this._chatHistoryContainer!.appendChild(historyItem);
-			});
-		} catch (error) {
-			console.error("Failed to render chat history:", error);
-		}
+			// Keyboard support
+			historyItem.onkeydown = (e: KeyboardEvent) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					void this.loadChatSession(item.sessionId);
+				}
+			};
+
+			itemsContainer.appendChild(historyItem);
+		});
+
+		section.appendChild(itemsContainer);
+		this._chatHistoryContainer.appendChild(section);
 	}
 
 	private async loadChatSession(sessionId: string): Promise<void> {

@@ -677,11 +677,17 @@
 }
 
 .monitorx-diff-inserted-line {
-	background-color: var(--vscode-diffEditor-insertedTextBackground, rgba(155, 185, 85, 0.2));
+	background-color: var(
+		--vscode-diffEditor-insertedTextBackground,
+		rgba(155, 185, 85, 0.2)
+	);
 }
 
 .monitorx-diff-deleted-line {
-	background-color: var(--vscode-diffEditor-removedTextBackground, rgba(255, 0, 0, 0.2));
+	background-color: var(
+		--vscode-diffEditor-removedTextBackground,
+		rgba(255, 0, 0, 0.2)
+	);
 }
 
 .ren-monitorx-changelog-entry-time {
@@ -962,6 +968,11 @@
 	flex-shrink: 0;
 }
 
+.ren-monitorx-chat-sidebar.collapsed .ren-monitorx-chat-sidebar-header {
+	padding: 8px 0;
+	justify-content: center;
+}
+
 .ren-monitorx-chat-sidebar-toggle {
 	width: 100%;
 	justify-content: flex-start;
@@ -974,7 +985,82 @@
 	padding: 0;
 }
 
+.ren-monitorx-chat-sidebar.collapsed
+	.ren-monitorx-chat-sidebar-toggle
+	.monaco-button-mdlabel {
+	display: none;
+}
+
 .ren-monitorx-chat-sidebar-content {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+.ren-monitorx-chat-history-search-container {
+	padding: 8px;
+	border-bottom: 1px solid var(--vscode-panel-border);
+	flex-shrink: 0;
+}
+
+.ren-monitorx-chat-history-search-wrapper {
+	position: relative;
+	display: flex;
+	align-items: center;
+}
+
+.ren-monitorx-chat-history-search-wrapper .codicon {
+	position: absolute;
+	left: 10px;
+	color: var(--vscode-descriptionForeground);
+	pointer-events: none;
+	z-index: 1;
+}
+
+.ren-monitorx-chat-history-search-input {
+	width: 100%;
+	padding: 6px 10px 6px 32px;
+	border: 1px solid var(--vscode-input-border);
+	border-radius: 4px;
+	background-color: var(--vscode-input-background);
+	color: var(--vscode-input-foreground);
+	font-size: 12px;
+	font-family: inherit;
+	box-sizing: border-box;
+}
+
+.ren-monitorx-chat-history-search-input:focus {
+	outline: none;
+	border-color: var(--vscode-focusBorder);
+	box-shadow: 0 0 0 1px var(--vscode-focusBorder);
+}
+
+.ren-monitorx-chat-history-search-input::placeholder {
+	color: var(--vscode-input-placeholderForeground);
+}
+
+.ren-monitorx-chat-history-search-clear {
+	position: absolute;
+	right: 8px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	border: none;
+	background: transparent;
+	color: var(--vscode-descriptionForeground);
+	cursor: pointer;
+	border-radius: 3px;
+	transition: background-color 0.2s ease;
+}
+
+.ren-monitorx-chat-history-search-clear:hover {
+	background-color: var(--vscode-list-hoverBackground);
+}
+
+.ren-monitorx-chat-history-list {
 	flex: 1;
 	overflow-y: auto;
 	overflow-x: hidden;
@@ -1053,17 +1139,131 @@
 }
 
 .ren-monitorx-chat-history-empty {
-	padding: 16px;
+	padding: 32px 16px;
 	text-align: center;
 	color: var(--vscode-descriptionForeground);
-	font-size: 13px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 12px;
+}
+
+.ren-monitorx-chat-history-empty .codicon {
+	font-size: 48px;
+	opacity: 0.5;
+	color: var(--vscode-descriptionForeground);
+}
+
+.ren-monitorx-chat-history-empty-message {
+	font-size: 14px;
+	font-weight: 500;
+	color: var(--vscode-editor-foreground);
+}
+
+.ren-monitorx-chat-history-empty-hint {
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+	opacity: 0.8;
+}
+
+.ren-monitorx-chat-history-section {
+	margin-bottom: 16px;
+}
+
+.ren-monitorx-chat-history-section-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 12px;
+	font-size: 12px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--vscode-descriptionForeground);
+	background-color: var(--vscode-sideBarSectionHeader-background, transparent);
+	border-bottom: 1px solid var(--vscode-panel-border);
+	margin-bottom: 4px;
+}
+
+.ren-monitorx-chat-history-section-header .codicon {
+	font-size: 14px;
+	opacity: 0.8;
+}
+
+.ren-monitorx-chat-history-section-title {
+	flex: 1;
+}
+
+.ren-monitorx-chat-history-section-badge {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 20px;
+	height: 18px;
+	padding: 0 6px;
+	background-color: var(
+		--vscode-badge-background,
+		var(--vscode-descriptionForeground)
+	);
+	color: var(--vscode-badge-foreground, var(--vscode-editor-background));
+	border-radius: 10px;
+	font-size: 11px;
+	font-weight: 600;
+}
+
+.ren-monitorx-chat-history-section[data-recency="active"]
+	.ren-monitorx-chat-history-section-header {
+	color: var(--vscode-textLink-foreground, var(--vscode-descriptionForeground));
+}
+
+.ren-monitorx-chat-history-section[data-recency="active"]
+	.ren-monitorx-chat-history-section-header
+	.codicon {
+	color: var(--vscode-textLink-foreground, inherit);
+}
+
+.ren-monitorx-chat-history-section[data-recency="recent"]
+	.ren-monitorx-chat-history-section-header {
+	color: var(--vscode-descriptionForeground);
+}
+
+.ren-monitorx-chat-history-section[data-recency="stale"]
+	.ren-monitorx-chat-history-section-header {
+	color: var(--vscode-descriptionForeground);
+	opacity: 0.7;
+}
+
+.ren-monitorx-chat-history-items {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
 }
 
 .ren-monitorx-chat-history-item {
 	padding: 12px 16px;
 	border-bottom: 1px solid var(--vscode-panel-border);
 	cursor: pointer;
-	transition: background-color 0.2s ease;
+	transition: background-color 0.2s ease, box-shadow 0.2s ease;
+	border-radius: 4px;
+	margin: 0 4px;
+}
+
+.ren-monitorx-chat-history-item:last-child {
+	border-bottom: none;
+}
+
+.ren-monitorx-chat-history-item:hover {
+	background-color: var(--vscode-list-hoverBackground);
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.ren-monitorx-chat-history-item:focus {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+.ren-monitorx-chat-history-item:active {
+	background-color: var(--vscode-list-activeSelectionBackground);
 }
 
 .ren-monitorx-chat-history-item:last-child {
@@ -1078,16 +1278,88 @@
 	background-color: var(--vscode-list-activeSelectionBackground);
 }
 
+.ren-monitorx-chat-history-item-content {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.ren-monitorx-chat-history-item-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.ren-monitorx-chat-history-status-indicator {
+	font-size: 14px;
+	flex-shrink: 0;
+}
+
+.ren-monitorx-chat-history-status-indicator.status-in-progress {
+	color: var(
+		--vscode-progressBar-background,
+		var(--vscode-textLink-foreground)
+	);
+	animation: spin 1s linear infinite;
+}
+
+.ren-monitorx-chat-history-status-indicator.status-completed {
+	color: var(--vscode-terminal-ansiGreen, #89d185);
+}
+
+.ren-monitorx-chat-history-status-indicator.status-failed {
+	color: var(--vscode-errorForeground);
+}
+
+@keyframes spin {
+	from {
+		transform: rotate(0deg);
+	}
+	to {
+		transform: rotate(360deg);
+	}
+}
+
 .ren-monitorx-chat-history-title {
 	font-size: 14px;
 	font-weight: 500;
 	color: var(--vscode-editor-foreground);
-	margin-bottom: 4px;
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.ren-monitorx-chat-history-preview {
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+	line-height: 1.4;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	display: -webkit-box;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	margin-top: 2px;
+}
+
+.ren-monitorx-chat-history-metadata {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-top: 2px;
+}
+
+.ren-monitorx-chat-history-relative-time {
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	font-weight: 500;
 }
 
 .ren-monitorx-chat-history-date {
-	font-size: 12px;
+	font-size: 11px;
 	color: var(--vscode-descriptionForeground);
+	opacity: 0.7;
 }
 
 .ren-monitorx-chat-widget-container {
@@ -1178,6 +1450,33 @@
 	justify-content: space-between;
 	align-items: center;
 	gap: 12px;
+}
+
+.ren-monitorx-chat-composer-footer-left {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+
+.ren-monitorx-chat-character-count {
+	font-size: 11px;
+	color: var(--vscode-descriptionForeground);
+	min-width: 30px;
+	text-align: right;
+}
+
+.ren-monitorx-chat-character-count-warning {
+	color: var(--vscode-errorForeground);
+}
+
+.ren-monitorx-chat-send-button {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.ren-monitorx-chat-send-button .codicon {
+	font-size: 14px;
 }
 
 .ren-monitorx-chat-hint {

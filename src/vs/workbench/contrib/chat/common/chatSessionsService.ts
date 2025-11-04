@@ -22,6 +22,12 @@ export const enum ChatSessionStatus {
 	InProgress = 2
 }
 
+export enum ChatSessionRecency {
+	Active = 'active',           // Agent is actively responding
+	Recent = 'recent',           // Agent stopped responding within last 24 hours
+	Stale = 'stale'              // Last activity was over 24 hours ago
+}
+
 export interface IChatSessionCommandContribution {
 	name: string;
 	description: string;
