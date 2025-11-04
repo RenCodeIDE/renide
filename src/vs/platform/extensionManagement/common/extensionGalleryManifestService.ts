@@ -40,6 +40,43 @@ export class ExtensionGalleryManifestService
 			: ExtensionGalleryManifestStatus.Unavailable;
 	}
 
+	/**
+	 * Helper function to fix duplicate /api in paths and prevent double slashes
+	 * If serverAddress ends with /api and path starts with /api, remove duplicate
+	 * Also ensures no double slashes when concatenating
+	 */
+	private fixDuplicateApi(serverAddress: string, path: string): string {
+		// First, handle duplicate /api case
+		if (serverAddress.endsWith("/api") && path.startsWith("/api")) {
+			// Remove the leading /api from path to avoid duplicate
+			const fixedPath = path.substring(4); // Remove "/api"
+			// If the result is empty, return empty string (not "/") since serverAddress already ends with /api
+			if (!fixedPath) {
+				return "";
+			}
+			// Remove leading "/" if present to avoid double slash when concatenating
+			// serverAddress ends with /api (no trailing slash), so path shouldn't start with /
+			return fixedPath.startsWith("/") ? fixedPath.substring(1) : fixedPath;
+		}
+		// Handle case where serverAddress ends with /api (no trailing slash) and path starts with /
+		// This prevents double slashes: /api + /extensionquery = /api//extensionquery (wrong!)
+		// Should be: /api + extensionquery = /api/extensionquery (correct)
+		if (
+			serverAddress.endsWith("/api") &&
+			!serverAddress.endsWith("/api/") &&
+			path.startsWith("/")
+		) {
+			// Remove leading "/" to avoid double slash
+			return path === "/" ? "" : path.substring(1);
+		}
+		// Handle case where serverAddress ends with /api/ (with trailing slash) and path starts with /
+		if (serverAddress.endsWith("/api/") && path.startsWith("/")) {
+			// Remove leading "/" since serverAddress already has trailing slash
+			return path.substring(1);
+		}
+		return path;
+	}
+
 	constructor(
 		@IProductService protected readonly productService: IProductService
 	) {
@@ -82,7 +119,12 @@ export class ExtensionGalleryManifestService
 					// Replace /vscode/gallery with /api for API endpoints
 					// This maps: /vscode/gallery/extensionquery -> /api/extensionquery
 					//            /vscode/gallery/{publisher}/{name}/latest -> /api/{publisher}/{name}/latest
-					const normalizedPath = pathPart.replace(/^\/vscode\/gallery/, "/api");
+					let normalizedPath = pathPart.replace(/^\/vscode\/gallery/, "/api");
+					// Fix duplicate /api if serverAddress ends with /api and normalizedPath starts with /api
+					normalizedPath = this.fixDuplicateApi(
+						normalizedServerAddress,
+						normalizedPath
+					);
 					serviceUrl = `${normalizedServerAddress}${normalizedPath}`;
 				}
 			}
@@ -92,9 +134,11 @@ export class ExtensionGalleryManifestService
 				if (itemUrlMatch) {
 					const pathPart = itemUrlMatch[1];
 					// Map /vscode/item to /api/item
-					const normalizedPath = pathPart.replace(
-						/^\/vscode\/item/,
-						"/api/item"
+					let normalizedPath = pathPart.replace(/^\/vscode\/item/, "/api/item");
+					// Fix duplicate /api if serverAddress ends with /api and normalizedPath starts with /api
+					normalizedPath = this.fixDuplicateApi(
+						normalizedServerAddress,
+						normalizedPath
 					);
 					itemUrl = `${normalizedServerAddress}${normalizedPath}`;
 				}
@@ -105,9 +149,14 @@ export class ExtensionGalleryManifestService
 				if (publisherUrlMatch) {
 					const pathPart = publisherUrlMatch[1];
 					// Map /publishers to /api/publishers
-					const normalizedPath = pathPart.replace(
+					let normalizedPath = pathPart.replace(
 						/^\/publishers/,
 						"/api/publishers"
+					);
+					// Fix duplicate /api if serverAddress ends with /api and normalizedPath starts with /api
+					normalizedPath = this.fixDuplicateApi(
+						normalizedServerAddress,
+						normalizedPath
 					);
 					publisherUrl = `${normalizedServerAddress}${normalizedPath}`;
 				}

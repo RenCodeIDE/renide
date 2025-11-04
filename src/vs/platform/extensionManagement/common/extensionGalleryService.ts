@@ -1023,6 +1023,43 @@ export abstract class AbstractExtensionGalleryService
 	private readonly commonHeadersPromise: Promise<IHeaders>;
 	private readonly extensionsEnabledWithApiProposalVersion: string[];
 
+	/**
+	 * Helper function to fix duplicate /api in paths and prevent double slashes
+	 * If serverAddress ends with /api and path starts with /api, remove duplicate
+	 * Also ensures no double slashes when concatenating
+	 */
+	private fixDuplicateApi(serverAddress: string, path: string): string {
+		// First, handle duplicate /api case
+		if (serverAddress.endsWith("/api") && path.startsWith("/api")) {
+			// Remove the leading /api from path to avoid duplicate
+			const fixedPath = path.substring(4); // Remove "/api"
+			// If the result is empty, return empty string (not "/") since serverAddress already ends with /api
+			if (!fixedPath) {
+				return "";
+			}
+			// Remove leading "/" if present to avoid double slash when concatenating
+			// serverAddress ends with /api (no trailing slash), so path shouldn't start with /
+			return fixedPath.startsWith("/") ? fixedPath.substring(1) : fixedPath;
+		}
+		// Handle case where serverAddress ends with /api (no trailing slash) and path starts with /
+		// This prevents double slashes: /api + /extensionquery = /api//extensionquery (wrong!)
+		// Should be: /api + extensionquery = /api/extensionquery (correct)
+		if (
+			serverAddress.endsWith("/api") &&
+			!serverAddress.endsWith("/api/") &&
+			path.startsWith("/")
+		) {
+			// Remove leading "/" to avoid double slash
+			return path === "/" ? "" : path.substring(1);
+		}
+		// Handle case where serverAddress ends with /api/ (with trailing slash) and path starts with /
+		if (serverAddress.endsWith("/api/") && path.startsWith("/")) {
+			// Remove leading "/" since serverAddress already has trailing slash
+			return path.substring(1);
+		}
+		return path;
+	}
+
 	constructor(
 		storageService: IStorageService | undefined,
 		@IRequestService private readonly requestService: IRequestService,
@@ -1064,7 +1101,12 @@ export abstract class AbstractExtensionGalleryService
 			);
 			if (templateMatch) {
 				const pathPart = templateMatch[1];
-				extensionUrlTemplate = `${normalizedServerAddress}${pathPart}`;
+				// Fix duplicate /api if serverAddress ends with /api and pathPart starts with /api
+				const finalPath = this.fixDuplicateApi(
+					normalizedServerAddress,
+					pathPart
+				);
+				extensionUrlTemplate = `${normalizedServerAddress}${finalPath}`;
 			}
 		}
 
@@ -3160,7 +3202,9 @@ export abstract class AbstractExtensionGalleryService
 			const templateMatch = productTemplate.match(/https?:\/\/[^\/]+(\/.*)/);
 			if (templateMatch) {
 				const pathPart = templateMatch[1];
-				template = `${baseUrl}${pathPart}`;
+				// Fix duplicate /api if baseUrl ends with /api and pathPart starts with /api
+				const finalPath = this.fixDuplicateApi(baseUrl, pathPart);
+				template = `${baseUrl}${finalPath}`;
 			}
 		}
 
