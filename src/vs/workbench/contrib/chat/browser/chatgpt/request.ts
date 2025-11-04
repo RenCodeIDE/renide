@@ -26,6 +26,7 @@ export async function sendChatGPTRequest(
 	token: CancellationToken,
 	options?: ServerRequestOptions,
 	logService?: ILogService,
+	modelType: 'openai' | 'gemini' = 'openai',
 ): Promise<ChatGPTStreamingResponse> {
 	const url = `${serverAddress}${endpoint}`;
 
@@ -44,7 +45,7 @@ export async function sendChatGPTRequest(
 	);
 
 	const payload: Record<string, unknown> = {
-		model: 'openai',
+		model: modelType,
 		messages: messages,
 	};
 

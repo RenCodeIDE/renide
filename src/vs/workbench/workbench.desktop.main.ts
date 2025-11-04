@@ -177,7 +177,7 @@ import './contrib/remoteTunnel/electron-browser/remoteTunnel.contribution.js';
 // Chat
 import './contrib/chat/electron-browser/chat.contribution.js';
 import './contrib/inlineChat/electron-browser/inlineChat.contribution.js';
-import './contrib/chat/browser/deepseek.contribution.js';
+import './contrib/chat/browser/gemini.contribution.js';
 import './contrib/chat/browser/chatgpt.contribution.js';
 // Encryption
 import './contrib/encryption/electron-browser/encryption.contribution.js';
