@@ -3,12 +3,18 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Event } from '../../../base/common/event.js';
-import { Disposable } from '../../../base/common/lifecycle.js';
-import { env } from '../../../base/common/process.js';
-import { IProductService } from '../../product/common/productService.js';
-import { ExtensionGalleryResourceType, Flag, IExtensionGalleryManifest, IExtensionGalleryManifestService, ExtensionGalleryManifestStatus } from './extensionGalleryManifest.js';
-import { FilterType, SortBy } from './extensionManagement.js';
+import { Event } from "../../../base/common/event.js";
+import { Disposable } from "../../../base/common/lifecycle.js";
+import { env } from "../../../base/common/process.js";
+import { IProductService } from "../../product/common/productService.js";
+import {
+	ExtensionGalleryResourceType,
+	Flag,
+	IExtensionGalleryManifest,
+	IExtensionGalleryManifestService,
+	ExtensionGalleryManifestStatus,
+} from "./extensionGalleryManifest.js";
+import { FilterType, SortBy } from "./extensionManagement.js";
 
 type ExtensionGalleryConfig = {
 	readonly serviceUrl: string;
@@ -20,24 +26,30 @@ type ExtensionGalleryConfig = {
 	readonly nlsBaseUrl: string;
 };
 
-export class ExtensionGalleryManifestService extends Disposable implements IExtensionGalleryManifestService {
-
+export class ExtensionGalleryManifestService
+	extends Disposable
+	implements IExtensionGalleryManifestService
+{
 	readonly _serviceBrand: undefined;
 	readonly onDidChangeExtensionGalleryManifest = Event.None;
 	readonly onDidChangeExtensionGalleryManifestStatus = Event.None;
 
 	get extensionGalleryManifestStatus(): ExtensionGalleryManifestStatus {
-		return !!this.productService.extensionsGallery?.serviceUrl ? ExtensionGalleryManifestStatus.Available : ExtensionGalleryManifestStatus.Unavailable;
+		return !!this.productService.extensionsGallery?.serviceUrl
+			? ExtensionGalleryManifestStatus.Available
+			: ExtensionGalleryManifestStatus.Unavailable;
 	}
 
 	constructor(
-		@IProductService protected readonly productService: IProductService,
+		@IProductService protected readonly productService: IProductService
 	) {
 		super();
 	}
 
 	async getExtensionGalleryManifest(): Promise<IExtensionGalleryManifest | null> {
-		const extensionsGallery = this.productService.extensionsGallery as ExtensionGalleryConfig | undefined;
+		const extensionsGallery = this.productService.extensionsGallery as
+			| ExtensionGalleryConfig
+			| undefined;
 		if (!extensionsGallery?.serviceUrl) {
 			return null;
 		}
@@ -48,14 +60,18 @@ export class ExtensionGalleryManifestService extends Disposable implements IExte
 		let publisherUrl = extensionsGallery.publisherUrl;
 
 		const productEnvVars = this.productService.environmentVariables;
-		const serverAddress = env['SERVER_ADDRESS'] || process.env['SERVER_ADDRESS'] || productEnvVars?.['SERVER_ADDRESS'];
+		const serverAddress =
+			env["SERVER_ADDRESS"] || productEnvVars?.["SERVER_ADDRESS"];
 
 		if (serverAddress) {
 			let normalizedServerAddress = serverAddress.trim();
-			if (!normalizedServerAddress.startsWith('http://') && !normalizedServerAddress.startsWith('https://')) {
+			if (
+				!normalizedServerAddress.startsWith("http://") &&
+				!normalizedServerAddress.startsWith("https://")
+			) {
 				normalizedServerAddress = `https://${normalizedServerAddress}`;
 			}
-			normalizedServerAddress = normalizedServerAddress.replace(/\/+$/, '');
+			normalizedServerAddress = normalizedServerAddress.replace(/\/+$/, "");
 
 			// Replace base URLs with server address
 			// Map serviceUrl paths to /api/ on the server (e.g., /vscode/gallery/extensionquery -> /api/extensionquery)
@@ -66,7 +82,7 @@ export class ExtensionGalleryManifestService extends Disposable implements IExte
 					// Replace /vscode/gallery with /api for API endpoints
 					// This maps: /vscode/gallery/extensionquery -> /api/extensionquery
 					//            /vscode/gallery/{publisher}/{name}/latest -> /api/{publisher}/{name}/latest
-					const normalizedPath = pathPart.replace(/^\/vscode\/gallery/, '/api');
+					const normalizedPath = pathPart.replace(/^\/vscode\/gallery/, "/api");
 					serviceUrl = `${normalizedServerAddress}${normalizedPath}`;
 				}
 			}
@@ -76,7 +92,10 @@ export class ExtensionGalleryManifestService extends Disposable implements IExte
 				if (itemUrlMatch) {
 					const pathPart = itemUrlMatch[1];
 					// Map /vscode/item to /api/item
-					const normalizedPath = pathPart.replace(/^\/vscode\/item/, '/api/item');
+					const normalizedPath = pathPart.replace(
+						/^\/vscode\/item/,
+						"/api/item"
+					);
 					itemUrl = `${normalizedServerAddress}${normalizedPath}`;
 				}
 			}
@@ -86,7 +105,10 @@ export class ExtensionGalleryManifestService extends Disposable implements IExte
 				if (publisherUrlMatch) {
 					const pathPart = publisherUrlMatch[1];
 					// Map /publishers to /api/publishers
-					const normalizedPath = pathPart.replace(/^\/publishers/, '/api/publishers');
+					const normalizedPath = pathPart.replace(
+						/^\/publishers/,
+						"/api/publishers"
+					);
 					publisherUrl = `${normalizedServerAddress}${normalizedPath}`;
 				}
 			}
@@ -95,44 +117,44 @@ export class ExtensionGalleryManifestService extends Disposable implements IExte
 		const resources = [
 			{
 				id: `${serviceUrl}/extensionquery?api-version=3.0-preview.1`,
-				type: ExtensionGalleryResourceType.ExtensionQueryService
+				type: ExtensionGalleryResourceType.ExtensionQueryService,
 			},
 			{
 				id: `${serviceUrl}/{publisher}/{name}/latest`,
-				type: ExtensionGalleryResourceType.ExtensionLatestVersionUri
+				type: ExtensionGalleryResourceType.ExtensionLatestVersionUri,
 			},
 			{
 				id: `${serviceUrl}/publishers/{publisher}/extensions/{name}/{version}/stats?statType={statTypeName}`,
-				type: ExtensionGalleryResourceType.ExtensionStatisticsUri
+				type: ExtensionGalleryResourceType.ExtensionStatisticsUri,
 			},
 			{
 				id: `${serviceUrl}/itemName/{publisher}.{name}/version/{version}/statType/{statTypeValue}/vscodewebextension`,
-				type: ExtensionGalleryResourceType.WebExtensionStatisticsUri
+				type: ExtensionGalleryResourceType.WebExtensionStatisticsUri,
 			},
 		];
 
 		if (publisherUrl) {
 			resources.push({
 				id: `${publisherUrl}/{publisher}`,
-				type: ExtensionGalleryResourceType.PublisherViewUri
+				type: ExtensionGalleryResourceType.PublisherViewUri,
 			});
 		}
 
 		if (itemUrl) {
 			resources.push({
 				id: `${itemUrl}?itemName={publisher}.{name}`,
-				type: ExtensionGalleryResourceType.ExtensionDetailsViewUri
+				type: ExtensionGalleryResourceType.ExtensionDetailsViewUri,
 			});
 			resources.push({
 				id: `${itemUrl}?itemName={publisher}.{name}&ssr=false#review-details`,
-				type: ExtensionGalleryResourceType.ExtensionRatingViewUri
+				type: ExtensionGalleryResourceType.ExtensionRatingViewUri,
 			});
 		}
 
 		if (extensionsGallery.resourceUrlTemplate) {
 			resources.push({
 				id: extensionsGallery.resourceUrlTemplate,
-				type: ExtensionGalleryResourceType.ExtensionResourceUri
+				type: ExtensionGalleryResourceType.ExtensionResourceUri,
 			});
 		}
 
@@ -266,7 +288,7 @@ export class ExtensionGalleryManifestService extends Disposable implements IExte
 		];
 
 		return {
-			version: '',
+			version: "",
 			resources,
 			capabilities: {
 				extensionQuery: {
@@ -276,8 +298,8 @@ export class ExtensionGalleryManifestService extends Disposable implements IExte
 				},
 				signing: {
 					allPublicRepositorySigned: true,
-				}
-			}
+				},
+			},
 		};
 	}
 }
