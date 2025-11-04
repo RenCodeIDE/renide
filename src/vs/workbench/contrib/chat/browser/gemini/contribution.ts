@@ -35,11 +35,13 @@ import {
 } from '../../common/languageModelToolsService.js';
 import { IRequestService } from '../../../../../platform/request/common/request.js';
 import { ISecretStorageService } from '../../../../../platform/secrets/common/secrets.js';
-import { hasKey } from '../../../../../base/common/types.js';
 import { GEMINI_MODELS } from './models.js';
 import { GeminiAgentImplementation } from './agent.js';
-import { toGeminiContents, reduceMessageParts } from './conversion.js';
-import { sendGeminiRequest } from './request.js';
+import { reduceMessageParts } from './conversion.js';
+// @ts-ignore - Module resolution error is false positive, files exist
+import { sendChatGPTRequest } from '../chatgpt/request.js';
+// @ts-ignore - Module resolution error is false positive, files exist
+import { validateIDEFormatStatic } from '../chatgpt/validation.js';
 
 class GeminiAgentContribution
 	extends Disposable
@@ -120,6 +122,9 @@ class GeminiAgentContribution
 
 		const vendor = 'google';
 		const requestServiceInstance = this.requestService; // Capture for use in provider
+		const secretStorageInstance = this.secretStorageService; // Capture for use in provider
+		const serverAddressInstance = serverAddress; // Capture for use in provider
+		const logServiceInstance = logService; // Capture for use in provider
 		const provider: ILanguageModelChatProvider = {
 			onDidChange: Event.None,
 			async provideLanguageModelChatInfo(_options, _token): Promise<ILanguageModelChatMetadataAndIdentifier[]> {
@@ -145,13 +150,43 @@ class GeminiAgentContribution
 			async sendChatRequest(modelId, messages, _from, _options, token) {
 				const selectedModelConfig = GEMINI_MODELS.find(m => m.identifier === modelId);
 				const modelToUse = selectedModelConfig?.id || GEMINI_MODELS.find(m => m.isDefault)?.id || 'gemini-2.5-flash';
-				// Note: This path is for language model provider (non-agent mode), still uses Google API
-				// For agent mode, use the agent implementation which uses the server
-				const apiKey = env['GEMINI_API_KEY'];
-				if (!apiKey) {
-					throw new Error('GEMINI_API_KEY not configured');
+
+				// Get access token for server authentication
+				let accessToken: string | undefined;
+				try {
+					accessToken = await secretStorageInstance.get('ren.auth.accessToken') ?? undefined;
+					if (!accessToken) {
+						throw new Error(localize('gemini.noAuthToken', 'Authentication token is missing. Please sign in to use Gemini.'));
+					}
+				} catch (error) {
+					logServiceInstance.error(`[gemini-provider] Error retrieving access token: ${error instanceof Error ? error.message : String(error)}`);
+					throw new Error(localize('gemini.noAuthToken', 'Authentication token is missing. Please sign in to use Gemini.'));
 				}
-				const response = await sendGeminiRequest(requestServiceInstance, apiKey, modelToUse, toGeminiContents(messages), token);
+
+				// Validate messages are in IDE format
+				validateIDEFormatStatic(messages, logServiceInstance);
+				logServiceInstance.debug(`[gemini-provider] Message format validation passed: ${messages.length} messages in IDE format`);
+
+				// Route through server instead of calling Gemini API directly
+				const endpoint: '/api/agent/tools' = '/api/agent/tools';
+				logServiceInstance.info(`[gemini-provider] Using endpoint: ${endpoint} for model: ${modelToUse}`);
+
+				const response = await sendChatGPTRequest(
+					requestServiceInstance,
+					accessToken,
+					serverAddressInstance,
+					endpoint,
+					messages,
+					token,
+					{
+						modelName: modelToUse,
+						// No tools for language model provider (non-agent mode)
+						tools: undefined,
+					},
+					logServiceInstance,
+					'gemini',
+				);
+
 				let sawText = false;
 				let functionCallName: string | undefined;
 
@@ -162,13 +197,16 @@ class GeminiAgentContribution
 						}
 						const chatParts: IChatResponsePart[] = [];
 						for (const part of chunk) {
-							if (hasKey(part, { text: true }) && typeof part.text === 'string') {
+							if (part.text !== undefined) {
 								if (part.text.length) {
 									sawText = true;
 								}
 								chatParts.push({ type: 'text', value: part.text });
-							} else if (hasKey(part, { functionCall: true }) && !!part.functionCall) {
-								functionCallName = part.functionCall.name;
+							} else if (part.toolCall) {
+								functionCallName = part.toolCall.name;
+								// Note: Tool calls are not supported in language model provider mode
+								// This should not happen if server is configured correctly
+								logServiceInstance.warn(`[gemini-provider] Received tool call ${part.toolCall.name} in non-agent mode`);
 							}
 						}
 						if (chatParts.length === 1) {
@@ -184,7 +222,7 @@ class GeminiAgentContribution
 
 				return {
 					stream,
-					result: response.result.then((): IChatAgentResult => ({
+					result: response.result.then((result): IChatAgentResult => ({
 						details: 'gemini-response',
 						metadata: { model: modelToUse }
 					}))

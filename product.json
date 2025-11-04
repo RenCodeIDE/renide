@@ -40,8 +40,8 @@
 		"serviceUrl": "https://open-vsx.org/vscode/gallery",
 		"itemUrl": "https://open-vsx.org/vscode/item",
 		"publisherUrl": "https://open-vsx.org/publishers/{publisher}",
-		"resourceUrlTemplate": "https://ren-ide-server.goyalishaan2005.workers.dev/openvsx/{publisher}/{name}/{version}/file/{path}",
-		"extensionUrlTemplate": "https://ren-ide-server.goyalishaan2005.workers.dev/openvsx/{publisher}/{name}/{version}/file/{path}",
+		"resourceUrlTemplate": "https://ren-ide.com/api/openvsx/{publisher}/{name}/{version}/file/{path}",
+		"extensionUrlTemplate": "https://ren-ide.com/api/openvsx/{publisher}/{name}/{version}/file/{path}",
 		"controlUrl": "",
 		"nlsBaseUrl": "",
 		"accessSKUs": []
@@ -131,5 +131,9 @@
 		"completionsAdvancedSetting": "",
 		"completionsEnablementSetting": "",
 		"nextEditSuggestionsSetting": ""
+	},
+	"environmentVariables": {
+		"SERVER_ADDRESS": "https://ren-ide.com/api",
+		"API_BASE_URL": "https://ren-ide.com/api"
 	}
 }

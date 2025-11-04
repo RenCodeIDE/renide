@@ -10,7 +10,7 @@ import { IStringDictionary } from '../../../base/common/collections.js';
 import { CancellationError, getErrorMessage, isCancellationError } from '../../../base/common/errors.js';
 import { IPager } from '../../../base/common/paging.js';
 import { isWeb, platform } from '../../../base/common/platform.js';
-import { arch } from '../../../base/common/process.js';
+import { arch, env } from '../../../base/common/process.js';
 import { isBoolean, isString } from '../../../base/common/types.js';
 import { URI } from '../../../base/common/uri.js';
 import { IHeaders, IRequestContext, IRequestOptions, isOfflineError } from '../../../base/parts/request/common/request.js';
@@ -698,7 +698,28 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 		@IExtensionGalleryManifestService private readonly extensionGalleryManifestService: IExtensionGalleryManifestService,
 	) {
 		this.extensionsControlUrl = productService.extensionsGallery?.controlUrl;
-		this.unpkgResourceApi = productService.extensionsGallery?.extensionUrlTemplate;
+
+		// Prefer SERVER_ADDRESS from environment if available, otherwise use product.json
+		let extensionUrlTemplate = productService.extensionsGallery?.extensionUrlTemplate;
+		const productEnvVars = productService.environmentVariables;
+		const serverAddress = env['SERVER_ADDRESS'] || process.env['SERVER_ADDRESS'] || productEnvVars?.['SERVER_ADDRESS'];
+
+		if (serverAddress && extensionUrlTemplate) {
+			let normalizedServerAddress = serverAddress.trim();
+			if (!normalizedServerAddress.startsWith('http://') && !normalizedServerAddress.startsWith('https://')) {
+				normalizedServerAddress = `https://${normalizedServerAddress}`;
+			}
+			normalizedServerAddress = normalizedServerAddress.replace(/\/+$/, '');
+
+			// Extract the path part from the product template
+			const templateMatch = extensionUrlTemplate.match(/https?:\/\/[^\/]+(\/.*)/);
+			if (templateMatch) {
+				const pathPart = templateMatch[1];
+				extensionUrlTemplate = `${normalizedServerAddress}${pathPart}`;
+			}
+		}
+
+		this.unpkgResourceApi = extensionUrlTemplate;
 		this.extensionsEnabledWithApiProposalVersion = productService.extensionsEnabledWithApiProposalVersion?.map(id => id.toLowerCase()) ?? [];
 		this.commonHeadersPromise = resolveMarketplaceHeaders(
 			productService.version,
@@ -1925,10 +1946,36 @@ export abstract class AbstractExtensionGalleryService implements IExtensionGalle
 	}
 
 	private buildResourceUrlFromIdentifier(extensionIdentifier: string, version: string, path: string, asset?: IGalleryExtensionAsset | null, defaultTargetPlatform?: string | TargetPlatform): string | undefined {
-		const template = this.productService.extensionsGallery?.resourceUrlTemplate;
-		if (!template) {
+		// Prefer SERVER_ADDRESS from environment if available, otherwise use product.json
+		let baseUrl: string | undefined;
+		const productEnvVars = this.productService.environmentVariables;
+		const serverAddress = env['SERVER_ADDRESS'] || process.env['SERVER_ADDRESS'] || productEnvVars?.['SERVER_ADDRESS'];
+
+		if (serverAddress) {
+			let normalizedServerAddress = serverAddress.trim();
+			if (!normalizedServerAddress.startsWith('http://') && !normalizedServerAddress.startsWith('https://')) {
+				normalizedServerAddress = `https://${normalizedServerAddress}`;
+			}
+			normalizedServerAddress = normalizedServerAddress.replace(/\/+$/, '');
+			baseUrl = normalizedServerAddress;
+		}
+
+		const productTemplate = this.productService.extensionsGallery?.resourceUrlTemplate;
+		if (!productTemplate) {
 			return undefined;
 		}
+
+		// If we have SERVER_ADDRESS, replace the base URL in the template
+		let template = productTemplate;
+		if (baseUrl) {
+			// Extract the path part from the product template (e.g., "/openvsx/{publisher}/{name}/{version}/file/{path}")
+			const templateMatch = productTemplate.match(/https?:\/\/[^\/]+(\/.*)/);
+			if (templateMatch) {
+				const pathPart = templateMatch[1];
+				template = `${baseUrl}${pathPart}`;
+			}
+		}
+
 		const [publisherPart, namePart] = extensionIdentifier.split('.', 2);
 		const publisher = encodeURIComponent(publisherPart ?? '');
 		const name = encodeURIComponent(namePart ?? '');

@@ -1,0 +1,31 @@
+appId: com.yourco.ren
+productName: Ren
+
+directories:
+  output: release
+  buildResources: resources/darwin # we’ll tell it to look here for icons
+
+files:
+  - out/**/*
+  - extensions/**/*
+  - resources/**/*
+  - product.json
+  - package.json
+  - "!**/node_modules/**"
+  - "node_modules/**/*"
+
+asar: false
+asarUnpack:
+  - "**/*.node"
+
+npmRebuild: false
+
+mac:
+  target: [zip]
+  category: public.app-category.developer-tools
+  icon: resources/darwin/code.icns # <-- full path to your .icns file
+
+artifactName: "${productName}-${version}-${os}-${arch}.zip"
+
+extraMetadata:
+  main: "./out/main.js"

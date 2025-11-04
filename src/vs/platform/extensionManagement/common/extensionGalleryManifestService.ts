@@ -5,6 +5,7 @@
 
 import { Event } from '../../../base/common/event.js';
 import { Disposable } from '../../../base/common/lifecycle.js';
+import { env } from '../../../base/common/process.js';
 import { IProductService } from '../../product/common/productService.js';
 import { ExtensionGalleryResourceType, Flag, IExtensionGalleryManifest, IExtensionGalleryManifestService, ExtensionGalleryManifestStatus } from './extensionGalleryManifest.js';
 import { FilterType, SortBy } from './extensionManagement.js';
@@ -41,39 +42,89 @@ export class ExtensionGalleryManifestService extends Disposable implements IExte
 			return null;
 		}
 
+		// Prefer SERVER_ADDRESS from environment if available, otherwise use product.json
+		let serviceUrl = extensionsGallery.serviceUrl;
+		let itemUrl = extensionsGallery.itemUrl;
+		let publisherUrl = extensionsGallery.publisherUrl;
+
+		const productEnvVars = this.productService.environmentVariables;
+		const serverAddress = env['SERVER_ADDRESS'] || process.env['SERVER_ADDRESS'] || productEnvVars?.['SERVER_ADDRESS'];
+
+		if (serverAddress) {
+			let normalizedServerAddress = serverAddress.trim();
+			if (!normalizedServerAddress.startsWith('http://') && !normalizedServerAddress.startsWith('https://')) {
+				normalizedServerAddress = `https://${normalizedServerAddress}`;
+			}
+			normalizedServerAddress = normalizedServerAddress.replace(/\/+$/, '');
+
+			// Replace base URLs with server address
+			// Map serviceUrl paths to /api/ on the server (e.g., /vscode/gallery/extensionquery -> /api/extensionquery)
+			if (serviceUrl) {
+				const serviceUrlMatch = serviceUrl.match(/https?:\/\/[^\/]+(\/.*)/);
+				if (serviceUrlMatch) {
+					const pathPart = serviceUrlMatch[1];
+					// Replace /vscode/gallery with /api for API endpoints
+					// This maps: /vscode/gallery/extensionquery -> /api/extensionquery
+					//            /vscode/gallery/{publisher}/{name}/latest -> /api/{publisher}/{name}/latest
+					const normalizedPath = pathPart.replace(/^\/vscode\/gallery/, '/api');
+					serviceUrl = `${normalizedServerAddress}${normalizedPath}`;
+				}
+			}
+
+			if (itemUrl) {
+				const itemUrlMatch = itemUrl.match(/https?:\/\/[^\/]+(\/.*)/);
+				if (itemUrlMatch) {
+					const pathPart = itemUrlMatch[1];
+					// Map /vscode/item to /api/item
+					const normalizedPath = pathPart.replace(/^\/vscode\/item/, '/api/item');
+					itemUrl = `${normalizedServerAddress}${normalizedPath}`;
+				}
+			}
+
+			if (publisherUrl) {
+				const publisherUrlMatch = publisherUrl.match(/https?:\/\/[^\/]+(\/.*)/);
+				if (publisherUrlMatch) {
+					const pathPart = publisherUrlMatch[1];
+					// Map /publishers to /api/publishers
+					const normalizedPath = pathPart.replace(/^\/publishers/, '/api/publishers');
+					publisherUrl = `${normalizedServerAddress}${normalizedPath}`;
+				}
+			}
+		}
+
 		const resources = [
 			{
-				id: `${extensionsGallery.serviceUrl}/extensionquery?api-version=3.0-preview.1`,
+				id: `${serviceUrl}/extensionquery?api-version=3.0-preview.1`,
 				type: ExtensionGalleryResourceType.ExtensionQueryService
 			},
 			{
-				id: `${extensionsGallery.serviceUrl}/{publisher}/{name}/latest`,
+				id: `${serviceUrl}/{publisher}/{name}/latest`,
 				type: ExtensionGalleryResourceType.ExtensionLatestVersionUri
 			},
 			{
-				id: `${extensionsGallery.serviceUrl}/publishers/{publisher}/extensions/{name}/{version}/stats?statType={statTypeName}`,
+				id: `${serviceUrl}/publishers/{publisher}/extensions/{name}/{version}/stats?statType={statTypeName}`,
 				type: ExtensionGalleryResourceType.ExtensionStatisticsUri
 			},
 			{
-				id: `${extensionsGallery.serviceUrl}/itemName/{publisher}.{name}/version/{version}/statType/{statTypeValue}/vscodewebextension`,
+				id: `${serviceUrl}/itemName/{publisher}.{name}/version/{version}/statType/{statTypeValue}/vscodewebextension`,
 				type: ExtensionGalleryResourceType.WebExtensionStatisticsUri
 			},
 		];
 
-		if (extensionsGallery.publisherUrl) {
+		if (publisherUrl) {
 			resources.push({
-				id: `${extensionsGallery.publisherUrl}/{publisher}`,
+				id: `${publisherUrl}/{publisher}`,
 				type: ExtensionGalleryResourceType.PublisherViewUri
 			});
 		}
 
-		if (extensionsGallery.itemUrl) {
+		if (itemUrl) {
 			resources.push({
-				id: `${extensionsGallery.itemUrl}?itemName={publisher}.{name}`,
+				id: `${itemUrl}?itemName={publisher}.{name}`,
 				type: ExtensionGalleryResourceType.ExtensionDetailsViewUri
 			});
 			resources.push({
-				id: `${extensionsGallery.itemUrl}?itemName={publisher}.{name}&ssr=false#review-details`,
+				id: `${itemUrl}?itemName={publisher}.{name}&ssr=false#review-details`,
 				type: ExtensionGalleryResourceType.ExtensionRatingViewUri
 			});
 		}

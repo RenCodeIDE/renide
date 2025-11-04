@@ -243,6 +243,10 @@ export interface IProductConfiguration {
 		readonly apiBaseUrl: string;
 		readonly webPortalUrl: string;
 	};
+
+	readonly environmentVariables?: {
+		readonly [key: string]: string;
+	};
 }
 
 export interface ITunnelApplicationConfig {

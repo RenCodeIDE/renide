@@ -9,7 +9,9 @@
   "main": "./out/main.js",
   "type": "module",
   "private": true,
+  "description": "Ren - The IDE that Codes, Logs & Explains",
   "scripts": {
+    "pack:mac": "electron-builder --mac --publish=never",
     "test": "echo Please run any of the test scripts from the scripts folder.",
     "test-browser": "npx playwright install && node test/unit/browser/index.js",
     "test-browser-no-install": "node test/unit/browser/index.js",
@@ -163,6 +165,7 @@
     "debounce": "^1.0.0",
     "deemon": "^1.13.6",
     "electron": "37.7.0",
+    "electron-builder": "^26.0.12",
     "eslint": "^9.36.0",
     "eslint-formatter-compact": "^8.40.0",
     "eslint-plugin-header": "3.1.1",
