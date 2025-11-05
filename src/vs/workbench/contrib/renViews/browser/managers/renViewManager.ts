@@ -5,6 +5,7 @@ import { CodeView } from '../views/codeView.js';
 import { MonitorXView } from '../views/monitorXView.js';
 import { GraphView } from '../views/graphView.js';
 import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
+import { ILogService } from '../../../../../platform/log/common/log.js';
 
 export type RenViewMode = 'code' | 'monitorx' | 'graph';
 
@@ -14,16 +15,50 @@ export class RenViewManager extends Disposable {
 	private _contentArea: HTMLElement | null = null;
 
 	constructor(
-		@IInstantiationService private readonly instantiationService: IInstantiationService
+		@IInstantiationService private readonly instantiationService: IInstantiationService,
+		@ILogService private readonly logService: ILogService
 	) {
 		super();
 		this.initializeViews();
 	}
 
 	private initializeViews(): void {
+		try {
+			this.logService.info('[RenViewManager] Initializing views...');
+			
+			// Initialize CodeView (no DI needed)
+			try {
 		this._views.set('code', this._register(new CodeView()));
-		this._views.set('monitorx', this._register(this.instantiationService.createInstance(MonitorXView)));
-		this._views.set('graph', this._register(this.instantiationService.createInstance(GraphView)));
+				this.logService.info('[RenViewManager] CodeView initialized successfully');
+			} catch (error) {
+				this.logService.error('[RenViewManager] Failed to initialize CodeView:', error);
+			}
+
+			// Initialize MonitorXView (uses DI)
+			try {
+				const monitorXView = this._register(this.instantiationService.createInstance(MonitorXView));
+				this._views.set('monitorx', monitorXView);
+				this.logService.info('[RenViewManager] MonitorXView initialized successfully');
+			} catch (error) {
+				this.logService.error('[RenViewManager] Failed to initialize MonitorXView:', error);
+				console.error('[RenViewManager] MonitorXView initialization error:', error);
+			}
+
+			// Initialize GraphView (uses DI)
+			try {
+				const graphView = this._register(this.instantiationService.createInstance(GraphView));
+				this._views.set('graph', graphView);
+				this.logService.info('[RenViewManager] GraphView initialized successfully');
+			} catch (error) {
+				this.logService.error('[RenViewManager] Failed to initialize GraphView:', error);
+				console.error('[RenViewManager] GraphView initialization error:', error);
+			}
+
+			this.logService.info(`[RenViewManager] View initialization complete. Registered ${this._views.size} views`);
+		} catch (error) {
+			this.logService.error('[RenViewManager] Critical error during view initialization:', error);
+			console.error('[RenViewManager] Critical initialization error:', error);
+		}
 	}
 
 	setContentArea(contentArea: HTMLElement): void {

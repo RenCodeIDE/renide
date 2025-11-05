@@ -21,8 +21,15 @@ export class RenMainWindowOverlay {
 		this._currentMode = this.contextKeyService.createKey('ren.currentViewMode', 'code');
 
 		// Initialize view manager
+		console.log('[RenMainWindowOverlay] Creating RenViewManager...');
+		try {
 		this._viewManager = this.instantiationService.createInstance(RenViewManager);
 		this._store.add(this._viewManager);
+			console.log('[RenMainWindowOverlay] RenViewManager created successfully');
+		} catch (error) {
+			console.error('[RenMainWindowOverlay] Failed to create RenViewManager:', error);
+			throw error;
+		}
 
 		this.setupOverlay();
 		this.setupEventListeners();
@@ -43,6 +50,7 @@ export class RenMainWindowOverlay {
 
 		// Set content area for view manager
 		this._viewManager.setContentArea(contentArea);
+		console.log('[RenMainWindowOverlay] Content area set, current view:', this._viewManager.getCurrentView());
 
 		// Ensure container has relative positioning (ViewButtons are now created in RenViewsContribution for all groups)
 		this.container.style.position = 'relative';

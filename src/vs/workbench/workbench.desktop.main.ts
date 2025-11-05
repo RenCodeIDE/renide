@@ -169,7 +169,10 @@ import './contrib/multiDiffEditor/browser/multiDiffEditor.contribution.js';
 
 // Ren Views
 import './contrib/renViews/browser/renViews.contribution.js';
+import './contrib/renViews/browser/services/docsServiceImpl.js';
+import './contrib/renViews/browser/docsAgent.contribution.js';
 import '../platform/gitHeatmap/electron-browser/gitHeatmapService.js';
+import './services/merkleTree/browser/merkleTreeService.js';
 
 // Remote Tunnel
 import './contrib/remoteTunnel/electron-browser/remoteTunnel.contribution.js';

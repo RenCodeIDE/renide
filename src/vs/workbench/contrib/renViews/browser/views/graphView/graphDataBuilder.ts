@@ -3,18 +3,18 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { URI } from '../../../../../../base/common/uri.js';
-import { ILogService } from '../../../../../../platform/log/common/log.js';
-import { IFileService } from '../../../../../../platform/files/common/files.js';
-import { ICommandService } from '../../../../../../platform/commands/common/commands.js';
-import { ILanguageFeaturesService } from '../../../../../../editor/common/services/languageFeatures.js';
+import { URI } from "../../../../../../base/common/uri.js";
+import { ILogService } from "../../../../../../platform/log/common/log.js";
+import { IFileService } from "../../../../../../platform/files/common/files.js";
+import { ICommandService } from "../../../../../../platform/commands/common/commands.js";
+import { ILanguageFeaturesService } from "../../../../../../editor/common/services/languageFeatures.js";
 import {
 	ISearchService,
 	IFileMatch,
 	QueryType,
-} from '../../../../../services/search/common/search.js';
+} from "../../../../../services/search/common/search.js";
 
-import { GraphWorkspaceContext } from './graphContext.js';
+import { GraphWorkspaceContext } from "./graphContext.js";
 import {
 	GraphEdgeKind,
 	GraphEdgePayload,
@@ -26,7 +26,7 @@ import {
 	GitHeatmapPayload,
 	GraphWebviewPayload,
 	ImportDescriptor,
-} from './graphTypes.js';
+} from "./graphTypes.js";
 
 import {
 	GRAPH_DEFAULT_EXCLUDE_GLOBS,
@@ -36,7 +36,7 @@ import {
 	getImportBase,
 	isExcludedPath,
 	toCytoscapeId,
-} from './graphConstants.js';
+} from "./graphConstants.js";
 import {
 	ArchitectureAnalyzer,
 	ArchitectureComponent,
@@ -44,8 +44,12 @@ import {
 	ArchitectureComponentKind,
 	ArchitectureRelationshipKind,
 	DetectionEvidence,
-} from './architectureAnalyzer.js';
-import { IGitHeatmapService } from '../../../../../../platform/gitHeatmap/common/gitHeatmapService.js';
+} from "./architectureAnalyzer.js";
+import { IGitHeatmapService } from "../../../../../../platform/gitHeatmap/common/gitHeatmapService.js";
+import { IMerkleTreeService } from "../../../../../../platform/merkleTree/common/merkleTreeService.js";
+import { IStorageService } from "../../../../../../platform/storage/common/storage.js";
+import type { IWorkspaceContextService } from "../../../../../../platform/workspace/common/workspace.js";
+import { GraphCacheManager, generateCacheKey } from "./graphCache/index.js";
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 interface GitHeatmapBuildOptions {
@@ -90,49 +94,245 @@ interface HeatmapBuildContext {
 
 export class GraphDataBuilder {
 	private readonly architectureAnalyzer: ArchitectureAnalyzer;
+	private readonly cacheManager?: GraphCacheManager;
 
 	constructor(
 		private readonly logService: ILogService,
 		private readonly fileService: IFileService,
 		private readonly searchService: ISearchService,
 		private readonly context: GraphWorkspaceContext,
-		commandService: ICommandService,
-		languageFeaturesService: ILanguageFeaturesService,
+		@ICommandService private readonly commandService: ICommandService,
+		@ILanguageFeaturesService
+		private readonly languageFeaturesService: ILanguageFeaturesService,
 		@IGitHeatmapService private readonly gitHeatmapService: IGitHeatmapService,
+		@IMerkleTreeService private readonly merkleTreeService: IMerkleTreeService,
+		@IStorageService private readonly storageService?: IStorageService
 	) {
 		this.architectureAnalyzer = new ArchitectureAnalyzer(
 			this.logService,
 			this.fileService,
 			this.searchService,
-			commandService,
-			languageFeaturesService,
-			this.context,
+			this.commandService,
+			this.languageFeaturesService,
+			this.context
 		);
+
+		// Initialize cache manager if storage service is available
+		if (this.storageService && this.merkleTreeService) {
+			// Check Merkle tree status
+			const rootHash = this.merkleTreeService.rootHash;
+			this.logService.info(
+				`[GraphDataBuilder] Merkle tree service available. Root hash: ${
+					rootHash || "(empty - tree not yet built)"
+				}`
+			);
+
+			// Get workspace service from context - GraphWorkspaceContext has access to it
+			// We need to access it through the context's internal workspaceService
+			// Since we can't access private members, we'll need to inject it or use context
+			// For now, pass the context's workspace service accessor
+			// Actually, we can get it from the context since it's used internally
+			const workspaceService = (this.context as any).workspaceService as
+				| IWorkspaceContextService
+				| undefined;
+			this.cacheManager = new GraphCacheManager(
+				this.merkleTreeService,
+				this.storageService,
+				this.logService,
+				workspaceService || (undefined as any) // Fallback if not available
+			);
+		} else {
+			this.logService.warn(
+				`[GraphDataBuilder] Cache manager not initialized. StorageService: ${!!this
+					.storageService}, MerkleTreeService: ${!!this.merkleTreeService}`
+			);
+		}
 	}
 
 	get onArchitectureProgress() {
 		return this.architectureAnalyzer.onProgress;
 	}
 
+	/**
+	 * Get relative path from workspace root for a URI
+	 */
+	private getRelativePath(uri: URI): string {
+		const workspace = this.context.getWorkspace();
+		if (!workspace || workspace.folders.length === 0) {
+			return uri.fsPath;
+		}
+
+		const rootPath = workspace.folders[0].uri.fsPath;
+		const absolutePath = uri.fsPath;
+
+		if (absolutePath.startsWith(rootPath)) {
+			return absolutePath.slice(rootPath.length).replace(/^[\\/]+/, "");
+		}
+
+		return absolutePath;
+	}
+
 	async buildGraphForFile(sourceUri: URI): Promise<GraphWebviewPayload> {
-		return this.buildGraphFromFiles([sourceUri], {
+		// Ensure the source file is tracked in Merkle tree (lazy tracking)
+		if (this.merkleTreeService) {
+			try {
+				await this.merkleTreeService.ensureTracked(sourceUri);
+			} catch (error) {
+				this.logService.debug(
+					`[GraphDataBuilder] Failed to track file ${sourceUri.toString()}: ${error}`
+				);
+			}
+		}
+
+		// Try to get from cache first
+		if (this.cacheManager) {
+			const workspace = this.context.getWorkspace();
+			const scopeId = workspace.folders[0]?.uri.toString() || "default";
+			const cacheKey = generateCacheKey(
+				scopeId,
+				"folder",
+				[sourceUri],
+				{},
+				this.merkleTreeService.rootHash
+			);
+
+			const cached = await this.cacheManager.getCachedGraph(cacheKey);
+			if (cached) {
+				this.logService.debug(
+					`[GraphDataBuilder] Cache hit for file: ${sourceUri.toString()}`
+				);
+				return cached.payload;
+			}
+		}
+
+		// Build graph
+		const graph = await this.buildGraphFromFiles([sourceUri], {
 			scopeRoots: new Set([this.context.getUriKey(sourceUri)]),
-			scopeMode: 'file',
+			scopeMode: "file",
 		});
+
+		// Store in cache
+		if (this.cacheManager) {
+			const workspace = this.context.getWorkspace();
+			const scopeId = workspace.folders[0]?.uri.toString() || "default";
+			const cacheKey = generateCacheKey(
+				scopeId,
+				"folder",
+				[sourceUri],
+				{},
+				this.merkleTreeService.rootHash
+			);
+			await this.cacheManager.storeGraph(cacheKey, graph).catch((error) => {
+				this.logService.warn(
+					`[GraphDataBuilder] Failed to store graph in cache: ${error}`
+				);
+			});
+		}
+
+		return graph;
 	}
 
 	async buildGraphForScope(
 		folders: URI[],
-		mode: 'folder' | 'workspace',
+		mode: "folder" | "workspace"
 	): Promise<GraphWebviewPayload> {
+		// Try to get from cache first
+		// This ensures that even if the user "refreshes" the graph, we return the cached
+		// version if the Merkle hash hasn't changed. The cache will automatically do
+		// incremental updates if only some nodes changed.
+		if (this.cacheManager) {
+			const rootHash = this.merkleTreeService.rootHash;
+			this.logService.debug(
+				`[GraphDataBuilder] Checking cache for scope graph. Merkle root hash: ${
+					rootHash || "(empty - tree not yet built)"
+				}`
+			);
+
+			const workspace = this.context.getWorkspace();
+			const scopeId = workspace.folders[0]?.uri.toString() || "default";
+			const cacheKey = generateCacheKey(scopeId, mode, folders, {}, rootHash);
+
+			const cached = await this.cacheManager.getCachedGraph(cacheKey);
+			if (cached) {
+				this.logService.debug(
+					`[GraphDataBuilder] Cache hit for scope: ${scopeId} (Merkle hash: ${cached.merkleRootHash.substring(
+						0,
+						8
+					)}...)`
+				);
+				return cached.payload;
+			} else {
+				this.logService.debug(
+					`[GraphDataBuilder] Cache miss for scope: ${scopeId}. Will build new graph.`
+				);
+			}
+		}
+
+		// Build graph
 		const files = await this.collectFilesInScope(folders);
-		return this.buildGraphFromFiles(files, {
+
+		// Ensure files in scope are tracked in Merkle tree (lazy tracking)
+		if (this.merkleTreeService) {
+			for (const fileUri of files) {
+				try {
+					await this.merkleTreeService.ensureTracked(fileUri);
+				} catch (error) {
+					this.logService.debug(
+						`[GraphDataBuilder] Failed to track file ${fileUri.toString()}: ${error}`
+					);
+				}
+			}
+		}
+
+		const graph = await this.buildGraphFromFiles(files, {
 			scopeRoots: new Set(files.map((uri) => this.context.getUriKey(uri))),
 			scopeMode: mode,
 		});
+
+		// Store in cache
+		if (this.cacheManager) {
+			const workspace = this.context.getWorkspace();
+			const scopeId = workspace.folders[0]?.uri.toString() || "default";
+			const cacheKey = generateCacheKey(
+				scopeId,
+				mode,
+				folders,
+				{},
+				this.merkleTreeService.rootHash
+			);
+			await this.cacheManager.storeGraph(cacheKey, graph).catch((error) => {
+				this.logService.warn(
+					`[GraphDataBuilder] Failed to store graph in cache: ${error}`
+				);
+			});
+		}
+
+		return graph;
 	}
 
 	async buildArchitectureGraph(): Promise<GraphWebviewPayload> {
+		// Try to get from cache first
+		if (this.cacheManager) {
+			const workspace = this.context.getWorkspace();
+			const scopeId = workspace.folders[0]?.uri.toString() || "default";
+			const folders = workspace.folders.map((f) => f.uri);
+			const cacheKey = generateCacheKey(
+				scopeId,
+				"architecture",
+				folders,
+				{},
+				this.merkleTreeService.rootHash
+			);
+
+			const cached = await this.cacheManager.getCachedGraph(cacheKey);
+			if (cached) {
+				this.logService.debug(
+					`[GraphDataBuilder] Cache hit for architecture graph`
+				);
+				return cached.payload;
+			}
+		}
+
 		const analysis = await this.architectureAnalyzer.analyze();
 		const nodeById = new Map<string, GraphNodePayload>();
 		for (const component of analysis.components) {
@@ -156,14 +356,14 @@ export class GraphDataBuilder {
 				sourceNode.fanOut += 1;
 				sourceNode.weight = Math.max(
 					sourceNode.weight,
-					sourceNode.fanIn + sourceNode.fanOut,
+					sourceNode.fanIn + sourceNode.fanOut
 				);
 			}
 			if (targetNode) {
 				targetNode.fanIn += 1;
 				targetNode.weight = Math.max(
 					targetNode.weight,
-					targetNode.fanIn + targetNode.fanOut,
+					targetNode.fanIn + targetNode.fanOut
 				);
 			}
 		}
@@ -171,28 +371,57 @@ export class GraphDataBuilder {
 		for (const node of nodeById.values()) {
 			node.weight = Math.max(
 				node.weight,
-				Math.max(1, Math.round((node.confidence ?? 0.5) * 5)),
+				Math.max(1, Math.round((node.confidence ?? 0.5) * 5))
 			);
 		}
 
-		return {
+		const graph: GraphWebviewPayload = {
 			nodes: Array.from(nodeById.values()),
 			edges,
-			mode: 'architecture',
+			mode: "architecture",
 			summary: analysis.summary,
 			warnings: analysis.warnings,
 			generatedAt: analysis.generatedAt,
 			metadata: this.buildArchitectureMetadata(nodeById.values(), edges),
 		};
+
+		// Store in cache
+		if (this.cacheManager) {
+			const workspace = this.context.getWorkspace();
+			const scopeId = workspace.folders[0]?.uri.toString() || "default";
+			const folders = workspace.folders.map((f) => f.uri);
+			const cacheKey = generateCacheKey(
+				scopeId,
+				"architecture",
+				folders,
+				{},
+				this.merkleTreeService.rootHash
+			);
+			await this.cacheManager.storeGraph(cacheKey, graph).catch((error) => {
+				this.logService.warn(
+					`[GraphDataBuilder] Failed to store architecture graph in cache: ${error}`
+				);
+			});
+		}
+
+		return graph;
 	}
 
-	private async readGitLog(cwd: string, windowDays: number): Promise<ParsedGitCommit[]> {
+	private async readGitLog(
+		cwd: string,
+		windowDays: number
+	): Promise<ParsedGitCommit[]> {
 		try {
 			const stdout = await this.gitHeatmapService.readGitLog(cwd, windowDays);
-			return this.parseGitLog(stdout ?? '');
+			return this.parseGitLog(stdout ?? "");
 		} catch (error) {
-			this.logService.error('[GraphDataBuilder] git log execution failed', error);
-			throw new Error('Unable to read Git history. Ensure Git is installed and accessible.');
+			this.logService.error(
+				"[GraphDataBuilder] git log execution failed",
+				error
+			);
+			throw new Error(
+				"Unable to read Git history. Ensure Git is installed and accessible."
+			);
 		}
 	}
 
@@ -207,16 +436,16 @@ export class GraphDataBuilder {
 			if (!line) {
 				continue;
 			}
-			if (line.includes('\x1f')) {
+			if (line.includes("\x1f")) {
 				if (current) {
 					commits.push(current);
 				}
-				const parts = line.split('\x1f');
-				const hash = parts[0]?.trim() ?? '';
-				const timestamp = Number(parts[1] ?? '0');
-				const author = parts[2]?.trim() ?? '';
+				const parts = line.split("\x1f");
+				const hash = parts[0]?.trim() ?? "";
+				const timestamp = Number(parts[1] ?? "0");
+				const author = parts[2]?.trim() ?? "";
 				const authorEmail = parts[3]?.trim() || undefined;
-				const message = parts[4]?.trim() ?? '';
+				const message = parts[4]?.trim() ?? "";
 				current = {
 					hash,
 					timestamp: Number.isFinite(timestamp) ? timestamp : 0,
@@ -230,13 +459,15 @@ export class GraphDataBuilder {
 			if (!current) {
 				continue;
 			}
-			const segments = line.split('\t');
+			const segments = line.split("\t");
 			if (segments.length < 3) {
 				continue;
 			}
-			const additions = segments[0] === '-' ? 0 : Number.parseInt(segments[0], 10) || 0;
-			const deletions = segments[1] === '-' ? 0 : Number.parseInt(segments[1], 10) || 0;
-			const filePath = segments.slice(2).join('\t').trim();
+			const additions =
+				segments[0] === "-" ? 0 : Number.parseInt(segments[0], 10) || 0;
+			const deletions =
+				segments[1] === "-" ? 0 : Number.parseInt(segments[1], 10) || 0;
+			const filePath = segments.slice(2).join("\t").trim();
 			if (!filePath) {
 				continue;
 			}
@@ -248,7 +479,11 @@ export class GraphDataBuilder {
 		return commits;
 	}
 
-	private reduceCommits(commits: ParsedGitCommit[], granularity: GitHeatmapGranularity, ignoredPaths: Set<string>) {
+	private reduceCommits(
+		commits: ParsedGitCommit[],
+		granularity: GitHeatmapGranularity,
+		ignoredPaths: Set<string>
+	) {
 		const moduleChurnMap = new Map<string, number>();
 		const filteredCommits: ReducedHeatmapCommit[] = [];
 		let consideredCommits = 0;
@@ -257,9 +492,11 @@ export class GraphDataBuilder {
 				continue;
 			}
 			const moduleChurn = new Map<string, number>();
-			const processedFiles: Array<ParsedGitCommitFile & { module: string | null }> = [];
+			const processedFiles: Array<
+				ParsedGitCommitFile & { module: string | null }
+			> = [];
 			for (const file of commit.files) {
-				const normalizedPath = file.path.replace(/\\/g, '/');
+				const normalizedPath = file.path.replace(/\\/g, "/");
 				if (ignoredPaths.has(normalizedPath)) {
 					continue;
 				}
@@ -270,7 +507,8 @@ export class GraphDataBuilder {
 				if (!moduleKey) {
 					continue;
 				}
-				const churn = Math.max(0, file.additions || 0) + Math.max(0, file.deletions || 0);
+				const churn =
+					Math.max(0, file.additions || 0) + Math.max(0, file.deletions || 0);
 				moduleChurn.set(moduleKey, (moduleChurn.get(moduleKey) ?? 0) + churn);
 				processedFiles.push({ ...file, module: moduleKey });
 			}
@@ -278,7 +516,10 @@ export class GraphDataBuilder {
 				continue;
 			}
 			const modules = Array.from(moduleChurn.keys());
-			const commitChurn = Array.from(moduleChurn.values()).reduce((sum, value) => sum + value, 0);
+			const commitChurn = Array.from(moduleChurn.values()).reduce(
+				(sum, value) => sum + value,
+				0
+			);
 			filteredCommits.push({
 				hash: commit.hash,
 				timestamp: commit.timestamp,
@@ -295,13 +536,18 @@ export class GraphDataBuilder {
 				moduleChurnMap.set(module, (moduleChurnMap.get(module) ?? 0) + churn);
 			}
 		}
-		return { filteredCommits, moduleChurnMap, totalCommits: commits.length, consideredCommits };
+		return {
+			filteredCommits,
+			moduleChurnMap,
+			totalCommits: commits.length,
+			consideredCommits,
+		};
 	}
 
 	private buildHeatmapFromCommits(
 		commits: ReducedHeatmapCommit[],
 		moduleChurnMap: Map<string, number>,
-		context: HeatmapBuildContext,
+		context: HeatmapBuildContext
 	): GitHeatmapPayload {
 		const MAX_MODULES = 120;
 		const MAX_CELLS = 2500;
@@ -311,18 +557,32 @@ export class GraphDataBuilder {
 		const MAX_FILES_PER_PAIR_SUMMARY = 6;
 		const DECAY_HALF_LIFE = 90;
 
-		const sortedModulesByChurn = Array.from(moduleChurnMap.entries())
-			.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+		const sortedModulesByChurn = Array.from(moduleChurnMap.entries()).sort(
+			(a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
+		);
 		const selectedEntries = sortedModulesByChurn.slice(0, MAX_MODULES);
-		const moduleNames = selectedEntries.map(([name]) => name).sort((a, b) => a.localeCompare(b));
-		const moduleIndex = new Map<string, number>(moduleNames.map((name, index) => [name, index]));
+		const moduleNames = selectedEntries
+			.map(([name]) => name)
+			.sort((a, b) => a.localeCompare(b));
+		const moduleIndex = new Map<string, number>(
+			moduleNames.map((name, index) => [name, index])
+		);
 		const moduleWeightedChurn = new Array(moduleNames.length).fill(0);
 		const rowTotals = new Array(moduleNames.length).fill(0);
-		const pairStats = new Map<string, { weight: number; commitCount: number; commits: GitHeatmapCommitSummary[] }>();
+		const pairStats = new Map<
+			string,
+			{
+				weight: number;
+				commitCount: number;
+				commits: GitHeatmapCommitSummary[];
+			}
+		>();
 		const now = Date.now();
 
 		for (const commit of commits) {
-			const modulesInScope = commit.modules.filter(module => moduleIndex.has(module));
+			const modulesInScope = commit.modules.filter((module) =>
+				moduleIndex.has(module)
+			);
 			if (!modulesInScope.length) {
 				continue;
 			}
@@ -332,28 +592,46 @@ export class GraphDataBuilder {
 
 			for (const moduleName of modulesInScope) {
 				const idx = moduleIndex.get(moduleName)!;
-				const churnContribution = (commit.moduleChurn.get(moduleName) ?? 0) * weight;
+				const churnContribution =
+					(commit.moduleChurn.get(moduleName) ?? 0) * weight;
 				moduleWeightedChurn[idx] += churnContribution;
 				rowTotals[idx] += weight;
 			}
 
-			const sortedModules = [...modulesInScope].sort((a, b) => a.localeCompare(b));
+			const sortedModules = [...modulesInScope].sort((a, b) =>
+				a.localeCompare(b)
+			);
 			for (let i = 0; i < sortedModules.length; i++) {
 				const moduleA = sortedModules[i];
 				const indexA = moduleIndex.get(moduleA)!;
 				for (let j = i; j < sortedModules.length; j++) {
 					const moduleB = sortedModules[j];
 					const indexB = moduleIndex.get(moduleB)!;
-					const key = indexA <= indexB ? `${indexA}|${indexB}` : `${indexB}|${indexA}`;
-					const stat = pairStats.get(key) ?? { weight: 0, commitCount: 0, commits: [] as GitHeatmapCommitSummary[] };
+					const key =
+						indexA <= indexB ? `${indexA}|${indexB}` : `${indexB}|${indexA}`;
+					const stat = pairStats.get(key) ?? {
+						weight: 0,
+						commitCount: 0,
+						commits: [] as GitHeatmapCommitSummary[],
+					};
 					stat.weight += weight;
 					stat.commitCount += 1;
 					if (stat.commits.length < MAX_COMMITS_PER_PAIR) {
 						const files = commit.files
-							.filter(file => file.module && (file.module === moduleA || file.module === moduleB))
+							.filter(
+								(file) =>
+									file.module &&
+									(file.module === moduleA || file.module === moduleB)
+							)
 							.slice(0, MAX_FILES_PER_PAIR_SUMMARY)
-							.map(file => ({ path: file.path, additions: file.additions, deletions: file.deletions }));
-						const pairChurn = (commit.moduleChurn.get(moduleA) ?? 0) + (moduleA === moduleB ? 0 : (commit.moduleChurn.get(moduleB) ?? 0));
+							.map((file) => ({
+								path: file.path,
+								additions: file.additions,
+								deletions: file.deletions,
+							}));
+						const pairChurn =
+							(commit.moduleChurn.get(moduleA) ?? 0) +
+							(moduleA === moduleB ? 0 : commit.moduleChurn.get(moduleB) ?? 0);
 						stat.commits.push({
 							hash: commit.hash,
 							message: commit.message,
@@ -371,16 +649,20 @@ export class GraphDataBuilder {
 		}
 
 		let cells = Array.from(pairStats.entries()).map(([key, stat]) => {
-			const [rowStr, columnStr] = key.split('|');
+			const [rowStr, columnStr] = key.split("|");
 			const row = Number(rowStr);
 			const column = Number(columnStr);
-			const denominator = Math.sqrt((rowTotals[row] || 0) * (rowTotals[column] || 0));
+			const denominator = Math.sqrt(
+				(rowTotals[row] || 0) * (rowTotals[column] || 0)
+			);
 			const normalized = denominator > 0 ? stat.weight / denominator : 0;
 			return {
 				row,
 				column,
 				weight: Number(stat.weight.toFixed(4)),
-				normalizedWeight: Number((Number.isFinite(normalized) ? normalized : 0).toFixed(4)),
+				normalizedWeight: Number(
+					(Number.isFinite(normalized) ? normalized : 0).toFixed(4)
+				),
 				commitCount: stat.commitCount,
 				commits: stat.commits
 					.slice()
@@ -389,41 +671,50 @@ export class GraphDataBuilder {
 			};
 		});
 
-		cells = cells.filter(cell => {
+		cells = cells.filter((cell) => {
 			if (cell.normalizedWeight >= MIN_NORMALIZED) {
 				return true;
 			}
 			return cell.weight >= MIN_WEIGHT;
 		});
 
-		cells.sort((a, b) => b.normalizedWeight - a.normalizedWeight || b.weight - a.weight);
+		cells.sort(
+			(a, b) => b.normalizedWeight - a.normalizedWeight || b.weight - a.weight
+		);
 		if (cells.length > MAX_CELLS) {
 			cells.length = MAX_CELLS;
 		}
 
 		const normalizedValues = cells
-			.map(cell => cell.normalizedWeight)
-			.filter(value => value > 0)
+			.map((cell) => cell.normalizedWeight)
+			.filter((value) => value > 0)
 			.sort((a, b) => a - b);
 		const scale = {
 			min: normalizedValues[0] ?? 0,
-			median: normalizedValues.length ? normalizedValues[Math.floor(normalizedValues.length / 2)] : (normalizedValues[0] ?? 0),
+			median: normalizedValues.length
+				? normalizedValues[Math.floor(normalizedValues.length / 2)]
+				: normalizedValues[0] ?? 0,
 			max: normalizedValues[normalizedValues.length - 1] ?? 0,
 		};
 
 		const topModules = moduleNames
 			.map((name, index) => ({ name, churn: moduleWeightedChurn[index] }))
-			.filter(entry => entry.churn > 0)
+			.filter((entry) => entry.churn > 0)
 			.sort((a, b) => b.churn - a.churn)
 			.slice(0, 3)
-			.map(entry => `${entry.name} (${entry.churn.toFixed(0)})`);
+			.map((entry) => `${entry.name} (${entry.churn.toFixed(0)})`);
 		const topPairs = cells
 			.slice(0, 3)
-			.map(cell => `${moduleNames[cell.row]} ↔ ${moduleNames[cell.column]} (${cell.normalizedWeight.toFixed(2)})`);
+			.map(
+				(cell) =>
+					`${moduleNames[cell.row]} ↔ ${
+						moduleNames[cell.column]
+					} (${cell.normalizedWeight.toFixed(2)})`
+			);
 
 		const filters = [
-			'Skipped commits touching more than 40 files.',
-			'Ignored hidden folders, package managers, Docker/config artifacts, and .gitignored paths.',
+			"Skipped commits touching more than 40 files.",
+			"Ignored hidden folders, package managers, Docker/config artifacts, and .gitignored paths.",
 			`Applied exponential time decay (half-life ${DECAY_HALF_LIFE} days).`,
 		];
 
@@ -438,27 +729,38 @@ export class GraphDataBuilder {
 			cells,
 			colorScale: scale,
 			summary: [
-				topModules.length ? `Top churn: ${topModules.join(', ')}` : 'Coupling heatmap derived from Git activity.',
-				topPairs.length ? `Strongest couplings: ${topPairs.join(', ')}` : 'No strong module couplings detected.',
+				topModules.length
+					? `Top churn: ${topModules.join(", ")}`
+					: "Coupling heatmap derived from Git activity.",
+				topPairs.length
+					? `Strongest couplings: ${topPairs.join(", ")}`
+					: "No strong module couplings detected.",
 			],
-			description: 'Darker cells highlight modules that frequently change together within the selected window.',
-			normalization: 'Weights normalized by the geometric mean of per-module activity.',
+			description:
+				"Darker cells highlight modules that frequently change together within the selected window.",
+			normalization:
+				"Weights normalized by the geometric mean of per-module activity.",
 			filters,
 		};
 	}
 
-	private getHeatmapModuleKey(path: string, granularity: GitHeatmapGranularity): string | null {
-		const cleaned = path.replace(/^\.\//, '');
-		const segments = cleaned.split('/').filter(segment => !!segment && segment !== '.');
+	private getHeatmapModuleKey(
+		path: string,
+		granularity: GitHeatmapGranularity
+	): string | null {
+		const cleaned = path.replace(/^\.\//, "");
+		const segments = cleaned
+			.split("/")
+			.filter((segment) => !!segment && segment !== ".");
 		if (!segments.length) {
-			return '(root)';
+			return "(root)";
 		}
 		switch (granularity) {
-			case 'file':
-				return segments.join('/');
-			case 'twoLevel':
-				return segments.slice(0, Math.min(2, segments.length)).join('/');
-			case 'topLevel':
+			case "file":
+				return segments.join("/");
+			case "twoLevel":
+				return segments.slice(0, Math.min(2, segments.length)).join("/");
+			case "topLevel":
 			default:
 				return segments[0];
 		}
@@ -466,88 +768,120 @@ export class GraphDataBuilder {
 
 	private shouldIgnoreHeatmapPath(path: string): boolean {
 		const lower = path.toLowerCase();
-		const segments = path.split('/');
-		if (segments.some(segment => segment.length > 1 && segment.startsWith('.'))) {
+		const segments = path.split("/");
+		if (
+			segments.some((segment) => segment.length > 1 && segment.startsWith("."))
+		) {
 			return true;
 		}
-		const filename = segments[segments.length - 1] ?? '';
+		const filename = segments[segments.length - 1] ?? "";
 		const filenameLower = filename.toLowerCase();
 		if (
-			filenameLower === 'package.json' ||
-			filenameLower === 'package-lock.json' ||
-			filenameLower === 'yarn.lock' ||
-			filenameLower === 'pnpm-lock.yaml' ||
-			filenameLower === 'composer.lock' ||
-			filenameLower === 'cargo.lock' ||
+			filenameLower === "package.json" ||
+			filenameLower === "package-lock.json" ||
+			filenameLower === "yarn.lock" ||
+			filenameLower === "pnpm-lock.yaml" ||
+			filenameLower === "composer.lock" ||
+			filenameLower === "cargo.lock" ||
 			/^dockerfile(?:\.|$)/.test(filenameLower) ||
 			/^docker-compose\./.test(filenameLower) ||
-			filenameLower === '.gitignore' ||
-			filenameLower === '.gitattributes'
+			filenameLower === ".gitignore" ||
+			filenameLower === ".gitattributes"
 		) {
 			return true;
 		}
 		if (
-			lower.includes('node_modules/') ||
-			lower.includes('vendor/') ||
-			lower.includes('third_party/') ||
-			lower.endsWith('.lock') ||
-			lower.endsWith('.min.js') ||
-			lower.endsWith('.min.css') ||
-			lower.startsWith('dist/') ||
-			lower.startsWith('out/') ||
-			lower.startsWith('build/') ||
-			lower.startsWith('.yarn/') ||
-			lower.startsWith('.pnpm/')
+			lower.includes("node_modules/") ||
+			lower.includes("vendor/") ||
+			lower.includes("third_party/") ||
+			lower.endsWith(".lock") ||
+			lower.endsWith(".min.js") ||
+			lower.endsWith(".min.css") ||
+			lower.startsWith("dist/") ||
+			lower.startsWith("out/") ||
+			lower.startsWith("build/") ||
+			lower.startsWith(".yarn/") ||
+			lower.startsWith(".pnpm/")
 		) {
 			return true;
 		}
 		return false;
 	}
 
-	async buildGitHeatmap(options: GitHeatmapBuildOptions): Promise<GraphWebviewPayload> {
+	async buildGitHeatmap(
+		options: GitHeatmapBuildOptions
+	): Promise<GraphWebviewPayload> {
 		const workspaceRoot = this.context.getDefaultWorkspaceRoot();
-		if (!workspaceRoot || workspaceRoot.scheme !== 'file') {
-			throw new Error('Git heatmap requires a file-based workspace.');
+		if (!workspaceRoot || workspaceRoot.scheme !== "file") {
+			throw new Error("Git heatmap requires a file-based workspace.");
 		}
 
 		const startTime = Date.now();
-		const windowDays = Math.max(1, Math.min(365, Math.floor(options.windowDays || 90)));
-		const granularity = options.granularity ?? 'topLevel';
+		const windowDays = Math.max(
+			1,
+			Math.min(365, Math.floor(options.windowDays || 90))
+		);
+		const granularity = options.granularity ?? "topLevel";
 
-		this.logService.info('[GraphDataBuilder] Building heatmap', { windowDays, granularity });
+		this.logService.info("[GraphDataBuilder] Building heatmap", {
+			windowDays,
+			granularity,
+		});
 
 		const commits = await this.readGitLog(workspaceRoot.fsPath, windowDays);
-		this.logService.info('[GraphDataBuilder] Read git log', { commits: commits.length });
+		this.logService.info("[GraphDataBuilder] Read git log", {
+			commits: commits.length,
+		});
 
 		const pathCandidates = new Set<string>();
 		for (const commit of commits) {
 			for (const file of commit.files) {
 				if (file?.path) {
-					pathCandidates.add(file.path.replace(/\\/g, '/'));
+					pathCandidates.add(file.path.replace(/\\/g, "/"));
 				}
 			}
 		}
 		let ignoredPaths: Set<string> = new Set();
 		if (pathCandidates.size) {
 			try {
-				const ignoredList = await this.gitHeatmapService.filterIgnoredPaths(workspaceRoot.fsPath, Array.from(pathCandidates));
-				ignoredPaths = new Set(ignoredList.map(path => path.replace(/\\/g, '/')));
+				const ignoredList = await this.gitHeatmapService.filterIgnoredPaths(
+					workspaceRoot.fsPath,
+					Array.from(pathCandidates)
+				);
+				ignoredPaths = new Set(
+					ignoredList.map((path) => path.replace(/\\/g, "/"))
+				);
 			} catch (error) {
-				this.logService.error('[GraphDataBuilder] failed to evaluate gitignore entries', error);
+				this.logService.error(
+					"[GraphDataBuilder] failed to evaluate gitignore entries",
+					error
+				);
 			}
 		}
-		const { filteredCommits, moduleChurnMap, totalCommits, consideredCommits } = this.reduceCommits(commits, granularity, ignoredPaths);
-		this.logService.info('[GraphDataBuilder] Reduced commits', { totalCommits, consideredCommits, modules: moduleChurnMap.size });
-
-		const heatmap = this.buildHeatmapFromCommits(filteredCommits, moduleChurnMap, {
-			granularity,
-			windowDays,
-			generationStartedAt: startTime,
+		const { filteredCommits, moduleChurnMap, totalCommits, consideredCommits } =
+			this.reduceCommits(commits, granularity, ignoredPaths);
+		this.logService.info("[GraphDataBuilder] Reduced commits", {
 			totalCommits,
 			consideredCommits,
+			modules: moduleChurnMap.size,
 		});
 
-		this.logService.info('[GraphDataBuilder] Built heatmap', { modules: heatmap.modules.length, cells: heatmap.cells.length });
+		const heatmap = this.buildHeatmapFromCommits(
+			filteredCommits,
+			moduleChurnMap,
+			{
+				granularity,
+				windowDays,
+				generationStartedAt: startTime,
+				totalCommits,
+				consideredCommits,
+			}
+		);
+
+		this.logService.info("[GraphDataBuilder] Built heatmap", {
+			modules: heatmap.modules.length,
+			cells: heatmap.cells.length,
+		});
 
 		const summary: string[] = [];
 		if (heatmap.modules.length) {
@@ -560,13 +894,13 @@ export class GraphDataBuilder {
 
 		const warnings: string[] = [];
 		if (!consideredCommits) {
-			warnings.push('No Git activity found for the selected window.');
+			warnings.push("No Git activity found for the selected window.");
 		}
 
 		return {
 			nodes: [],
 			edges: [],
-			mode: 'gitHeatmap',
+			mode: "gitHeatmap",
 			summary,
 			warnings,
 			generatedAt: Date.now(),
@@ -581,10 +915,10 @@ export class GraphDataBuilder {
 	}
 
 	private createArchitectureNode(
-		component: ArchitectureComponent,
+		component: ArchitectureComponent
 	): GraphNodePayload {
 		const evidenceDescriptions = this.takeEvidenceDescriptions(
-			component.evidence,
+			component.evidence
 		);
 		const primaryResource =
 			this.getEvidenceResource(component.evidence) ??
@@ -620,10 +954,10 @@ export class GraphDataBuilder {
 	}
 
 	private createArchitectureEdge(
-		relationship: ArchitectureRelationship,
+		relationship: ArchitectureRelationship
 	): GraphEdgePayload {
 		const evidenceDescriptions = this.takeEvidenceDescriptions(
-			relationship.evidence,
+			relationship.evidence
 		);
 		return {
 			id: relationship.id,
@@ -643,41 +977,41 @@ export class GraphDataBuilder {
 	}
 
 	private mapComponentKindToNodeKind(
-		kind: ArchitectureComponentKind,
+		kind: ArchitectureComponentKind
 	): GraphNodeKind {
 		switch (kind) {
-			case 'application':
-			case 'infrastructure':
-			case 'configuration':
-				return 'root';
-			case 'externalService':
-				return 'external';
+			case "application":
+			case "infrastructure":
+			case "configuration":
+				return "root";
+			case "externalService":
+				return "external";
 			default:
-				return 'relative';
+				return "relative";
 		}
 	}
 
 	private mapRelationshipKindToEdgeKind(
-		kind: ArchitectureRelationshipKind,
+		kind: ArchitectureRelationshipKind
 	): GraphEdgeKind {
 		switch (kind) {
-			case 'calls':
-			case 'publishes':
-			case 'consumes':
-				return 'external';
-			case 'dependsOn':
-			case 'connectsTo':
-			case 'stores':
-			case 'queries':
-			case 'hosts':
+			case "calls":
+			case "publishes":
+			case "consumes":
+				return "external";
+			case "dependsOn":
+			case "connectsTo":
+			case "stores":
+			case "queries":
+			case "hosts":
 			default:
-				return 'relative';
+				return "relative";
 		}
 	}
 
 	private buildArchitectureMetadata(
 		nodes: Iterable<GraphNodePayload>,
-		edges: GraphEdgePayload[],
+		edges: GraphEdgePayload[]
 	): Record<string, unknown> {
 		const nodeArray = Array.from(nodes);
 		const categoryCounts = new Map<string, number>();
@@ -687,9 +1021,9 @@ export class GraphDataBuilder {
 			metadata?: Record<string, unknown>;
 		}> = [];
 		for (const node of nodeArray) {
-			const category = node.category ?? 'unknown';
+			const category = node.category ?? "unknown";
 			categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
-			if (category === 'dataset') {
+			if (category === "dataset") {
 				datasets.push({
 					id: node.id,
 					label: node.label,
@@ -703,7 +1037,7 @@ export class GraphDataBuilder {
 			const category = edge.category ?? edge.kind;
 			relationshipCounts.set(
 				category,
-				(relationshipCounts.get(category) ?? 0) + 1,
+				(relationshipCounts.get(category) ?? 0) + 1
 			);
 		}
 
@@ -716,7 +1050,7 @@ export class GraphDataBuilder {
 
 	private takeEvidenceDescriptions(
 		evidence: DetectionEvidence[],
-		max = 4,
+		max = 4
 	): string[] {
 		const descriptions: string[] = [];
 		for (const entry of evidence) {
@@ -741,23 +1075,23 @@ export class GraphDataBuilder {
 	}
 
 	private parseMetadataResource(value: unknown): URI | undefined {
-		if (typeof value !== 'string' || !value) {
+		if (typeof value !== "string" || !value) {
 			return undefined;
 		}
 		try {
 			return URI.parse(value);
 		} catch (error) {
 			this.logService.debug(
-				'[GraphDataBuilder] failed to parse metadata resource',
+				"[GraphDataBuilder] failed to parse metadata resource",
 				value,
-				error,
+				error
 			);
 			return undefined;
 		}
 	}
 
 	private formatRelationshipLabel(kind: ArchitectureRelationshipKind): string {
-		return kind.replace(/([a-z])([A-Z])/g, '$1 $2');
+		return kind.replace(/([a-z])([A-Z])/g, "$1 $2");
 	}
 
 	async collectFilesInScope(folders: readonly URI[]): Promise<URI[]> {
@@ -777,7 +1111,7 @@ export class GraphDataBuilder {
 		const files: URI[] = [];
 		if (results.limitHit) {
 			this.logService.warn(
-				'[GraphView] file search limit reached; graph may be incomplete.',
+				"[GraphView] file search limit reached; graph may be incomplete."
 			);
 		}
 		for (const match of results.results) {
@@ -799,7 +1133,7 @@ export class GraphDataBuilder {
 
 	private async buildGraphFromFiles(
 		initialFiles: URI[],
-		options: GraphScopeOptions,
+		options: GraphScopeOptions
 	): Promise<GraphWebviewPayload> {
 		type MutableGraphNode = {
 			id: string;
@@ -825,12 +1159,18 @@ export class GraphDataBuilder {
 		const queue: URI[] = [...initialFiles];
 		const descriptorCache = new Map<string, Promise<ImportDescriptor[]>>();
 		const resolvedCache = new Map<string, Promise<URI | undefined>>();
+		const subtreeHashCache = new Map<string, string | undefined>(); // Cache for subtree hashes
+		const chunkHashCache = new Map<string, string[]>(); // Cache for chunk hashes (fileKey -> array of chunk hashes)
+		const parsedChunkCache = new Map<
+			string,
+			{ chunks: string[]; descriptors: ImportDescriptor[] }
+		>(); // Cache parsed results with chunk hashes
 
 		const ensureFileNode = (uri: URI): MutableGraphNode => {
 			const id = this.toNodeId(uri);
 			let node = nodes.get(id);
 			const isRoot =
-				options.scopeMode !== 'workspace' &&
+				options.scopeMode !== "workspace" &&
 				options.scopeRoots.has(this.context.getUriKey(uri));
 			const isExcluded = isExcludedPath(uri.path);
 			const isWithinWorkspace = this.context.isWithinWorkspace(uri);
@@ -840,21 +1180,24 @@ export class GraphDataBuilder {
 					id,
 					label: this.context.extUri.basename(uri),
 					path: uri.toString(true),
-					kind: isRoot ? 'root' : 'relative',
+					kind: isRoot ? "root" : "relative",
 					weight: 1,
 					fanIn: 0,
 					fanOut: 0,
 					openable,
 				};
 				nodes.set(id, node);
-			} else if (isRoot && node.kind !== 'root') {
-				node.kind = 'root';
+			} else if (isRoot && node.kind !== "root") {
+				node.kind = "root";
 			}
 			node.openable = node.openable && openable;
 			return node;
 		};
 
-		const ensureExternalNode = (specifier: string, resolvedUri?: URI): MutableGraphNode => {
+		const ensureExternalNode = (
+			specifier: string,
+			resolvedUri?: URI
+		): MutableGraphNode => {
 			const id = this.toNodeId(`module:${specifier}`);
 			let node = nodes.get(id);
 			if (!node) {
@@ -866,7 +1209,7 @@ export class GraphDataBuilder {
 					// Try to extract basename from specifier path if it looks like a file path
 					const specifierParts = specifier.split(/[\\/]/);
 					const lastPart = specifierParts[specifierParts.length - 1];
-					if (lastPart && lastPart.includes('.')) {
+					if (lastPart && lastPart.includes(".")) {
 						label = lastPart;
 					}
 				}
@@ -874,7 +1217,7 @@ export class GraphDataBuilder {
 					id,
 					label,
 					path: specifier,
-					kind: 'external',
+					kind: "external",
 					weight: 1,
 					fanIn: 0,
 					fanOut: 0,
@@ -893,24 +1236,115 @@ export class GraphDataBuilder {
 			}
 			processed.add(fileKey);
 
+			// Check chunk hashes for smart cache invalidation
+			let shouldSkipParsing = false;
+			let cachedDescriptors: ImportDescriptor[] | undefined;
+
+			try {
+				const relativePath = this.getRelativePath(fileUri);
+				const currentChunks = await this.merkleTreeService.getFileChunks(
+					relativePath
+				);
+
+				if (currentChunks && currentChunks.length > 0) {
+					const currentChunkHashes = currentChunks.map((chunk) => chunk.hash);
+					const cachedData = parsedChunkCache.get(fileKey);
+
+					if (cachedData) {
+						// Compare chunk hashes
+						const chunksUnchanged =
+							cachedData.chunks.length === currentChunkHashes.length &&
+							cachedData.chunks.every(
+								(hash, i) => hash === currentChunkHashes[i]
+							);
+
+						if (chunksUnchanged) {
+							// All chunks unchanged - use cached result!
+							cachedDescriptors = cachedData.descriptors;
+							shouldSkipParsing = true;
+							this.logService.debug(
+								`[GraphView] File ${fileKey} chunks unchanged (${currentChunks.length} chunks), using cached imports`
+							);
+						} else {
+							// Some chunks changed - log which ones
+							const changedIndices: number[] = [];
+							for (
+								let i = 0;
+								i <
+								Math.max(cachedData.chunks.length, currentChunkHashes.length);
+								i++
+							) {
+								if (cachedData.chunks[i] !== currentChunkHashes[i]) {
+									changedIndices.push(i);
+								}
+							}
+							this.logService.debug(
+								`[GraphView] File ${fileKey} has ${
+									changedIndices.length
+								} changed chunks: [${changedIndices.join(", ")}]`
+							);
+						}
+					}
+
+					// Update cache with current chunk hashes
+					chunkHashCache.set(fileKey, currentChunkHashes);
+				}
+
+				// Also track subtree hash (for backward compatibility)
+				const subtreeHash = await this.merkleTreeService.getSubtreeHash(
+					fileUri
+				);
+				subtreeHashCache.set(fileKey, subtreeHash);
+			} catch (error) {
+				// Merkle tree service might not be available or file might not be tracked yet
+				// Ensure file is tracked for future queries
+				try {
+					await this.merkleTreeService.ensureTracked(fileUri);
+				} catch {
+					// Ignore errors
+				}
+			}
+
 			const sourceNode = ensureFileNode(fileUri);
 			let descriptors: ImportDescriptor[] = [];
-			try {
-				descriptors = await this.getImportDescriptors(fileUri, descriptorCache);
-			} catch (error) {
-				this.logService.error(
-					'[GraphView] failed to parse imports',
-					fileUri.toString(true),
-					error,
+
+			if (shouldSkipParsing && cachedDescriptors) {
+				// Use cached result - no parsing needed!
+				descriptors = cachedDescriptors;
+				this.logService.debug(
+					`[GraphView] Using cached imports for ${fileKey} (${descriptors.length} imports)`
 				);
-				continue;
+			} else {
+				// Parse the file (chunks changed or no cache)
+				try {
+					descriptors = await this.getImportDescriptors(
+						fileUri,
+						descriptorCache
+					);
+
+					// Cache the result with current chunk hashes
+					const currentChunkHashes = chunkHashCache.get(fileKey);
+					if (currentChunkHashes && currentChunkHashes.length > 0) {
+						parsedChunkCache.set(fileKey, {
+							chunks: currentChunkHashes,
+							descriptors: descriptors,
+						});
+					}
+				} catch (error) {
+					this.logService.error(
+						"[GraphView] failed to parse imports",
+						fileUri.toString(true),
+						error
+					);
+					continue;
+				}
 			}
 
 			for (const descriptor of descriptors) {
 				const resolvedUri = await this.resolveImportTargetCached(
 					fileUri,
 					descriptor.specifier,
-					resolvedCache,
+					resolvedCache
 				);
 				if (this.shouldIgnoreImport(descriptor.specifier, resolvedUri)) {
 					continue;
@@ -927,11 +1361,11 @@ export class GraphDataBuilder {
 					queue.push(resolvedUri);
 					targetNode = ensureFileNode(resolvedUri);
 					targetId = targetNode.id;
-					edgeKind = descriptor.isSideEffectOnly ? 'sideEffect' : 'relative';
+					edgeKind = descriptor.isSideEffectOnly ? "sideEffect" : "relative";
 				} else {
 					targetNode = ensureExternalNode(descriptor.specifier, resolvedUri);
 					targetId = targetNode.id;
-					edgeKind = descriptor.isSideEffectOnly ? 'sideEffect' : 'external';
+					edgeKind = descriptor.isSideEffectOnly ? "sideEffect" : "external";
 				}
 
 				const edgeKey = `${targetId}->${sourceNode.id}`;
@@ -941,7 +1375,7 @@ export class GraphDataBuilder {
 						id: this.toNodeId(`edge:${edgeKey}`),
 						source: targetId,
 						target: sourceNode.id,
-						label: '',
+						label: "",
 						specifier: descriptor.specifier,
 						kind: edgeKind,
 						sourcePath: targetNode.path,
@@ -964,8 +1398,8 @@ export class GraphDataBuilder {
 				}
 
 				if (descriptor.isSideEffectOnly) {
-					entry.payload.kind = 'sideEffect';
-				} else if (entry.payload.kind !== 'sideEffect') {
+					entry.payload.kind = "sideEffect";
+				} else if (entry.payload.kind !== "sideEffect") {
 					entry.payload.kind = edgeKind;
 				}
 
@@ -973,15 +1407,15 @@ export class GraphDataBuilder {
 				sourceNode.fanIn += 1;
 				sourceNode.weight = Math.max(
 					sourceNode.weight,
-					sourceNode.fanIn + sourceNode.fanOut,
+					sourceNode.fanIn + sourceNode.fanOut
 				);
 				targetNode.weight = Math.max(
 					targetNode.weight,
-					targetNode.fanIn + targetNode.fanOut,
+					targetNode.fanIn + targetNode.fanOut
 				);
 				entry.payload.label = this.composeEdgeLabel(
 					entry.labelParts,
-					entry.payload.kind,
+					entry.payload.kind
 				);
 				entry.payload.symbols = entry.symbolNames.size
 					? Array.from(entry.symbolNames)
@@ -1008,7 +1442,7 @@ export class GraphDataBuilder {
 
 	private async getImportDescriptors(
 		uri: URI,
-		cache: Map<string, Promise<ImportDescriptor[]>>,
+		cache: Map<string, Promise<ImportDescriptor[]>>
 	): Promise<ImportDescriptor[]> {
 		const key = this.context.getUriKey(uri);
 		let promise = cache.get(key);
@@ -1026,7 +1460,7 @@ export class GraphDataBuilder {
 	private async resolveImportTargetCached(
 		sourceUri: URI,
 		specifier: string,
-		cache: Map<string, Promise<URI | undefined>>,
+		cache: Map<string, Promise<URI | undefined>>
 	): Promise<URI | undefined> {
 		const cacheKey = `${this.context.getUriKey(sourceUri)}::${specifier}`;
 		let promise = cache.get(cacheKey);
@@ -1038,7 +1472,7 @@ export class GraphDataBuilder {
 	}
 
 	private toNodeId(value: URI | string): string {
-		const raw = typeof value === 'string' ? value : value.toString(true);
+		const raw = typeof value === "string" ? value : value.toString(true);
 		return toCytoscapeId(raw);
 	}
 
@@ -1048,16 +1482,16 @@ export class GraphDataBuilder {
 			symbols.push(
 				this.decorateSymbol(
 					descriptor.defaultImport.name,
-					descriptor.defaultImport.isTypeOnly,
-				),
+					descriptor.defaultImport.isTypeOnly
+				)
 			);
 		}
 		if (descriptor.namespaceImport) {
 			symbols.push(
 				this.decorateSymbol(
 					`* as ${descriptor.namespaceImport.name}`,
-					descriptor.namespaceImport.isTypeOnly,
-				),
+					descriptor.namespaceImport.isTypeOnly
+				)
 			);
 		}
 		for (const item of descriptor.namedImports) {
@@ -1088,31 +1522,31 @@ export class GraphDataBuilder {
 	}
 
 	private composeEdgeLabel(symbols: Set<string>, kind: GraphEdgeKind): string {
-		if (kind === 'sideEffect') {
-			return '[side-effect]';
+		if (kind === "sideEffect") {
+			return "[side-effect]";
 		}
 		if (symbols.size === 0) {
-			return '';
+			return "";
 		}
 		return Array.from(symbols)
 			.sort((a, b) => a.localeCompare(b))
-			.join(', ');
+			.join(", ");
 	}
 
 	private async resolveImportTarget(
 		sourceUri: URI,
-		specifier: string,
+		specifier: string
 	): Promise<URI | undefined> {
 		if (!specifier) {
 			return undefined;
 		}
 		let baseUri: URI | undefined;
-		if (specifier.startsWith('.')) {
+		if (specifier.startsWith(".")) {
 			baseUri = this.context.extUri.resolvePath(
 				this.context.extUri.dirname(sourceUri),
-				specifier,
+				specifier
 			);
-		} else if (specifier.startsWith('/')) {
+		} else if (specifier.startsWith("/")) {
 			const workspaceRoot = this.context.getDefaultWorkspaceRoot();
 			if (workspaceRoot) {
 				baseUri = this.context.extUri.resolvePath(workspaceRoot, specifier);
@@ -1132,7 +1566,7 @@ export class GraphDataBuilder {
 					return candidate;
 				}
 			} catch (error) {
-				this.logService.debug('[GraphView] error checking candidate', error);
+				this.logService.debug("[GraphView] error checking candidate", error);
 			}
 		}
 		return undefined;
@@ -1163,7 +1597,7 @@ export class GraphDataBuilder {
 			pushCandidate(extUri.joinPath(dir, `${baseName}${ext}`));
 		}
 
-		if (baseName && baseName !== 'index') {
+		if (baseName && baseName !== "index") {
 			for (const indexName of GRAPH_INDEX_FILENAMES) {
 				pushCandidate(extUri.joinPath(baseUri, indexName));
 			}
@@ -1174,7 +1608,7 @@ export class GraphDataBuilder {
 
 	private shouldIgnoreImport(
 		specifier: string,
-		resolvedUri: URI | undefined,
+		resolvedUri: URI | undefined
 	): boolean {
 		const base = getImportBase(specifier);
 		if (GRAPH_IGNORED_IMPORT_SPECIFIERS.has(base)) {
@@ -1183,8 +1617,8 @@ export class GraphDataBuilder {
 		if (resolvedUri) {
 			const path = resolvedUri.path.toLowerCase();
 			if (
-				path.includes('/node_modules/') ||
-				path.includes('\\node_modules\\')
+				path.includes("/node_modules/") ||
+				path.includes("\\node_modules\\")
 			) {
 				return true;
 			}
@@ -1198,14 +1632,14 @@ export class GraphDataBuilder {
 
 		const importFromRegex = /import\s+([^'";]+?)\s+from\s+['"]([^'";]+)['"]/g;
 		while ((match = importFromRegex.exec(content)) !== null) {
-			let clause = match[1]?.trim() ?? '';
-			const specifier = match[2]?.trim() ?? '';
+			let clause = match[1]?.trim() ?? "";
+			const specifier = match[2]?.trim() ?? "";
 			if (!specifier) {
 				continue;
 			}
 
 			let clauseIsTypeOnly = false;
-			if (clause.startsWith('type ')) {
+			if (clause.startsWith("type ")) {
 				clauseIsTypeOnly = true;
 				clause = clause.slice(4).trim();
 			}
@@ -1221,13 +1655,13 @@ export class GraphDataBuilder {
 			let remainder = clause;
 			if (
 				remainder &&
-				!remainder.startsWith('{') &&
-				!remainder.startsWith('*')
+				!remainder.startsWith("{") &&
+				!remainder.startsWith("*")
 			) {
-				const commaIndex = remainder.indexOf(',');
+				const commaIndex = remainder.indexOf(",");
 				const defaultPart =
 					commaIndex === -1 ? remainder : remainder.slice(0, commaIndex);
-				remainder = commaIndex === -1 ? '' : remainder.slice(commaIndex + 1);
+				remainder = commaIndex === -1 ? "" : remainder.slice(commaIndex + 1);
 				const name = defaultPart.trim();
 				if (name) {
 					descriptor.defaultImport = { name, isTypeOnly: clauseIsTypeOnly };
@@ -1235,15 +1669,15 @@ export class GraphDataBuilder {
 			}
 
 			remainder = remainder.trim();
-			if (remainder.startsWith('{') && remainder.includes('}')) {
-				const inside = remainder.slice(1, remainder.indexOf('}'));
-				for (const entry of inside.split(',')) {
+			if (remainder.startsWith("{") && remainder.includes("}")) {
+				const inside = remainder.slice(1, remainder.indexOf("}"));
+				for (const entry of inside.split(",")) {
 					let token = entry.trim();
 					if (!token) {
 						continue;
 					}
 					let isTypeOnly = clauseIsTypeOnly;
-					if (token.startsWith('type ')) {
+					if (token.startsWith("type ")) {
 						isTypeOnly = true;
 						token = token.slice(5).trim();
 					}
@@ -1267,7 +1701,7 @@ export class GraphDataBuilder {
 						});
 					}
 				}
-			} else if (remainder.startsWith('*')) {
+			} else if (remainder.startsWith("*")) {
 				const nsMatch = /\*\s+as\s+([A-Za-z0-9_$]+)/.exec(remainder);
 				if (nsMatch) {
 					descriptor.namespaceImport = {
@@ -1282,7 +1716,7 @@ export class GraphDataBuilder {
 
 		const sideEffectRegex = /import\s+['"]([^'";]+)['"]/g;
 		while ((match = sideEffectRegex.exec(content)) !== null) {
-			const specifier = match[1]?.trim() ?? '';
+			const specifier = match[1]?.trim() ?? "";
 			if (!specifier) {
 				continue;
 			}
@@ -1298,8 +1732,8 @@ export class GraphDataBuilder {
 		const importEqualsRegex =
 			/import\s+(type\s+)?([A-Za-z0-9_$]+)\s*=\s*require\(\s*['"]([^'";]+)['"]\s*\)/g;
 		while ((match = importEqualsRegex.exec(content)) !== null) {
-			const specifier = match[3]?.trim() ?? '';
-			const name = match[2]?.trim() ?? '';
+			const specifier = match[3]?.trim() ?? "";
+			const name = match[2]?.trim() ?? "";
 			if (!specifier || !name) {
 				continue;
 			}

@@ -20,6 +20,7 @@ import { SyncDescriptor } from '../../../../platform/instantiation/common/descri
 import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
 import { ViewContainerLocation, IViewContainersRegistry, IViewsRegistry, Extensions as ViewExtensions, ViewContainer } from '../../../common/views.js';
 import { MonitorXChangelogViewPane } from './views/monitorXChangelogViewPane.js';
+import { DocsViewPane } from './views/docsView/docsViewPane.js';
 import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
 import { IRenWorkspaceStore, IMonitorXChangelogEntryInput, IMonitorXChangelogFileChange } from '../common/renWorkspaceStore.js';
 import './renWorkspaceStore.js';
@@ -42,6 +43,7 @@ export class RenViewsContribution implements IWorkbenchContribution {
 		@IEditorGroupsService editorGroupsService: IEditorGroupsService,
 		@IInstantiationService instantiationService: IInstantiationService,
 	) {
+		console.log('[RenViewsContribution] Constructor called, initializing...');
 		// Set up EnvOverlay for each editor group (for .env file overlays)
 		const editorGroups = observableFromEvent(
 			this,
@@ -54,13 +56,16 @@ export class RenViewsContribution implements IWorkbenchContribution {
 		const viewButtonsWidgets = new Map<EditorGroupView, ViewButtons>();
 
 		this._store.add(autorun(r => {
+			console.log('[RenViewsContribution] Autorun executing, processing editor groups...');
 			const toDelete = new Set(overlayWidgets.keys());
 			const toDeleteViewOverlays = new Set(viewOverlays.keys());
 			const toDeleteViewButtons = new Set(viewButtonsWidgets.keys());
 			const groups = editorGroups.read(r);
+			console.log(`[RenViewsContribution] Found ${groups.length} editor groups`);
 
 			for (const group of groups) {
 				if (!(group instanceof EditorGroupView)) {
+					console.log('[RenViewsContribution] Skipping non-EditorGroupView:', group);
 					continue;
 				}
 
@@ -88,12 +93,14 @@ export class RenViewsContribution implements IWorkbenchContribution {
 				// Attach ViewButtons to each editor group container
 				if (!viewButtonsWidgets.has(group)) {
 					const container = group.element;
+					console.log('[RenViewsContribution] Creating ViewButtons for editor group:', container);
 					// Ensure container has relative positioning for absolute positioning of buttons
 					if (container.style.position !== 'relative' && container.style.position !== 'absolute') {
 						container.style.position = 'relative';
 					}
 					const viewButtons = new ViewButtons(container);
 					viewButtonsWidgets.set(group, viewButtons);
+					console.log('[RenViewsContribution] ViewButtons created and attached:', viewButtons.element);
 				}
 			}
 
@@ -131,9 +138,11 @@ export class RenViewsContribution implements IWorkbenchContribution {
 }
 
 // Register the contribution
+console.log('[RenViewsContribution] Registering workbench contribution...');
 const workbenchRegistry = Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench);
 workbenchRegistry.registerWorkbenchContribution(RenViewsContribution, LifecyclePhase.Restored);
 workbenchRegistry.registerWorkbenchContribution(MonitorXChangelogToolContribution, LifecyclePhase.Restored);
+console.log('[RenViewsContribution] Workbench contribution registered successfully');
 
 const MONITORX_CHANGELOG_CONTAINER_ID = 'workbench.view.monitorxChangelog';
 const MONITORX_CHANGELOG_VIEW_ID = 'workbench.view.monitorxChangelog.entries';
@@ -227,3 +236,28 @@ if (!CommandsRegistry.getCommand(MONITORX_GET_CHANGELOG_COMMAND)) {
 		}
 	});
 }
+
+// --- Docs Container & View Registration ---
+const DOCS_CONTAINER_ID = 'workbench.view.renDocs';
+const DOCS_VIEW_ID = 'workbench.view.renDocs.main';
+const docsIcon = registerIcon('ren-docs-view-icon', Codicon.book, localize('renDocsIcon', "Docs view icon."));
+
+const docsContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
+	id: DOCS_CONTAINER_ID,
+	title: localize2('renDocsActivityTitle', "Docs"),
+	ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [DOCS_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
+	icon: docsIcon,
+	hideIfEmpty: false
+}, ViewContainerLocation.Sidebar);
+
+Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([
+	{
+		id: DOCS_VIEW_ID,
+		name: localize2('renDocsViewTitle', "Docs"),
+		ctorDescriptor: new SyncDescriptor(DocsViewPane),
+		canToggleVisibility: true,
+		canMoveView: true,
+		collapsed: false,
+		order: 1
+	}
+], docsContainer);

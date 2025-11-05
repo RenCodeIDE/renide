@@ -20,8 +20,7 @@ import { IQuickInputService } from '../../../../../../platform/quickinput/common
 import { ISearchService } from '../../../../../services/search/common/search.js';
 import { IEditorService, SIDE_GROUP } from '../../../../../services/editor/common/editorService.js';
 import { IEditorGroupsService, IEditorGroup } from '../../../../../services/editor/common/editorGroupsService.js';
-import { ICommandService } from '../../../../../../platform/commands/common/commands.js';
-import { ILanguageFeaturesService } from '../../../../../../editor/common/services/languageFeatures.js';
+import { IInstantiationService } from '../../../../../../platform/instantiation/common/instantiation.js';
 import { GroupIdentifier, SideBySideEditor } from '../../../../../common/editor.js';
 import { IResourceEditorInput, ITextEditorOptions, TextEditorSelectionRevealType } from '../../../../../../platform/editor/common/editor.js';
 import { Range } from '../../../../../../editor/common/core/range.js';
@@ -88,13 +87,23 @@ export class GraphView extends Disposable implements IRenView {
 		@ISearchService searchService: ISearchService,
 		@IEditorService private readonly editorService: IEditorService,
 		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
-		@ICommandService private readonly _commandService: ICommandService,
-		@ILanguageFeaturesService private readonly _languageFeaturesService: ILanguageFeaturesService,
-		@IGitHeatmapService gitHeatmapService: IGitHeatmapService
+		@IGitHeatmapService gitHeatmapService: IGitHeatmapService,
+		@IInstantiationService private readonly instantiationService: IInstantiationService
 	) {
 		super();
 		this.context = new GraphWorkspaceContext(workspaceService, uriIdentityService);
-		this.dataBuilder = new GraphDataBuilder(this.logService, this.fileService, searchService, this.context, this._commandService, this._languageFeaturesService, gitHeatmapService);
+		// createInstance will auto-inject services with @ decorators (commandService, languageFeaturesService, gitHeatmapService, merkleTreeService, storageService)
+		// We only pass the non-injected parameters
+		try {
+			this.logService.info('[GraphView] Creating GraphDataBuilder...');
+			// @ts-ignore - createInstance auto-injects services, so we only pass non-service parameters
+			this.dataBuilder = this.instantiationService.createInstance(GraphDataBuilder, this.logService, this.fileService, searchService, this.context);
+			this.logService.info('[GraphView] GraphDataBuilder created successfully');
+		} catch (error) {
+			this.logService.error('[GraphView] Failed to create GraphDataBuilder:', error);
+			console.error('[GraphView] GraphDataBuilder creation error:', error);
+			throw error; // Re-throw to prevent GraphView from being created in an invalid state
+		}
 		this.pickers = new GraphPickers(this.quickInputService, searchService, this.fileService, this.logService, this.context);
 	}
 
