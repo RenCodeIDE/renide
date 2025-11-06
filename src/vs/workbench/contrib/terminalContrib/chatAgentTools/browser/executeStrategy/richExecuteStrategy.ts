@@ -11,7 +11,7 @@ import { isNumber } from '../../../../../../base/common/types.js';
 import type { ICommandDetectionCapability } from '../../../../../../platform/terminal/common/capabilities/capabilities.js';
 import { ITerminalLogService } from '../../../../../../platform/terminal/common/terminal.js';
 import type { ITerminalInstance } from '../../../../terminal/browser/terminal.js';
-import { trackIdleOnPrompt, type ITerminalExecuteStrategy, type ITerminalExecuteStrategyResult } from './executeStrategy.js';
+import { getCachedXterm, INITIAL_IDLE_POLL_INTERVAL_MS, trackIdleOnPrompt, type ITerminalExecuteStrategy, type ITerminalExecuteStrategyResult } from './executeStrategy.js';
 import type { IMarker as IXtermMarker } from '@xterm/xterm';
 import { setupRecreatingStartMarker } from './strategyHelpers.js';
 
@@ -41,7 +41,7 @@ export class RichExecuteStrategy implements ITerminalExecuteStrategy {
 		try {
 			// Ensure xterm is available
 			this._log('Waiting for xterm');
-			const xterm = await this._instance.xtermReadyPromise;
+			const xterm = await getCachedXterm(this._instance);
 			if (!xterm) {
 				throw new Error('Xterm is not available');
 			}
@@ -61,7 +61,7 @@ export class RichExecuteStrategy implements ITerminalExecuteStrategy {
 					this._log('onDone via terminal disposal');
 					return { type: 'disposal' } as const;
 				}),
-				trackIdleOnPrompt(this._instance, 1000, store).then(() => {
+				trackIdleOnPrompt(this._instance, INITIAL_IDLE_POLL_INTERVAL_MS, store).then(() => {
 					this._log('onDone via idle prompt');
 				}),
 			]);

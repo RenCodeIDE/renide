@@ -190,10 +190,13 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			});
 		}
 
-		const maxIterations = 10;
+		// Remove upper limit on iterations - allow unlimited tool call iterations
+		// This can be configured via chat.agent.maxIterations if needed, but defaults to unlimited
+		const maxIterations = this.configurationService.getValue<number>('chat.agent.maxIterations') ?? Number.MAX_SAFE_INTEGER;
 		let iteration = 0;
 		let pendingToolResults: ServerToolResult[] | undefined = undefined;
 		const conversationToolResults = new Map<string, ServerToolResult>();
+		const requestStartTime = Date.now();
 
 		try {
 			while (iteration < maxIterations) {
@@ -214,8 +217,10 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					pendingToolResults = undefined;
 				}
 
+				const iterationStartTime = Date.now();
+				const elapsedSinceRequestStart = iterationStartTime - requestStartTime;
 				this.logService.info(
-					`[chatgpt-server] invoke iteration ${iteration + 1}/${maxIterations}`
+					`[chatgpt-server] invoke iteration ${iteration + 1}${maxIterations < Number.MAX_SAFE_INTEGER ? `/${maxIterations}` : ''} (elapsed: ${elapsedSinceRequestStart}ms)`
 				);
 
 				// Keep a handle on tool results used for this request. Do NOT materialize tool
@@ -271,9 +276,9 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				);
 				let streamedText = false;
 
-				const iterationStartTime = Date.now();
+				const streamIterationStartTime = Date.now();
 				this.logService.info(
-					`[Stream] [${iterationStartTime}] Starting async iteration of stream`
+					`[Stream] [${streamIterationStartTime}] Starting async iteration of stream`
 				);
 
 				try {
@@ -312,7 +317,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					const iterationEndTime = Date.now();
 					this.logService.info(
 						`[Stream] [${iterationEndTime}] Completed async iteration (duration: ${
-							iterationEndTime - iterationStartTime
+							iterationEndTime - streamIterationStartTime
 						}ms)`
 					);
 				} catch (error) {
@@ -402,15 +407,16 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					);
 
 					// Bounded-parallel execution of tool calls with per-call timeout
+					// Increased default from 3 to 10 for better performance with multiple tool calls
 					const maxConcurrency =
 						this.configurationService.getValue<number>(
 							"chat.toolCalls.maxConcurrency"
-						) ?? 3;
+						) ?? 10;
 					const timeoutMs =
 						this.configurationService.getValue<number>(
 							"chat.toolCalls.timeoutMs"
 						) ?? 30000;
-
+					
 					interface ToolTask {
 						index: number;
 						callId: string;
@@ -427,6 +433,11 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						parameters: part.toolCall!.args ?? {},
 					}));
 
+					const parallelExecutionStartTime = Date.now();
+					this.logService.info(
+						`[chatgpt-server] Starting parallel execution of ${tasks.length} tool call(s) with maxConcurrency=${maxConcurrency}`
+					);
+
 					const resultsBuffer: (ServerToolResult | undefined)[] = new Array(
 						tasks.length
 					);
@@ -437,6 +448,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						}
 
 						const { callId, toolName, toolId, parameters, index } = task;
+						const taskStartTime = Date.now();
 
 						if (!callId || callId.trim().length === 0) {
 							this.logService.error(
@@ -541,14 +553,16 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 
 						try {
 							resultsBuffer[index] = await runWithTimeout();
+							const taskTime = Date.now() - taskStartTime;
 							this.logService.debug(
-								`[chatgpt-server] Finished tool ${toolName} (callId: ${callId})`
+								`[chatgpt-server] Finished tool ${toolName} (callId: ${callId}) in ${taskTime}ms`
 							);
 						} catch (error) {
+							const taskTime = Date.now() - taskStartTime;
 							const message =
 								error instanceof Error ? error.message : String(error);
 							this.logService.error(
-								`[chatgpt-server] tool ${toolId} (callId: ${callId}) failed: ${message}`
+								`[chatgpt-server] tool ${toolId} (callId: ${callId}) failed after ${taskTime}ms: ${message}`
 							);
 							resultsBuffer[index] = {
 								toolCallId: callId,
@@ -575,6 +589,13 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						workers.push(startWorker());
 					}
 					await Promise.all(workers);
+					
+					const parallelExecutionTime = Date.now() - parallelExecutionStartTime;
+					this.logService.info(
+						`[chatgpt-server] Completed parallel execution of ${tasks.length} tool call(s) in ${parallelExecutionTime}ms ` +
+						`(avg: ${(parallelExecutionTime / tasks.length).toFixed(2)}ms per call, ` +
+						`concurrency: ${maxConcurrency})`
+					);
 
 					// Collect results in input order, ensuring a message per callId
 					for (let i = 0; i < resultsBuffer.length; i++) {
@@ -658,10 +679,15 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				};
 			}
 
+			const totalRequestTime = Date.now() - requestStartTime;
+			this.logService.warn(
+				`[chatgpt-server] Reached maxIterations limit (${maxIterations}) after ${totalRequestTime}ms and ${iteration} iterations`
+			);
 			throw new Error(
 				localize(
 					"chatgpt.maxToolIterations",
-					"Reached the maximum number of tool call iterations without producing an answer."
+					"Reached the maximum number of tool call iterations ({0}) without producing an answer.",
+					maxIterations
 				)
 			);
 		} catch (error) {

@@ -37,7 +37,7 @@ import { getRecommendedToolsOverRunInTerminal } from '../alternativeRecommendati
 import { CommandLineAutoApprover, type IAutoApproveRule, type ICommandApprovalResult, type ICommandApprovalResultWithReason } from '../commandLineAutoApprover.js';
 import { CommandSimplifier } from '../commandSimplifier.js';
 import { BasicExecuteStrategy } from '../executeStrategy/basicExecuteStrategy.js';
-import type { ITerminalExecuteStrategy } from '../executeStrategy/executeStrategy.js';
+import { getCachedXterm, type ITerminalExecuteStrategy } from '../executeStrategy/executeStrategy.js';
 import { NoneExecuteStrategy } from '../executeStrategy/noneExecuteStrategy.js';
 import { RichExecuteStrategy } from '../executeStrategy/richExecuteStrategy.js';
 import { getOutput } from '../outputHelpers.js';
@@ -539,7 +539,7 @@ export class RunInTerminalTool extends Disposable implements IToolImpl {
 
 		const timingConnectMs = Date.now() - timingStart;
 
-		const xterm = await toolTerminal.instance.xtermReadyPromise;
+		const xterm = await getCachedXterm(toolTerminal.instance);
 		if (!xterm) {
 			throw new Error('Instance was disposed before xterm.js was ready');
 		}

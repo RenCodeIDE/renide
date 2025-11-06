@@ -6,10 +6,10 @@ directories:
   buildResources: resources/darwin # we’ll tell it to look here for icons
 
 files:
-  - out/**/*
-  - extensions/**/*
+  - ../out/**/*
+  - ../extensions/**/*
   - resources/**/*
-  - product.json
+  - ../product.json
   - package.json
   - "!**/node_modules/**"
   - "node_modules/**/*"

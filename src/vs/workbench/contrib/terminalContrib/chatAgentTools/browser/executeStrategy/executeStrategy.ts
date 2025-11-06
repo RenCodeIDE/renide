@@ -10,6 +10,24 @@ import { DisposableStore } from '../../../../../../base/common/lifecycle.js';
 import type { ITerminalInstance } from '../../../../terminal/browser/terminal.js';
 import type { IMarker as IXtermMarker } from '@xterm/xterm';
 
+type TerminalXterm = Awaited<ITerminalInstance['xtermReadyPromise']>;
+const xtermCache = new WeakMap<ITerminalInstance, TerminalXterm>();
+
+export async function getCachedXterm(instance: ITerminalInstance): Promise<TerminalXterm | undefined> {
+	const cached = xtermCache.get(instance);
+	if (cached) {
+		return cached;
+	}
+	const xterm = await instance.xtermReadyPromise;
+	if (xterm) {
+		xtermCache.set(instance, xterm);
+	}
+	return xterm;
+}
+
+export const INITIAL_IDLE_POLL_INTERVAL_MS = 300;
+const PROMPT_POLL_MAX_INTERVAL_MS = 2000;
+
 export interface ITerminalExecuteStrategy {
 	readonly type: 'rich' | 'basic' | 'none';
 	/**
@@ -127,41 +145,62 @@ export async function waitForIdleWithPromptHeuristics(
 	idlePollIntervalMs: number,
 	extendedTimeoutMs: number,
 ): Promise<IPromptDetectionResult> {
-	await waitForIdle(onData, idlePollIntervalMs);
-
-	const xterm = await instance.xtermReadyPromise;
+	const xterm = await getCachedXterm(instance);
 	if (!xterm) {
 		return { detected: false, reason: `Xterm not available, using ${idlePollIntervalMs}ms timeout` };
 	}
-	const startTime = Date.now();
 
-	// Attempt to detect a prompt pattern after idle
-	while (Date.now() - startTime < extendedTimeoutMs) {
+	const readCursorLine = (): string => {
+		const buffer = xterm.raw.buffer.active;
+		const line = buffer.getLine(buffer.baseY + buffer.cursorY);
+		if (!line) {
+			return '';
+		}
+		return line.translateToString(true);
+	};
+
+	const detectPrompt = (): IPromptDetectionResult | undefined => {
 		try {
-			let content = '';
-			const buffer = xterm.raw.buffer.active;
-			const line = buffer.getLine(buffer.baseY + buffer.cursorY);
-			if (line) {
-				content = line.translateToString(true);
-			}
+			const content = readCursorLine();
 			const promptResult = detectsCommonPromptPattern(content);
 			if (promptResult.detected) {
 				return promptResult;
 			}
-		} catch (error) {
-			// Continue polling even if there's an error reading terminal content
+		} catch {
+			// Ignore detection failures and fall back to the polling loop.
 		}
-		await waitForIdle(onData, Math.min(idlePollIntervalMs, extendedTimeoutMs - (Date.now() - startTime)));
+		return undefined;
+	};
+
+	const immediatePrompt = detectPrompt();
+	if (immediatePrompt) {
+		return immediatePrompt;
+	}
+
+	const startTime = Date.now();
+
+	// Attempt to detect a prompt pattern after idle
+	let currentInterval = idlePollIntervalMs;
+	while (Date.now() - startTime < extendedTimeoutMs) {
+		const elapsed = Date.now() - startTime;
+		const remaining = extendedTimeoutMs - elapsed;
+		if (remaining <= 0) {
+			break;
+		}
+
+		const waitDuration = Math.min(currentInterval, remaining);
+		await waitForIdle(onData, waitDuration);
+		currentInterval = Math.min(currentInterval * 2, PROMPT_POLL_MAX_INTERVAL_MS);
+
+		const promptResult = detectPrompt();
+		if (promptResult) {
+			return promptResult;
+		}
 	}
 
 	// Extended timeout reached without detecting a prompt
 	try {
-		let content = '';
-		const buffer = xterm.raw.buffer.active;
-		const line = buffer.getLine(buffer.baseY + buffer.cursorY);
-		if (line) {
-			content = line.translateToString(true) + '\n';
-		}
+		const content = `${readCursorLine()}\n`;
 		return { detected: false, reason: `Extended timeout reached without prompt detection. Last line: "${content.trim()}"` };
 	} catch (error) {
 		return { detected: false, reason: `Extended timeout reached. Error reading terminal content: ${error}` };

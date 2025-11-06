@@ -149,10 +149,13 @@ Only call a tool if it is necessary; otherwise respond normally.`
 				}]
 			});
 		}
-		const maxIterations = 10;
+		// Remove upper limit on iterations - allow unlimited tool call iterations
+		// This can be configured via chat.agent.maxIterations if needed, but defaults to unlimited
+		const maxIterations = this.configurationService.getValue<number>('chat.agent.maxIterations') ?? Number.MAX_SAFE_INTEGER;
 		let iteration = 0;
 		let pendingToolResults: ServerToolResult[] | undefined = undefined;
 		const conversationToolResults = new Map<string, ServerToolResult>();
+		const requestStartTime = Date.now();
 
 		try {
 			while (iteration < maxIterations) {
@@ -301,8 +304,14 @@ Only call a tool if it is necessary; otherwise respond normally.`
 				const toolResultsForNextRequest: ServerToolResult[] = [];
 
 				// Bounded-parallel execution with per-call timeout
-				const maxConcurrency = this.configurationService.getValue<number>('chat.toolCalls.maxConcurrency') ?? 3;
+				// Increased default from 3 to 10 for better performance with multiple tool calls
+				const maxConcurrency = this.configurationService.getValue<number>('chat.toolCalls.maxConcurrency') ?? 10;
 				const timeoutMs = this.configurationService.getValue<number>('chat.toolCalls.timeoutMs') ?? 30000;
+				
+				const parallelExecutionStartTime = Date.now();
+				this.logService.info(
+					`[gemini-server] Starting parallel execution of ${toolCallParts.length} tool call(s) with maxConcurrency=${maxConcurrency}`
+				);
 
 				interface ToolTask { index: number; callId: string; toolName: string; toolId?: string; parameters: Record<string, unknown>; }
 				const tasks: ToolTask[] = toolCallParts.map((part: any, index: number) => ({
@@ -318,6 +327,7 @@ Only call a tool if it is necessary; otherwise respond normally.`
 				const runTask = async (task: ToolTask): Promise<void> => {
 					if (token.isCancellationRequested) { return; }
 					const { callId, toolName, toolId, parameters, index } = task;
+					const taskStartTime = Date.now();
 
 					if (!callId || callId.trim().length === 0) {
 						resultsBuffer[index] = { toolCallId: callId || `invalid_call_id_${index}`, content: [{ type: 'text', value: `Invalid callId for tool ${toolName}` }] };
@@ -353,9 +363,14 @@ Only call a tool if it is necessary; otherwise respond normally.`
 
 					try {
 						resultsBuffer[index] = await runWithTimeout();
+						const taskTime = Date.now() - taskStartTime;
+						this.logService.debug(
+							`[gemini-server] Finished tool ${toolName} (callId: ${callId}) in ${taskTime}ms`
+						);
 					} catch (error) {
+						const taskTime = Date.now() - taskStartTime;
 						const message = error instanceof Error ? error.message : String(error);
-						this.logService.error(`[gemini-server] tool ${toolId} failed: ${message}`);
+						this.logService.error(`[gemini-server] tool ${toolId} (callId: ${callId}) failed after ${taskTime}ms: ${message}`);
                         resultsBuffer[index] = { toolCallId: callId, content: [{ type: 'text' as const, value: message || 'Tool execution failed' }] };
 					}
 				};
@@ -368,6 +383,13 @@ Only call a tool if it is necessary; otherwise respond normally.`
 				};
 				for (let i = 0; i < Math.min(maxConcurrency, tasks.length); i++) { workers.push(startWorker()); }
 				await Promise.all(workers);
+				
+				const parallelExecutionTime = Date.now() - parallelExecutionStartTime;
+				this.logService.info(
+					`[gemini-server] Completed parallel execution of ${tasks.length} tool call(s) in ${parallelExecutionTime}ms ` +
+					`(avg: ${(parallelExecutionTime / tasks.length).toFixed(2)}ms per call, ` +
+					`concurrency: ${maxConcurrency})`
+				);
 
 				for (let i = 0; i < resultsBuffer.length; i++) {
 					const r = resultsBuffer[i];
@@ -385,7 +407,17 @@ Only call a tool if it is necessary; otherwise respond normally.`
 				iteration++;
 			}
 
-			throw new Error(localize('gemini.maxToolIterations', "Reached the maximum number of tool call iterations without producing an answer."));
+			const totalRequestTime = Date.now() - requestStartTime;
+			this.logService.warn(
+				`[gemini-server] Reached maxIterations limit (${maxIterations}) after ${totalRequestTime}ms and ${iteration} iterations`
+			);
+			throw new Error(
+				localize(
+					'gemini.maxToolIterations',
+					"Reached the maximum number of tool call iterations ({0}) without producing an answer.",
+					maxIterations
+				)
+			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			this.logService.error(`[gemini] ${message}`);

@@ -17,6 +17,7 @@ export const enum TerminalChatAgentToolsSettingId {
 	AutoApprove = 'chat.tools.terminal.autoApprove',
 	IgnoreDefaultAutoApproveRules = 'chat.tools.terminal.ignoreDefaultAutoApproveRules',
 	ShellIntegrationTimeout = 'chat.tools.terminal.shellIntegrationTimeout',
+	PromptDetectionTimeout = 'chat.tools.terminal.promptDetectionTimeout',
 	AutoReplyToPrompts = 'chat.tools.terminal.autoReplyToPrompts',
 	OutputLocation = 'chat.tools.terminal.outputLocation',
 
@@ -35,6 +36,7 @@ export interface ITerminalChatAgentToolsConfiguration {
 	autoApprove: { [key: string]: boolean };
 	commandReportingAllowList: { [key: string]: boolean };
 	shellIntegrationTimeout: number;
+	promptDetectionTimeout: number;
 }
 
 const autoApproveBoolean: IJSONSchema = {
@@ -338,6 +340,13 @@ export const terminalChatAgentToolsConfiguration: IStringDictionary<IConfigurati
 		maximum: 60000,
 		default: -1,
 		markdownDeprecationMessage: localize('shellIntegrationTimeout.deprecated', 'Use {0} instead', `\`#${TerminalSettingId.ShellIntegrationTimeout}#\``)
+	},
+	[TerminalChatAgentToolsSettingId.PromptDetectionTimeout]: {
+		type: 'integer',
+		minimum: 1000,
+		maximum: 20000,
+		default: 4000,
+		markdownDescription: localize('promptDetectionTimeout.description', "Controls how long, in milliseconds, the run in terminal tool waits for prompt detection after a command finishes. Lower values finish faster when commands complete quickly; higher values can help very slow commands."),
 	},
 	[TerminalChatAgentToolsSettingId.TerminalProfileLinux]: {
 		restricted: true,

@@ -91,6 +91,9 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 	private readonly _ctxToolsCount: IContextKey<number>;
 
 	private _callsByRequestId = new Map<string, ITrackedCall[]>();
+	
+	// Cache for tool lookups to avoid repeated Map lookups
+	private _toolLookupCache = new LRUCache<string, IToolEntry>(100);
 
 	private _preExecutionConfirmStore: GenericConfirmStore;
 	private _postExecutionConfirmStore: GenericConfirmStore;
@@ -150,6 +153,8 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 		}
 
 		this._tools.set(toolData.id, { data: toolData });
+		// Invalidate cache for this tool
+		this._toolLookupCache.delete(toolData.id);
 		this._ctxToolsCount.set(this._tools.size);
 		this._onDidChangeToolsScheduler.schedule();
 
@@ -166,6 +171,8 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 		return toDisposable(() => {
 			store?.dispose();
 			this._tools.delete(toolData.id);
+			// Invalidate cache when tool is unregistered
+			this._toolLookupCache.delete(toolData.id);
 			this._ctxToolsCount.set(this._tools.size);
 			this._refreshAllToolContextKeys();
 			this._onDidChangeToolsScheduler.schedule();
@@ -254,23 +261,39 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 	}
 
 	async invokeTool(dto: IToolInvocation, countTokens: CountTokensCallback, token: CancellationToken): Promise<IToolResult> {
+		const totalTimeWatch = StopWatch.create(true);
+		const toolLookupWatch = StopWatch.create(true);
 		this._logService.trace(`[LanguageModelToolsService#invokeTool] Invoking tool ${dto.toolId} with parameters ${JSON.stringify(dto.parameters)}`);
 
 		// When invoking a tool, don't validate the "when" clause. An extension may have invoked a tool just as it was becoming disabled, and just let it go through rather than throw and break the chat.
-		let tool = this._tools.get(dto.toolId);
+		// Use cache for faster lookups
+		let tool = this._toolLookupCache.get(dto.toolId);
 		if (!tool) {
+			tool = this._tools.get(dto.toolId);
+			if (tool) {
+				this._toolLookupCache.set(dto.toolId, tool);
+			}
+		}
+		if (!tool) {
+			toolLookupWatch.stop();
 			throw new Error(`Tool ${dto.toolId} was not contributed`);
 		}
 
+		const extensionActivationWatch = StopWatch.create(true);
 		if (!tool.impl) {
 			await this._extensionService.activateByEvent(`onLanguageModelTool:${dto.toolId}`);
+			extensionActivationWatch.stop();
 
 			// Extension should activate and register the tool implementation
 			tool = this._tools.get(dto.toolId);
 			if (!tool?.impl) {
+				toolLookupWatch.stop();
 				throw new Error(`Tool ${dto.toolId} does not have an implementation registered.`);
 			}
+		} else {
+			extensionActivationWatch.stop();
 		}
+		toolLookupWatch.stop();
 
 		// Shortcut to write to the model directly here, but could call all the way back to use the real stream.
 		let toolInvocation: ChatToolInvocation | undefined;
@@ -280,6 +303,8 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 		let toolResult: IToolResult | undefined;
 		let prepareTimeWatch: StopWatch | undefined;
 		let invocationTimeWatch: StopWatch | undefined;
+		let confirmationTimeWatch: StopWatch | undefined;
+		let postConfirmationTimeWatch: StopWatch | undefined;
 		let preparedInvocation: IPreparedToolInvocation | undefined;
 		try {
 			if (dto.context) {
@@ -313,13 +338,20 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 				}));
 				token = source.token;
 
+				const autoConfirmPromise = this.shouldAutoConfirm(tool.data.id, tool.data.runsInWorkspace);
+
 				prepareTimeWatch = StopWatch.create(true);
 				preparedInvocation = await this.prepareToolInvocation(tool, dto, token);
 				prepareTimeWatch.stop();
 
+				let autoConfirmed: ConfirmedReason | undefined;
+
 				toolInvocation = new ChatToolInvocation(preparedInvocation, tool.data, dto.callId, dto.fromSubAgent);
 				trackedCall.invocation = toolInvocation;
-				const autoConfirmed = await this.shouldAutoConfirm(tool.data.id, tool.data.runsInWorkspace);
+
+				const autoConfirmWatch = StopWatch.create(true);
+				autoConfirmed = await autoConfirmPromise;
+				autoConfirmWatch.stop();
 				if (autoConfirmed) {
 					IChatToolInvocation.confirmWith(toolInvocation, autoConfirmed);
 				}
@@ -328,24 +360,27 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 
 				dto.toolSpecificData = toolInvocation?.toolSpecificData;
 				if (preparedInvocation?.confirmationMessages?.title) {
-					if (!IChatToolInvocation.executionConfirmedOrDenied(toolInvocation) && !autoConfirmed) {
+					const alreadyConfirmed = IChatToolInvocation.executionConfirmedOrDenied(toolInvocation);
+					if (!autoConfirmed && !alreadyConfirmed) {
 						this.playAccessibilitySignal([toolInvocation]);
-					}
-					const userConfirmed = await IChatToolInvocation.awaitConfirmation(toolInvocation, token);
-					if (userConfirmed.type === ToolConfirmKind.Denied) {
-						throw new CancellationError();
-					}
-					if (userConfirmed.type === ToolConfirmKind.Skipped) {
-						toolResult = {
-							content: [{
-								kind: 'text',
-								value: 'The user chose to skip the tool call, they want to proceed without running it'
-							}]
-						};
-						return toolResult;
-					}
-					if (userConfirmed.type === ToolConfirmKind.LmServicePerTool) {
-						this._preExecutionConfirmStore.setAutoConfirmation(dto.toolId, userConfirmed.scope);
+						confirmationTimeWatch = StopWatch.create(true);
+						const userConfirmed = await IChatToolInvocation.awaitConfirmation(toolInvocation, token);
+						confirmationTimeWatch.stop();
+						if (userConfirmed.type === ToolConfirmKind.Denied) {
+							throw new CancellationError();
+						}
+						if (userConfirmed.type === ToolConfirmKind.Skipped) {
+							toolResult = {
+								content: [{
+									kind: 'text',
+									value: 'The user chose to skip the tool call, they want to proceed without running it'
+								}]
+							};
+							return toolResult;
+						}
+						if (userConfirmed.type === ToolConfirmKind.LmServicePerTool) {
+							this._preExecutionConfirmStore.setAutoConfirmation(dto.toolId, userConfirmed.scope);
+						}
 					}
 
 					if (dto.toolSpecificData?.kind === 'input') {
@@ -354,10 +389,13 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 					}
 				}
 			} else {
+				const autoConfirmPromise = this.shouldAutoConfirm(tool.data.id, tool.data.runsInWorkspace);
+
 				prepareTimeWatch = StopWatch.create(true);
 				preparedInvocation = await this.prepareToolInvocation(tool, dto, token);
 				prepareTimeWatch.stop();
-				if (preparedInvocation?.confirmationMessages?.title && !(await this.shouldAutoConfirm(tool.data.id, tool.data.runsInWorkspace))) {
+				const autoConfirmed = await autoConfirmPromise;
+				if (preparedInvocation?.confirmationMessages?.title && !autoConfirmed) {
 					const result = await this._dialogService.confirm({
 						message: renderAsPlaintext(preparedInvocation.confirmationMessages.title),
 						detail: renderAsPlaintext(preparedInvocation.confirmationMessages.message!),
@@ -397,12 +435,16 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 			this.ensureToolDetails(dto, toolResult, tool.data);
 
 			if (toolInvocation?.didExecuteTool(toolResult).type === IChatToolInvocation.StateKind.WaitingForPostApproval) {
+				const autoConfirmPostWatch = StopWatch.create(true);
 				const autoConfirmedPost = await this.shouldAutoConfirmPostExecution(tool.data.id, tool.data.runsInWorkspace);
+				autoConfirmPostWatch.stop();
 				if (autoConfirmedPost) {
 					IChatToolInvocation.confirmWith(toolInvocation, autoConfirmedPost);
 				}
 
+				postConfirmationTimeWatch = StopWatch.create(true);
 				const postConfirm = await IChatToolInvocation.awaitPostConfirmation(toolInvocation, token);
+				postConfirmationTimeWatch.stop();
 				if (postConfirm.type === ToolConfirmKind.Denied) {
 					throw new CancellationError();
 				}
@@ -419,6 +461,25 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 				}
 			}
 
+			totalTimeWatch.stop();
+			const totalTime = totalTimeWatch.elapsed();
+			const prepareTime = prepareTimeWatch?.elapsed() ?? 0;
+			const invocationTime = invocationTimeWatch?.elapsed() ?? 0;
+			const confirmationTime = confirmationTimeWatch?.elapsed() ?? 0;
+			const postConfirmationTime = postConfirmationTimeWatch?.elapsed() ?? 0;
+			const toolLookupTime = toolLookupWatch.elapsed();
+			const extensionActivationTime = extensionActivationWatch.elapsed();
+			
+			this._logService.info(
+				`[ToolPerf] ${dto.toolId} completed in ${totalTime.toFixed(2)}ms ` +
+				`(lookup: ${toolLookupTime.toFixed(2)}ms, ` +
+				`extension: ${extensionActivationTime.toFixed(2)}ms, ` +
+				`prepare: ${prepareTime.toFixed(2)}ms, ` +
+				`invoke: ${invocationTime.toFixed(2)}ms, ` +
+				`confirm: ${confirmationTime.toFixed(2)}ms, ` +
+				`postConfirm: ${postConfirmationTime.toFixed(2)}ms)`
+			);
+
 			this._telemetryService.publicLog2<LanguageModelToolInvokedEvent, LanguageModelToolInvokedClassification>(
 				'languageModelToolInvoked',
 				{
@@ -427,12 +488,37 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 					toolId: tool.data.id,
 					toolExtensionId: tool.data.source.type === 'extension' ? tool.data.source.extensionId.value : undefined,
 					toolSourceKind: tool.data.source.type,
-					prepareTimeMs: prepareTimeWatch?.elapsed(),
-					invocationTimeMs: invocationTimeWatch?.elapsed(),
+					prepareTimeMs: prepareTime,
+					invocationTimeMs: invocationTime,
+					totalTimeMs: totalTime,
+					confirmationTimeMs: confirmationTime,
+					postConfirmationTimeMs: postConfirmationTime,
+					toolLookupTimeMs: toolLookupTime,
+					extensionActivationTimeMs: extensionActivationTime,
 				});
 			return toolResult;
 		} catch (err) {
+			totalTimeWatch.stop();
 			const result = isCancellationError(err) ? 'userCancelled' : 'error';
+			const totalTime = totalTimeWatch.elapsed();
+			const prepareTime = prepareTimeWatch?.elapsed() ?? 0;
+			const invocationTime = invocationTimeWatch?.elapsed() ?? 0;
+			const confirmationTime = confirmationTimeWatch?.elapsed() ?? 0;
+			const postConfirmationTime = postConfirmationTimeWatch?.elapsed() ?? 0;
+			const toolLookupTime = toolLookupWatch.elapsed();
+			const extensionActivationTime = extensionActivationWatch.elapsed();
+			
+			this._logService.error(
+				`[ToolPerf] ${dto.toolId} failed after ${totalTime.toFixed(2)}ms ` +
+				`(lookup: ${toolLookupTime.toFixed(2)}ms, ` +
+				`extension: ${extensionActivationTime.toFixed(2)}ms, ` +
+				`prepare: ${prepareTime.toFixed(2)}ms, ` +
+				`invoke: ${invocationTime.toFixed(2)}ms, ` +
+				`confirm: ${confirmationTime.toFixed(2)}ms, ` +
+				`postConfirm: ${postConfirmationTime.toFixed(2)}ms) - ` +
+				`Error: ${toErrorMessage(err, true)}`
+			);
+			
 			this._telemetryService.publicLog2<LanguageModelToolInvokedEvent, LanguageModelToolInvokedClassification>(
 				'languageModelToolInvoked',
 				{
@@ -441,8 +527,13 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 					toolId: tool.data.id,
 					toolExtensionId: tool.data.source.type === 'extension' ? tool.data.source.extensionId.value : undefined,
 					toolSourceKind: tool.data.source.type,
-					prepareTimeMs: prepareTimeWatch?.elapsed(),
-					invocationTimeMs: invocationTimeWatch?.elapsed(),
+					prepareTimeMs: prepareTime,
+					invocationTimeMs: invocationTime,
+					totalTimeMs: totalTime,
+					confirmationTimeMs: confirmationTime,
+					postConfirmationTimeMs: postConfirmationTime,
+					toolLookupTimeMs: toolLookupTime,
+					extensionActivationTimeMs: extensionActivationTime,
 				});
 			this._logService.error(`[LanguageModelToolsService#invokeTool] Error from tool ${dto.toolId} with parameters ${JSON.stringify(dto.parameters)}:\n${toErrorMessage(err, true)}`);
 
@@ -853,6 +944,11 @@ type LanguageModelToolInvokedEvent = {
 	toolSourceKind: string;
 	prepareTimeMs?: number;
 	invocationTimeMs?: number;
+	totalTimeMs?: number;
+	confirmationTimeMs?: number;
+	postConfirmationTimeMs?: number;
+	toolLookupTimeMs?: number;
+	extensionActivationTimeMs?: number;
 };
 
 type LanguageModelToolInvokedClassification = {
@@ -863,6 +959,11 @@ type LanguageModelToolInvokedClassification = {
 	toolSourceKind: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'; comment: 'The source (mcp/extension/internal) of the tool.' };
 	prepareTimeMs?: { classification: 'SystemMetaData'; purpose: 'PerformanceAndHealth'; comment: 'Time spent in prepareToolInvocation method in milliseconds.' };
 	invocationTimeMs?: { classification: 'SystemMetaData'; purpose: 'PerformanceAndHealth'; comment: 'Time spent in tool invoke method in milliseconds.' };
+	totalTimeMs?: { classification: 'SystemMetaData'; purpose: 'PerformanceAndHealth'; comment: 'Total time spent in tool invocation from start to finish in milliseconds.' };
+	confirmationTimeMs?: { classification: 'SystemMetaData'; purpose: 'PerformanceAndHealth'; comment: 'Time spent waiting for user confirmation in milliseconds.' };
+	postConfirmationTimeMs?: { classification: 'SystemMetaData'; purpose: 'PerformanceAndHealth'; comment: 'Time spent waiting for post-execution confirmation in milliseconds.' };
+	toolLookupTimeMs?: { classification: 'SystemMetaData'; purpose: 'PerformanceAndHealth'; comment: 'Time spent looking up the tool in the registry in milliseconds.' };
+	extensionActivationTimeMs?: { classification: 'SystemMetaData'; purpose: 'PerformanceAndHealth'; comment: 'Time spent activating the extension that provides the tool in milliseconds.' };
 	owner: 'roblourens';
 	comment: 'Provides insight into the usage of language model tools.';
 };

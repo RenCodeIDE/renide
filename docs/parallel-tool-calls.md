@@ -8,8 +8,9 @@ Key guarantees:
 - Per-call cancellation and timeouts are enforced.
 
 Configuration:
-- `chat.toolCalls.maxConcurrency` (number): Maximum concurrent tool calls. Default: 3.
+- `chat.toolCalls.maxConcurrency` (number): Maximum concurrent tool calls. Default: 10 (increased from 3 for better performance).
 - `chat.toolCalls.timeoutMs` (number): Per-call timeout in milliseconds. Default: 30000.
+- `chat.agent.maxIterations` (number): Maximum number of tool call iterations per request. Default: unlimited (Number.MAX_SAFE_INTEGER).
 
 Implementation notes:
 - OpenAI agent: `renide/src/vs/workbench/contrib/chat/browser/chatgpt/agent.ts`

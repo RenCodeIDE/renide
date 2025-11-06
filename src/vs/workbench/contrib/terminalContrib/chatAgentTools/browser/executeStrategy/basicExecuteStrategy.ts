@@ -10,7 +10,7 @@ import { DisposableStore, MutableDisposable } from '../../../../../../base/commo
 import { isNumber } from '../../../../../../base/common/types.js';
 import type { ICommandDetectionCapability } from '../../../../../../platform/terminal/common/capabilities/capabilities.js';
 import { ITerminalLogService } from '../../../../../../platform/terminal/common/terminal.js';
-import { trackIdleOnPrompt, waitForIdle, type ITerminalExecuteStrategy, type ITerminalExecuteStrategyResult } from './executeStrategy.js';
+import { getCachedXterm, INITIAL_IDLE_POLL_INTERVAL_MS, trackIdleOnPrompt, waitForIdle, type ITerminalExecuteStrategy, type ITerminalExecuteStrategyResult } from './executeStrategy.js';
 import type { IMarker as IXtermMarker } from '@xterm/xterm';
 import { ITerminalInstance } from '../../../../terminal/browser/terminal.js';
 import { setupRecreatingStartMarker } from './strategyHelpers.js';
@@ -57,7 +57,7 @@ export class BasicExecuteStrategy implements ITerminalExecuteStrategy {
 		const store = new DisposableStore();
 
 		try {
-			const idlePromptPromise = trackIdleOnPrompt(this._instance, 1000, store);
+			const idlePromptPromise = trackIdleOnPrompt(this._instance, INITIAL_IDLE_POLL_INTERVAL_MS, store);
 			const onDone = Promise.race([
 				Event.toPromise(this._commandDetection.onCommandFinished, store).then(e => {
 					// When shell integration is basic, it means that the end execution event is
@@ -88,14 +88,14 @@ export class BasicExecuteStrategy implements ITerminalExecuteStrategy {
 
 			// Ensure xterm is available
 			this._log('Waiting for xterm');
-			const xterm = await this._instance.xtermReadyPromise;
+			const xterm = await getCachedXterm(this._instance);
 			if (!xterm) {
 				throw new Error('Xterm is not available');
 			}
 
 			// Wait for the terminal to idle before executing the command
 			this._log('Waiting for idle');
-			await waitForIdle(this._instance.onData, 1000);
+			await waitForIdle(this._instance.onData, INITIAL_IDLE_POLL_INTERVAL_MS);
 
 			setupRecreatingStartMarker(
 				xterm,
@@ -131,7 +131,7 @@ export class BasicExecuteStrategy implements ITerminalExecuteStrategy {
 
 			// Wait for the terminal to idle
 			this._log('Waiting for idle');
-			await waitForIdle(this._instance.onData, 1000);
+			await waitForIdle(this._instance.onData, INITIAL_IDLE_POLL_INTERVAL_MS);
 			if (token.isCancellationRequested) {
 				throw new CancellationError();
 			}
