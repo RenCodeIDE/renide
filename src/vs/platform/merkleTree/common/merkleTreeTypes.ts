@@ -7,6 +7,7 @@ export interface FileChunk {
 	startLine: number;              // Starting line number (0-based)
 	endLine: number;                // Ending line number (exclusive)
 	hash: string;                    // SHA256 hash of this chunk
+	parentHash?: string;             // Hash of previous chunk (sequential ordering)
 	content?: string;                // Optional: cached content (for small chunks)
 }
 

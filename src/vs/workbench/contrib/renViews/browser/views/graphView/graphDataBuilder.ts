@@ -26,6 +26,8 @@ import {
 	GitHeatmapPayload,
 	GraphWebviewPayload,
 	ImportDescriptor,
+	FunctionDefinition,
+	DataFlowGraphOptions,
 } from "./graphTypes.js";
 
 import {
@@ -50,6 +52,8 @@ import { IMerkleTreeService } from "../../../../../../platform/merkleTree/common
 import { IStorageService } from "../../../../../../platform/storage/common/storage.js";
 import type { IWorkspaceContextService } from "../../../../../../platform/workspace/common/workspace.js";
 import { GraphCacheManager, generateCacheKey } from "./graphCache/index.js";
+import { FunctionCallAnalyzer } from "./functionCallAnalyzer.js";
+import { IModelService } from "../../../../../../editor/common/services/model.js";
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 interface GitHeatmapBuildOptions {
@@ -95,6 +99,7 @@ interface HeatmapBuildContext {
 export class GraphDataBuilder {
 	private readonly architectureAnalyzer: ArchitectureAnalyzer;
 	private readonly cacheManager?: GraphCacheManager;
+	private readonly functionCallAnalyzer: FunctionCallAnalyzer;
 
 	constructor(
 		private readonly logService: ILogService,
@@ -106,6 +111,7 @@ export class GraphDataBuilder {
 		private readonly languageFeaturesService: ILanguageFeaturesService,
 		@IGitHeatmapService private readonly gitHeatmapService: IGitHeatmapService,
 		@IMerkleTreeService private readonly merkleTreeService: IMerkleTreeService,
+		@IModelService private readonly modelService: IModelService,
 		@IStorageService private readonly storageService?: IStorageService
 	) {
 		this.architectureAnalyzer = new ArchitectureAnalyzer(
@@ -147,6 +153,14 @@ export class GraphDataBuilder {
 					.storageService}, MerkleTreeService: ${!!this.merkleTreeService}`
 			);
 		}
+
+		// Initialize function call analyzer
+		this.functionCallAnalyzer = new FunctionCallAnalyzer(
+			this.languageFeaturesService,
+			this.fileService,
+			this.modelService,
+			this.logService
+		);
 	}
 
 	get onArchitectureProgress() {
@@ -308,6 +322,156 @@ export class GraphDataBuilder {
 		}
 
 		return graph;
+	}
+
+	async buildDataFlowGraph(
+		rootFunction: FunctionDefinition,
+		options: DataFlowGraphOptions = {
+			maxDepth: 10,
+			includeUpstream: true,
+			includeDownstream: true,
+			includeExternal: false,
+		}
+	): Promise<GraphWebviewPayload> {
+		this.logService.info(
+			"[GraphDataBuilder] Building data flow graph for function",
+			rootFunction.name
+		);
+
+		try {
+			// Build call graph
+			const callGraph = await this.functionCallAnalyzer.buildCallGraph(
+				rootFunction,
+				options
+			);
+
+			// Convert to graph nodes
+			const nodes: GraphNodePayload[] = [];
+			const nodeMap = new Map<string, GraphNodePayload>();
+
+			for (const [funcId, funcDef] of callGraph.nodes) {
+				const isRoot = funcId === rootFunction.id;
+				const node = this.createFunctionNode(funcDef, isRoot);
+				nodes.push(node);
+				nodeMap.set(funcId, node);
+			}
+
+			// Calculate fan-in and fan-out
+			const fanInMap = new Map<string, number>();
+			const fanOutMap = new Map<string, number>();
+
+			for (const edge of callGraph.edges) {
+				fanInMap.set(edge.callee.id, (fanInMap.get(edge.callee.id) || 0) + 1);
+				fanOutMap.set(edge.caller.id, (fanOutMap.get(edge.caller.id) || 0) + 1);
+			}
+
+			// Update nodes with fan-in/fan-out
+			for (const node of nodes) {
+				const funcId = node.metadata?.functionId as string;
+				if (funcId) {
+					node.fanIn = fanInMap.get(funcId) || 0;
+					node.fanOut = fanOutMap.get(funcId) || 0;
+					node.weight = Math.max(node.weight, node.fanIn + node.fanOut);
+				}
+			}
+
+			// Convert to graph edges
+			const edges: GraphEdgePayload[] = [];
+			for (const call of callGraph.edges) {
+				const sourceNode = nodeMap.get(call.caller.id);
+				const targetNode = nodeMap.get(call.callee.id);
+				if (sourceNode && targetNode) {
+					const edge = this.createFunctionCallEdge(
+						call,
+						sourceNode.id,
+						targetNode.id
+					);
+					edges.push(edge);
+				}
+			}
+
+			this.logService.info("[GraphDataBuilder] Data flow graph built", {
+				nodes: nodes.length,
+				edges: edges.length,
+			});
+
+			return {
+				nodes,
+				edges,
+				mode: "dataFlow",
+				summary: [
+					`Data flow graph for ${rootFunction.name}`,
+					`${nodes.length} functions, ${edges.length} calls`,
+					`Max depth: ${options.maxDepth || 10}`,
+				],
+				generatedAt: Date.now(),
+			};
+		} catch (error) {
+			this.logService.error(
+				"[GraphDataBuilder] Failed to build data flow graph",
+				error
+			);
+			throw error;
+		}
+	}
+
+	private createFunctionNode(
+		funcDef: FunctionDefinition,
+		isRoot: boolean
+	): GraphNodePayload {
+		const path = funcDef.fileUri.toString(true);
+		const isExternal =
+			path.includes("node_modules") || path.startsWith("vscode:");
+
+		const node: GraphNodePayload = {
+			id: funcDef.id,
+			label: funcDef.name,
+			path,
+			kind: isExternal ? "external" : "relative",
+			weight: isRoot ? 5 : 1,
+			fanIn: 0,
+			fanOut: 0,
+			openable: this.context.isWithinWorkspace(funcDef.fileUri),
+			description: funcDef.signature || `${funcDef.kind} function`,
+			metadata: {
+				functionId: funcDef.id,
+				functionName: funcDef.name,
+				fileUri: funcDef.fileUri.toString(),
+				lineNumber: funcDef.range.startLineNumber,
+				isRoot,
+				kind: funcDef.kind,
+				isExported: funcDef.isExported,
+			},
+			tags: isRoot ? ["root"] : [],
+		};
+
+		return node;
+	}
+
+	private createFunctionCallEdge(
+		call: import("./graphTypes.js").FunctionCall,
+		sourceId: string,
+		targetId: string
+	): GraphEdgePayload {
+		const edge: GraphEdgePayload = {
+			id: `${sourceId}->${targetId}:${call.callSite.startLineNumber}`,
+			source: sourceId,
+			target: targetId,
+			label: "calls",
+			specifier: "function-call",
+			kind: "relative",
+			sourcePath: call.caller.fileUri.toString(true),
+			targetPath: call.callee.fileUri.toString(true),
+			metadata: {
+				callType: call.callType,
+				callSite: {
+					line: call.callSite.startLineNumber,
+					column: call.callSite.startColumn,
+				},
+			},
+		};
+
+		return edge;
 	}
 
 	async buildArchitectureGraph(): Promise<GraphWebviewPayload> {

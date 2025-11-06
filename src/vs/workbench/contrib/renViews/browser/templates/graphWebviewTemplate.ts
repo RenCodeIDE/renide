@@ -634,7 +634,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			}
 			legendEl.innerHTML = '';
 			categoryState.clear();
-			if (!payload || payload.mode !== 'architecture') {
+			if (!payload || (payload.mode !== 'architecture' && payload.mode !== 'dataFlow')) {
 				legendEl.classList.remove('visible');
 				return;
 			}
@@ -1132,7 +1132,15 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 							'width': 'data(visualSize)',
 							'height': 'data(visualSize)'
 						}},
-						{ selector: 'node.root', style: {
+						{ selector: 'node.root-function', style: {
+						'background-color': '#ff6b6b',
+						'width': 50,
+						'height': 50,
+						'border-width': 3,
+						'border-color': '#fff',
+						'font-weight': 'bold'
+					}},
+					{ selector: 'node.root', style: {
 							'background-color': '#FFB300',
 							'border-color': '#8D6E63',
 							'color': '#ffffff'
@@ -1417,7 +1425,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				}
 				const selectButton = document.getElementById('selectFile');
 				if (selectButton) {
-					if (payload.mode === 'architecture') {
+					if (payload.mode === 'architecture' || payload.mode === 'dataFlow') {
 						selectButton.textContent = 'Refresh Analysis';
 						selectButton.title = 'Re-run architecture detection';
 					} else {
@@ -1429,6 +1437,9 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					let label = node.label;
 					if (mode === 'architecture' && typeof node.confidence === 'number' && !Number.isNaN(node.confidence)) {
 						label += ' · ' + Math.round(node.confidence * 100) + '%';
+					}
+					if (mode === 'dataFlow' && node.metadata?.isRoot) {
+						label += ' (root)';
 					}
 					return label;
 				};
@@ -1463,6 +1474,12 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					classNames.add('architecture');
 					if (node.category) {
 						classNames.add('category-' + normalizeCategory(node.category));
+					}
+				}
+				if (payload.mode === 'dataFlow') {
+					classNames.add('dataflow');
+					if (node.metadata?.isRoot) {
+						classNames.add('root-function');
 					}
 				}
 				return {
@@ -1522,7 +1539,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				applyCategoryVisibility();
 
 				const rootIds = nodes.filter(n => n.classes === 'root').map(n => n.data.id);
-				const layoutName = payload.mode === 'architecture' ? 'cose' : (nodes.length > 14 ? 'cose' : 'breadthfirst');
+				const layoutName = (payload.mode === 'architecture' || payload.mode === 'dataFlow') ? 'cose' : (nodes.length > 14 ? 'cose' : 'breadthfirst');
 				const layoutOptions = layoutName === 'breadthfirst'
 					? { name: 'breadthfirst', directed: true, padding: 80, spacingFactor: 1.2, roots: rootIds }
 					: { name: 'cose', padding: 60, animate: false };
@@ -1547,6 +1564,32 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					case 'REN_GRAPH_ERROR':
 						updateStatus('Graph rendering error inside webview.', 'error');
 						break;
+					case 'REN_GRAPH_SELECT_NODES': {
+						const nodeIds = Array.isArray(message?.payload?.nodeIds) ? message.payload.nodeIds : [];
+						if (nodeIds.length > 0 && cy) {
+							clearSelectionHighlight(false);
+							// Select first node and highlight its neighborhood
+							const firstNode = cy.getElementById(nodeIds[0]);
+							if (firstNode.length > 0) {
+								applySelectionHighlight(firstNode);
+								// Optionally center on the node
+								cy.center(firstNode);
+								cy.fit(firstNode, 100); // 100px padding
+							}
+							// If multiple nodes, also highlight others
+							nodeIds.slice(1).forEach(nodeId => {
+								const node = cy.getElementById(nodeId);
+								if (node.length > 0) {
+									node.addClass('connected');
+								}
+							});
+						}
+						break;
+					}
+					case 'REN_GRAPH_CLEAR_SELECTION': {
+						clearSelectionHighlight(true);
+						break;
+					}
 					default:
 						break;
 				}

@@ -273,6 +273,7 @@ export class MerkleTreeBuilder {
 			const totalLines = lines.length;
 			
 			// Create chunks of chunkSizeLines each
+			let previousHash: string | undefined;
 			for (let startLine = 0; startLine < totalLines; startLine += this.chunkSizeLines) {
 				const endLine = Math.min(startLine + this.chunkSizeLines, totalLines);
 				const chunkLines = lines.slice(startLine, endLine);
@@ -285,8 +286,11 @@ export class MerkleTreeBuilder {
 					startLine,
 					endLine,
 					hash: chunkHash,
+					parentHash: previousHash, // Link to previous chunk
 					content: chunkContent.length < 10000 ? chunkContent : undefined, // Cache small chunks
 				});
+				
+				previousHash = chunkHash; // Set for next iteration
 			}
 			
 			// Compute overall file hash from chunk hashes

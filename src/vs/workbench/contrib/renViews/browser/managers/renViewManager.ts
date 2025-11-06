@@ -1,21 +1,35 @@
 // renViewManager.ts
-import { Disposable } from '../../../../../base/common/lifecycle.js';
-import { IRenView } from '../views/renView.interface.js';
-import { CodeView } from '../views/codeView.js';
-import { MonitorXView } from '../views/monitorXView.js';
-import { GraphView } from '../views/graphView.js';
-import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
-import { ILogService } from '../../../../../platform/log/common/log.js';
+import { Disposable } from "../../../../../base/common/lifecycle.js";
+import { IRenView } from "../views/renView.interface.js";
+import { CodeView } from "../views/codeView.js";
+import { MonitorXView } from "../views/monitorXView.js";
+import { GraphView } from "../views/graphView.js";
+import { IInstantiationService } from "../../../../../platform/instantiation/common/instantiation.js";
+import { ILogService } from "../../../../../platform/log/common/log.js";
+import { createDecorator } from "../../../../../platform/instantiation/common/instantiation.js";
 
-export type RenViewMode = 'code' | 'monitorx' | 'graph';
+export type RenViewMode = "code" | "monitorx" | "graph";
 
-export class RenViewManager extends Disposable {
+export const IRenViewManager =
+	createDecorator<IRenViewManager>("IRenViewManager");
+
+export interface IRenViewManager {
+	readonly _serviceBrand: undefined;
+	getGraphView(): GraphView | undefined;
+	getCurrentView(): RenViewMode;
+	switchToView(mode: RenViewMode): void;
+	setContentArea(contentArea: HTMLElement): void;
+}
+
+export class RenViewManager extends Disposable implements IRenViewManager {
+	readonly _serviceBrand: undefined;
 	private readonly _views = new Map<RenViewMode, IRenView>();
-	private _currentView: RenViewMode = 'code';
+	private _currentView: RenViewMode = "code";
 	private _contentArea: HTMLElement | null = null;
 
 	constructor(
-		@IInstantiationService private readonly instantiationService: IInstantiationService,
+		@IInstantiationService
+		private readonly instantiationService: IInstantiationService,
 		@ILogService private readonly logService: ILogService
 	) {
 		super();
@@ -24,40 +38,70 @@ export class RenViewManager extends Disposable {
 
 	private initializeViews(): void {
 		try {
-			this.logService.info('[RenViewManager] Initializing views...');
-			
+			this.logService.info("[RenViewManager] Initializing views...");
+
 			// Initialize CodeView (no DI needed)
 			try {
-		this._views.set('code', this._register(new CodeView()));
-				this.logService.info('[RenViewManager] CodeView initialized successfully');
+				this._views.set("code", this._register(new CodeView()));
+				this.logService.info(
+					"[RenViewManager] CodeView initialized successfully"
+				);
 			} catch (error) {
-				this.logService.error('[RenViewManager] Failed to initialize CodeView:', error);
+				this.logService.error(
+					"[RenViewManager] Failed to initialize CodeView:",
+					error
+				);
 			}
 
 			// Initialize MonitorXView (uses DI)
 			try {
-				const monitorXView = this._register(this.instantiationService.createInstance(MonitorXView));
-				this._views.set('monitorx', monitorXView);
-				this.logService.info('[RenViewManager] MonitorXView initialized successfully');
+				const monitorXView = this._register(
+					this.instantiationService.createInstance(MonitorXView)
+				);
+				this._views.set("monitorx", monitorXView);
+				this.logService.info(
+					"[RenViewManager] MonitorXView initialized successfully"
+				);
 			} catch (error) {
-				this.logService.error('[RenViewManager] Failed to initialize MonitorXView:', error);
-				console.error('[RenViewManager] MonitorXView initialization error:', error);
+				this.logService.error(
+					"[RenViewManager] Failed to initialize MonitorXView:",
+					error
+				);
+				console.error(
+					"[RenViewManager] MonitorXView initialization error:",
+					error
+				);
 			}
 
 			// Initialize GraphView (uses DI)
 			try {
-				const graphView = this._register(this.instantiationService.createInstance(GraphView));
-				this._views.set('graph', graphView);
-				this.logService.info('[RenViewManager] GraphView initialized successfully');
+				const graphView = this._register(
+					this.instantiationService.createInstance(GraphView)
+				);
+				this._views.set("graph", graphView);
+				this.logService.info(
+					"[RenViewManager] GraphView initialized successfully"
+				);
 			} catch (error) {
-				this.logService.error('[RenViewManager] Failed to initialize GraphView:', error);
-				console.error('[RenViewManager] GraphView initialization error:', error);
+				this.logService.error(
+					"[RenViewManager] Failed to initialize GraphView:",
+					error
+				);
+				console.error(
+					"[RenViewManager] GraphView initialization error:",
+					error
+				);
 			}
 
-			this.logService.info(`[RenViewManager] View initialization complete. Registered ${this._views.size} views`);
+			this.logService.info(
+				`[RenViewManager] View initialization complete. Registered ${this._views.size} views`
+			);
 		} catch (error) {
-			this.logService.error('[RenViewManager] Critical error during view initialization:', error);
-			console.error('[RenViewManager] Critical initialization error:', error);
+			this.logService.error(
+				"[RenViewManager] Critical error during view initialization:",
+				error
+			);
+			console.error("[RenViewManager] Critical initialization error:", error);
 		}
 	}
 
@@ -86,5 +130,10 @@ export class RenViewManager extends Disposable {
 
 	getCurrentView(): RenViewMode {
 		return this._currentView;
+	}
+
+	public getGraphView(): GraphView | undefined {
+		const view = this._views.get("graph");
+		return view instanceof GraphView ? view : undefined;
 	}
 }

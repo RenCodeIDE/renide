@@ -3,37 +3,52 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { CancellationToken } from '../../../../../base/common/cancellation.js';
-import { CancellationError } from '../../../../../base/common/errors.js';
-import { AsyncIterableSource, DeferredPromise } from '../../../../../base/common/async.js';
-import { IDisposable } from '../../../../../base/common/lifecycle.js';
-import { listenStream } from '../../../../../base/common/stream.js';
-import { localize } from '../../../../../nls.js';
-import { ILogService } from '../../../../../platform/log/common/log.js';
-import { IRequestService, isSuccess } from '../../../../../platform/request/common/request.js';
-import { streamToBuffer } from '../../../../../base/common/buffer.js';
-import { SSEParser } from '../../../../../base/common/sseParser.js';
-import { IChatMessage } from '../../common/languageModels.js';
-import { validateIDEFormatStatic } from './validation.js';
-import type { ChatGPTStreamingResponse, ChatGPTResponse, ChatGPTContentPart, IDEStreamPart, ServerRequestOptions } from './types.js';
+import { CancellationToken } from "../../../../../base/common/cancellation.js";
+import { CancellationError } from "../../../../../base/common/errors.js";
+import {
+	AsyncIterableSource,
+	DeferredPromise,
+} from "../../../../../base/common/async.js";
+import { IDisposable } from "../../../../../base/common/lifecycle.js";
+import { listenStream } from "../../../../../base/common/stream.js";
+import { localize } from "../../../../../nls.js";
+import { ILogService } from "../../../../../platform/log/common/log.js";
+import {
+	IRequestService,
+	isSuccess,
+} from "../../../../../platform/request/common/request.js";
+import { streamToBuffer } from "../../../../../base/common/buffer.js";
+import { SSEParser } from "../../../../../base/common/sseParser.js";
+import { IChatMessage } from "../../common/languageModels.js";
+import { validateIDEFormatStatic } from "./validation.js";
+import type {
+	ChatGPTStreamingResponse,
+	ChatGPTResponse,
+	ChatGPTContentPart,
+	IDEStreamPart,
+	ServerRequestOptions,
+} from "./types.js";
 
 export async function sendChatGPTRequest(
 	requestService: IRequestService,
 	accessToken: string | undefined,
 	serverAddress: string,
-	endpoint: '/api/agent/tools',
+	endpoint: "/api/agent/tools",
 	messages: IChatMessage[],
 	token: CancellationToken,
 	options?: ServerRequestOptions,
 	logService?: ILogService,
-	modelType: 'openai' | 'gemini' = 'openai',
+	modelType: "openai" | "gemini" = "openai"
 ): Promise<ChatGPTStreamingResponse> {
 	// Normalize serverAddress (remove trailing slashes)
-	const normalizedServerAddress = serverAddress.trim().replace(/\/+$/, '');
+	const normalizedServerAddress = serverAddress.trim().replace(/\/+$/, "");
 
 	// If serverAddress already ends with /api and endpoint starts with /api/, remove the duplicate /api
 	let normalizedEndpoint: string;
-	if (normalizedServerAddress.endsWith('/api') && endpoint.startsWith('/api/')) {
+	if (
+		normalizedServerAddress.endsWith("/api") &&
+		endpoint.startsWith("/api/")
+	) {
 		normalizedEndpoint = endpoint.substring(4); // Remove '/api' from the beginning of endpoint
 	} else {
 		normalizedEndpoint = endpoint;
@@ -44,15 +59,15 @@ export async function sendChatGPTRequest(
 	if (!accessToken) {
 		throw new Error(
 			localize(
-				'chatgpt.noAuthToken',
-				'Authentication token is missing. Please sign in to use ChatGPT.',
-			),
+				"chatgpt.noAuthToken",
+				"Authentication token is missing. Please sign in to use ChatGPT."
+			)
 		);
 	}
 
 	validateIDEFormatStatic(messages, logService);
 	logService?.debug(
-		`[chatgpt-server] sendChatGPTRequest: Message format validation passed (${messages.length} messages)`,
+		`[chatgpt-server] sendChatGPTRequest: Message format validation passed (${messages.length} messages)`
 	);
 
 	const payload: Record<string, unknown> = {
@@ -61,49 +76,57 @@ export async function sendChatGPTRequest(
 	};
 
 	if (options?.context) {
-		payload['context'] = options.context;
+		payload["context"] = options.context;
 	}
 	if (options?.modelName) {
-		payload['modelName'] = options.modelName;
+		payload["modelName"] = options.modelName;
 	}
 	if (options?.tools !== undefined) {
-		payload['tools'] = options.tools;
+		payload["tools"] = options.tools;
 	}
 	if (options?.toolResults && options.toolResults.length > 0) {
-		payload['toolResults'] = options.toolResults;
+		payload["toolResults"] = options.toolResults;
 	}
 
 	const body = JSON.stringify(payload);
 
 	if (options?.tools && options.tools.length > 0) {
-		const toolNames = options.tools.map((t) => t.name || '<unnamed>').join(', ');
-		logService?.debug(`[chatgpt-server] Sending ${options.tools.length} tool(s): ${toolNames}`);
+		const toolNames = options.tools
+			.map((t) => t.name || "<unnamed>")
+			.join(", ");
+		logService?.debug(
+			`[chatgpt-server] Sending ${options.tools.length} tool(s): ${toolNames}`
+		);
 	} else {
 		logService?.debug(`[chatgpt-server] No tools being sent`);
 	}
 
 	logService?.info(`[chatgpt-server] Sending request to ${url}`);
 	logService?.debug(
-		`[chatgpt-server] Request payload: model=${payload.model}, messages=${messages.length}, tools=${options?.tools?.length || 0}, toolResults=${options?.toolResults?.length || 0}`,
+		`[chatgpt-server] Request payload: model=${payload.model}, messages=${
+			messages.length
+		}, tools=${options?.tools?.length || 0}, toolResults=${
+			options?.toolResults?.length || 0
+		}`
 	);
 
 	const context = await requestService.request(
 		{
-			type: 'POST',
+			type: "POST",
 			url,
 			data: body,
 			headers: {
-				'Content-Type': 'application/json',
+				"Content-Type": "application/json",
 				Authorization: `Bearer ${accessToken}`,
-				Accept: 'text/event-stream',
+				Accept: "text/event-stream",
 			},
 		},
-		token,
+		token
 	);
 
 	if (!isSuccess(context)) {
 		logService?.error(
-			`[chatgpt-server] Request failed with status ${context.res.statusCode}`,
+			`[chatgpt-server] Request failed with status ${context.res.statusCode}`
 		);
 		const buffer = await streamToBuffer(context.stream);
 		const errorText = buffer.toString();
@@ -124,7 +147,9 @@ export async function sendChatGPTRequest(
 		throw new Error(errorMessage);
 	}
 
-	logService?.info(`[chatgpt-server] Request successful, starting SSE stream parsing`);
+	logService?.info(
+		`[chatgpt-server] Request successful, starting SSE stream parsing`
+	);
 
 	const stream = new AsyncIterableSource<ChatGPTContentPart[]>();
 	const deferred = new DeferredPromise<ChatGPTResponse>();
@@ -148,14 +173,17 @@ export async function sendChatGPTRequest(
 		if (!deferred.isSettled) {
 			if (!aggregatedParts.length && textAccumulator.length === 0) {
 				const err = new Error(
-					localize('chatgpt.invalidResponse', 'Model returned an empty response.'),
+					localize(
+						"chatgpt.invalidResponse",
+						"Model returned an empty response."
+					)
 				);
 				deferred.error(err);
 				stream.reject(err);
 				return;
 			}
 			if (textAccumulator.length > 0) {
-				const accumulatedText = textAccumulator.join('');
+				const accumulatedText = textAccumulator.join("");
 				if (accumulatedText.trim().length) {
 					aggregatedParts.push({ text: accumulatedText });
 				}
@@ -185,22 +213,56 @@ export async function sendChatGPTRequest(
 	cancellationListener = token.onCancellationRequested(() => {
 		const err = new CancellationError();
 		finalizeError(err);
-		if (typeof context.stream.destroy === 'function') {
+		if (typeof context.stream.destroy === "function") {
 			context.stream.destroy();
 		}
 	});
 
 	const parser = new SSEParser((event: any) => {
-		if (event.type !== 'message') {
+		const timestamp = Date.now();
+
+		// Validate event structure
+		if (!event || typeof event !== "object") {
+			logService?.warn(
+				`[Stream] [${timestamp}] Received invalid SSE event (not an object)`
+			);
 			return;
 		}
 
-		const rawData = event.data?.trim();
-		if (!rawData) {
+		if (event.type !== "message") {
+			logService?.debug(
+				`[Stream] [${timestamp}] Received SSE event type: ${event.type} (ignoring)`
+			);
 			return;
 		}
-		if (rawData === '[DONE]') {
-			logService?.debug(`[chatgpt-server] Received [DONE] marker, finalizing stream`);
+
+		// Validate event data exists
+		if (!event.data || typeof event.data !== "string") {
+			logService?.warn(
+				`[Stream] [${timestamp}] Received SSE message with invalid data`
+			);
+			return;
+		}
+
+		const rawData = event.data.trim();
+		if (!rawData) {
+			logService?.debug(
+				`[Stream] [${timestamp}] Received empty SSE data, skipping`
+			);
+			return;
+		}
+
+		logService?.debug(
+			`[Stream] [${timestamp}] Received SSE message: ${rawData.substring(
+				0,
+				100
+			)}${rawData.length > 100 ? "..." : ""}`
+		);
+
+		if (rawData === "[DONE]") {
+			logService?.debug(
+				`[Stream] [${timestamp}] Received [DONE] marker, finalizing stream`
+			);
 			finalizeSuccess();
 			return;
 		}
@@ -211,12 +273,19 @@ export async function sendChatGPTRequest(
 			if (!Array.isArray(parsedParts)) {
 				parsedParts = [parsedParts as IDEStreamPart];
 			}
+			logService?.debug(
+				`[Stream] [${timestamp}] Parsed ${parsedParts.length} part(s) from SSE`
+			);
 		} catch (error) {
 			logService?.error(
-				`[chatgpt-server] SSE chunk parse failure: ${error instanceof Error ? error.message : String(error)}`,
+				`[Stream] [${timestamp}] SSE chunk parse failure: ${
+					error instanceof Error ? error.message : String(error)
+				}`
 			);
 			const err = new Error(
-				`Streaming chunk parse failure: ${error instanceof Error ? error.message : String(error)}`,
+				`Streaming chunk parse failure: ${
+					error instanceof Error ? error.message : String(error)
+				}`
 			);
 			finalizeError(err);
 			return;
@@ -226,20 +295,20 @@ export async function sendChatGPTRequest(
 
 		for (const part of parsedParts) {
 			switch (part.type) {
-				case 'text':
+				case "text":
 					if (part.value !== undefined && part.value.length > 0) {
 						textAccumulator.push(part.value);
 						newParts.push({ text: part.value });
 					}
 					break;
 
-				case 'finish':
+				case "finish":
 					if (part.finishReason !== undefined) {
 						finishReason = finishReason ?? part.finishReason;
 					}
 					break;
 
-				case 'tool_use':
+				case "tool_use":
 					if (part.name && part.toolCallId && part.parameters !== undefined) {
 						newParts.push({
 							toolCall: {
@@ -249,29 +318,37 @@ export async function sendChatGPTRequest(
 							},
 						});
 						logService?.info(
-							`[chatgpt-server] Received tool_use part: ${part.name} (id: ${part.toolCallId})`,
+							`[chatgpt-server] Received tool_use part: ${part.name} (id: ${part.toolCallId})`
 						);
 					}
 					break;
 
-				case 'error': {
+				case "error": {
 					logService?.error(
-						`[chatgpt-server] Received error part: ${part.message || 'Unknown error'}`,
+						`[chatgpt-server] Received error part: ${
+							part.message || "Unknown error"
+						}`
 					);
-					const err = new Error(part.message || 'Streaming error');
+					const err = new Error(part.message || "Streaming error");
 					finalizeError(err);
 					return;
 				}
 
 				default:
 					logService?.warn(
-						`[chatgpt-server] Unknown part type: ${(part as IDEStreamPart).type}`,
+						`[chatgpt-server] Unknown part type: ${
+							(part as IDEStreamPart).type
+						}`
 					);
 					break;
 			}
 		}
 
 		if (newParts.length) {
+			const emitTimestamp = Date.now();
+			logService?.debug(
+				`[Stream] [${emitTimestamp}] Emitting ${newParts.length} part(s) to async iterable`
+			);
 			aggregatedParts.push(...newParts);
 			stream.emitOne(newParts);
 		}
@@ -281,10 +358,23 @@ export async function sendChatGPTRequest(
 		context.stream,
 		{
 			onData: (chunk: any) => {
+				const dataTimestamp = Date.now();
 				try {
+					if (!chunk || !chunk.buffer) {
+						logService?.warn(
+							`[Stream] [${dataTimestamp}] Received invalid chunk data`
+						);
+						return;
+					}
+					logService?.debug(
+						`[Stream] [${dataTimestamp}] Received raw chunk from HTTP stream (${chunk.buffer.length} bytes)`
+					);
 					parser.feed(chunk.buffer);
 				} catch (error) {
 					const err = error instanceof Error ? error : new Error(String(error));
+					logService?.error(
+						`[Stream] [${dataTimestamp}] Error feeding parser: ${err.message}`
+					);
 					finalizeError(err);
 				}
 			},
@@ -296,7 +386,7 @@ export async function sendChatGPTRequest(
 				finalizeSuccess();
 			},
 		},
-		token,
+		token
 	);
 
 	return {
@@ -304,4 +394,3 @@ export async function sendChatGPTRequest(
 		result: deferred.p,
 	};
 }
-

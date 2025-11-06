@@ -441,6 +441,12 @@ export class MerkleTreeService
 			return;
 		}
 
+		// Get relative path for logging and cache key
+		const relativePath = this.getRelativePath(uri);
+		this.logService.debug(
+			`[MerkleTree] ensureTracked: Ensuring ${relativePath} is tracked`
+		);
+
 		await this.builder.trackFile(uri);
 		this.changeTracker.trackFile(uri);
 
@@ -449,6 +455,21 @@ export class MerkleTreeService
 		if (tree) {
 			const result = await this.builder.updateFile(uri, tree);
 			if (result.updated) {
+				// Find the file node in the tree and add it to node cache
+				// so getFileChunks can find it immediately
+				const fileNode = this.findFileNodeInTree(tree, relativePath);
+				if (fileNode && fileNode.type === "file") {
+					this.cache.setNode(relativePath, fileNode);
+					const chunkHashes = fileNode.chunks?.map(c => c.hash.substring(0, 8)).join(", ") || "none";
+					this.logService.debug(
+						`[MerkleTree] ensureTracked: Updated node cache for ${relativePath} (${fileNode.chunks?.length || 0} chunks, hashes: ${chunkHashes})`
+					);
+				} else {
+					this.logService.debug(
+						`[MerkleTree] ensureTracked: File node not found in tree for ${relativePath} after updateFile`
+					);
+				}
+
 				this.cache.setTree(tree, tree.hash);
 				this._rootHash = tree.hash;
 			}
@@ -467,12 +488,70 @@ export class MerkleTreeService
 		await this.initialize();
 
 		if (!this.cache) {
+			this.logService.debug(
+				`[MerkleTree] getFileChunks: Cache not available for ${relativePath}`
+			);
 			return undefined;
 		}
 
-		const node = this.cache.getNode(relativePath);
+		// Try node cache first
+		let node = this.cache.getNode(relativePath);
+		
 		if (node && node.type === "file") {
+			const chunkHashes = node.chunks?.map(c => c.hash.substring(0, 8)).join(", ") || "none";
+			this.logService.debug(
+				`[MerkleTree] getFileChunks: Found node in cache for ${relativePath} (${node.chunks?.length || 0} chunks, hashes: ${chunkHashes})`
+			);
 			return node.chunks;
+		}
+
+		// If not in cache, search tree
+		this.logService.debug(
+			`[MerkleTree] getFileChunks: Node cache miss for ${relativePath}, searching tree...`
+		);
+		
+		const tree = this.cache.getTree();
+		if (tree) {
+			node = this.findFileNodeInTree(tree, relativePath);
+			// Cache it for next time
+			if (node && node.type === "file") {
+				this.cache.setNode(relativePath, node);
+				const chunkHashes = node.chunks?.map(c => c.hash.substring(0, 8)).join(", ") || "none";
+				this.logService.debug(
+					`[MerkleTree] getFileChunks: Found node in tree for ${relativePath} (${node.chunks?.length || 0} chunks, hashes: ${chunkHashes}), cached it`
+				);
+				return node.chunks;
+			}
+		}
+
+		this.logService.debug(
+			`[MerkleTree] getFileChunks: Node not found for ${relativePath}`
+		);
+		return undefined;
+	}
+
+	/**
+	 * Find a file node in the tree by relative path
+	 * Uses the same approach as MerkleTreeBuilder.findNodeByPath
+	 */
+	private findFileNodeInTree(
+		tree: MerkleTreeNode,
+		relativePath: string
+	): MerkleTreeNode | undefined {
+		// First, try direct path match (nodes store full relative path)
+		if (tree.path === relativePath && tree.type === "file") {
+			return tree;
+		}
+
+		// Recursively search children
+		if (tree.children) {
+			for (const child of tree.children) {
+				const found = this.findFileNodeInTree(child, relativePath);
+				if (found) {
+					// found is guaranteed to be a file node (base case checks type === "file")
+					return found;
+				}
+			}
 		}
 
 		return undefined;

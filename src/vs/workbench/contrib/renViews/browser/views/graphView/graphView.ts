@@ -32,7 +32,7 @@ import { buildGraphWebviewHTML } from '../../templates/graphWebviewTemplate.js';
 import { GraphWorkspaceContext } from './graphContext.js';
 import { GraphDataBuilder } from './graphDataBuilder.js';
 import { GraphPickers } from './graphPickers.js';
-import { GitHeatmapCommitSummary, GitHeatmapGranularity, GitHeatmapPayload, GraphEdgePayload, GraphMode, GraphNodePayload, GraphStatusLevel, GraphWebviewPayload } from './graphTypes.js';
+import { GitHeatmapCommitSummary, GitHeatmapGranularity, GitHeatmapPayload, GraphEdgePayload, GraphMode, GraphNodePayload, GraphStatusLevel, GraphWebviewPayload, FunctionDefinition } from './graphTypes.js';
 import { isExcludedPath } from './graphConstants.js';
 import { ViewButtons } from '../../components/viewButtons.js';
 import { IGitHeatmapService } from '../../../../../../platform/gitHeatmap/common/gitHeatmapService.js';
@@ -51,6 +51,7 @@ export class GraphView extends Disposable implements IRenView {
 	private _isUpdatingProgrammatically = false;
 	private _selectedFile: URI | undefined;
 	private _selectedFolder: URI | undefined;
+	private _selectedFunction: FunctionDefinition | undefined;
 	private _currentGraph:
 		| {
 			payload: GraphWebviewPayload;
@@ -104,7 +105,8 @@ export class GraphView extends Disposable implements IRenView {
 			console.error('[GraphView] GraphDataBuilder creation error:', error);
 			throw error; // Re-throw to prevent GraphView from being created in an invalid state
 		}
-		this.pickers = new GraphPickers(this.quickInputService, searchService, this.fileService, this.logService, this.context);
+		// @ts-ignore - createInstance auto-injects services
+		this.pickers = this.instantiationService.createInstance(GraphPickers, this.quickInputService, searchService, this.fileService, this.logService, this.context);
 	}
 
 	show(contentArea: HTMLElement): void {
@@ -283,7 +285,7 @@ export class GraphView extends Disposable implements IRenView {
 		const modeSelect = document.createElement('select');
 		modeSelect.id = 'renGraphModeSelect';
 		modeSelect.className = 'ren-graph-toolbar-select';
-		(['file', 'folder', 'workspace', 'architecture', 'gitHeatmap'] as GraphMode[]).forEach(mode => {
+		(['file', 'folder', 'workspace', 'architecture', 'gitHeatmap', 'dataFlow'] as GraphMode[]).forEach(mode => {
 			const option = document.createElement('option');
 			option.value = mode;
 			option.textContent = this.getModeLabel(mode);
@@ -415,6 +417,12 @@ export class GraphView extends Disposable implements IRenView {
 					this._targetButton.textContent = 'Refresh Heatmap';
 					this._targetButton.title = 'Rebuild module co-change heatmap from Git history';
 					break;
+				case 'dataFlow':
+					this._targetButton.textContent = this._selectedFunction
+						? 'Change function'
+						: 'Select function';
+					this._targetButton.title = 'Choose a function to analyze data flow';
+					break;
 				case 'file':
 				default:
 					this._targetButton.textContent = this._selectedFile
@@ -446,15 +454,18 @@ export class GraphView extends Disposable implements IRenView {
 		}
 
 		this._mode = mode;
-		if (this._mode !== 'file') {
+		if (this._mode !== 'file' && this._mode !== 'dataFlow') {
 			this._selectedFile = undefined;
 		}
 		if (this._mode !== 'folder') {
 			this._selectedFolder = undefined;
 		}
+		if (this._mode !== 'dataFlow') {
+			this._selectedFunction = undefined;
+		}
 		this.updateToolbarUI();
 		void this.sendStatus(this.getReadyMessage(), 'info');
-		if (this._graphReady && (this._mode === 'workspace' || this._mode === 'architecture' || this._mode === 'gitHeatmap')) {
+		if (this._graphReady && (this._mode === 'workspace' || this._mode === 'architecture' || this._mode === 'gitHeatmap' || this._mode === 'dataFlow')) {
 			void this.promptForTargetAndRender();
 		}
 	}
@@ -583,6 +594,32 @@ export class GraphView extends Disposable implements IRenView {
 				case 'gitHeatmap':
 					await this.renderGitHeatmap(requestId);
 					break;
+				case 'dataFlow': {
+					// Use existing file if available, otherwise prompt for file
+					let file = this._selectedFile;
+					if (!file) {
+						await this.sendStatus('Waiting for file selection…', 'loading');
+						file = await this.pickers.pickSourceFile();
+						if (!file) {
+							await this.sendStatus('No file selected.', 'warning', 4000);
+							return;
+						}
+						this._selectedFile = file;
+						this.updateToolbarUI();
+					}
+					
+			// Now prompt for function selection
+			await this.sendStatus('Waiting for function selection…', 'loading');
+			const selection = await this.pickers.pickFunction(file);
+			if (!selection) {
+				await this.sendStatus('Function selection canceled. Click "Select function" again to select a function.', 'warning', 6000);
+				return;
+			}
+					this._selectedFunction = selection.function;
+					this.updateToolbarUI();
+					await this.renderDataFlowGraph(selection.function, requestId);
+					break;
+				}
 				case 'file':
 				default: {
 					await this.sendStatus('Waiting for file selection…', 'loading');
@@ -725,6 +762,42 @@ export class GraphView extends Disposable implements IRenView {
 		}
 	}
 
+	private async renderDataFlowGraph(rootFunction: FunctionDefinition, requestId: number): Promise<void> {
+		await this.sendStatus(
+			`Analyzing data flow for ${rootFunction.name}…`,
+			'loading'
+		);
+		try {
+			const payload = await this.dataBuilder.buildDataFlowGraph(rootFunction, {
+				maxDepth: 10,
+				includeUpstream: true,
+				includeDownstream: true,
+				includeExternal: false
+			});
+			if (requestId !== this._renderRequestId) {
+				return;
+			}
+			this.storeGraphPayload(payload);
+			await this._webview?.postMessage({ type: 'REN_GRAPH_DATA', payload });
+			const edgeCount = this.getEdgeCount(payload);
+			await this.sendStatus(
+				edgeCount === 0
+					? `No function calls found for ${rootFunction.name}.`
+					: `Rendered data flow for ${rootFunction.name}.`,
+				edgeCount === 0 ? 'warning' : 'success',
+				edgeCount === 0 ? 5000 : 4000
+			);
+		} catch (error) {
+			this.logService.error('[GraphView] failed to build data flow graph', error);
+			if (requestId === this._renderRequestId) {
+				await this.sendStatus(
+					'Failed to build data flow graph. Check logs for details.',
+					'error'
+				);
+			}
+		}
+	}
+
 	private async renderArchitectureGraph(requestId: number): Promise<void> {
 		await this.sendStatus('Analyzing project architecture…', 'loading');
 		const progressListeners = new DisposableStore();
@@ -776,6 +849,48 @@ export class GraphView extends Disposable implements IRenView {
 			edgeById.set(edge.id, edge);
 		}
 		this._currentGraph = { payload, nodeById, edgeById, nodeByResourceKey };
+	}
+
+	public getCurrentGraphState(): {
+		mode?: GraphMode | undefined;
+		nodes: GraphNodePayload[];
+		edges: GraphEdgePayload[];
+		summary?: string[] | undefined;
+		metadata?: Record<string, unknown> | undefined;
+		generatedAt?: number | undefined;
+	} | null {
+		if (!this._currentGraph) {
+			return null;
+		}
+		return {
+			mode: this._currentGraph.payload.mode,
+			nodes: this._currentGraph.payload.nodes,
+			edges: this._currentGraph.payload.edges,
+			summary: this._currentGraph.payload.summary,
+			metadata: this._currentGraph.payload.metadata,
+			generatedAt: this._currentGraph.payload.generatedAt
+		};
+	}
+
+	public async selectNodes(nodeIds: string[]): Promise<void> {
+		if (!this._webview || !this._graphReady) {
+			this.logService.warn('[GraphView] Cannot select nodes: webview not ready');
+			return;
+		}
+		await this._webview.postMessage({
+			type: 'REN_GRAPH_SELECT_NODES',
+			payload: { nodeIds }
+		});
+	}
+
+	public async clearSelection(): Promise<void> {
+		if (!this._webview || !this._graphReady) {
+			return;
+		}
+		await this._webview.postMessage({
+			type: 'REN_GRAPH_CLEAR_SELECTION',
+			payload: {}
+		});
 	}
 
 	private getResourceKeyFromNode(node: GraphNodePayload): string | undefined {
@@ -1332,6 +1447,8 @@ export class GraphView extends Disposable implements IRenView {
 				return 'Architecture';
 			case 'gitHeatmap':
 				return 'Git Heatmap';
+			case 'dataFlow':
+				return 'Data Flow';
 			case 'file':
 			default:
 				return 'File';
@@ -1348,6 +1465,8 @@ export class GraphView extends Disposable implements IRenView {
 				return 'Analyze the workspace to discover its architecture.';
 			case 'gitHeatmap':
 				return 'Generate a Git co-change heatmap for your workspace.';
+			case 'dataFlow':
+				return 'Select a function to visualize its data flow.';
 			case 'file':
 			default:
 				return 'Select a file to visualize its imports.';

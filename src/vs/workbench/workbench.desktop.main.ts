@@ -169,6 +169,7 @@ import './contrib/multiDiffEditor/browser/multiDiffEditor.contribution.js';
 
 // Ren Views
 import './contrib/renViews/browser/renViews.contribution.js';
+import './contrib/renViews/browser/services/chunkIndexServiceImpl.js';
 import './contrib/renViews/browser/services/docsServiceImpl.js';
 import './contrib/renViews/browser/docsAgent.contribution.js';
 import '../platform/gitHeatmap/electron-browser/gitHeatmapService.js';

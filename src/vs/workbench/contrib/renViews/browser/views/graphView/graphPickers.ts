@@ -11,6 +11,10 @@ import { ILogService } from '../../../../../../platform/log/common/log.js';
 import { IQuickInputService, IQuickPickItem } from '../../../../../../platform/quickinput/common/quickInput.js';
 import { ISearchService, QueryType } from '../../../../../services/search/common/search.js';
 import { IFileService } from '../../../../../../platform/files/common/files.js';
+import { ILanguageFeaturesService } from '../../../../../../editor/common/services/languageFeatures.js';
+import { IModelService } from '../../../../../../editor/common/services/model.js';
+import { Range } from '../../../../../../editor/common/core/range.js';
+import { SymbolKind } from '../../../../../../editor/common/languages.js';
 
 import { GraphWorkspaceContext } from './graphContext.js';
 import {
@@ -19,11 +23,14 @@ import {
 	GRAPH_FILE_EXTENSIONS,
 	isExcludedPath
 } from './graphConstants.js';
+import { FunctionDefinition } from './graphTypes.js';
 
 type FileQuickPickItem = IQuickPickItem & { uri: URI };
 
 type FolderPickKind = 'select' | 'folder' | 'parent' | 'workspaceRoot' | 'workspaceRootList' | 'custom';
 type FolderPickItem = IQuickPickItem & { uri?: URI; kind: FolderPickKind; customValue?: string };
+
+type FunctionQuickPickItem = IQuickPickItem & { function: FunctionDefinition };
 
 export class GraphPickers {
 	constructor(
@@ -31,7 +38,9 @@ export class GraphPickers {
 		private readonly searchService: ISearchService,
 		private readonly fileService: IFileService,
 		private readonly logService: ILogService,
-		private readonly context: GraphWorkspaceContext
+		private readonly context: GraphWorkspaceContext,
+		@ILanguageFeaturesService private readonly languageFeaturesService: ILanguageFeaturesService,
+		@IModelService private readonly modelService: IModelService
 	) { }
 
 	async pickSourceFile(): Promise<URI | undefined> {
@@ -503,6 +512,179 @@ export class GraphPickers {
 			this.logService.debug('[GraphView] failed to resolve directory', uri.toString(true), error);
 		}
 		return undefined;
+	}
+
+	async pickFunction(sourceFile?: URI): Promise<{ file: URI; function: FunctionDefinition } | undefined> {
+		// Step 1: Get file if not provided
+		const file = sourceFile ?? await this.pickSourceFile();
+		if (!file) {
+			return undefined;
+		}
+
+		// Step 2: Get text model
+		let model = this.modelService.getModel(file);
+		if (!model) {
+			// Try to read file and create model
+			try {
+				const buffer = await this.fileService.readFile(file);
+				const content = buffer.value.toString();
+				model = this.modelService.createModel(content, null, file, false);
+			} catch (error) {
+				this.logService.error('[GraphPickers] failed to read file for function picking', error);
+				return undefined;
+			}
+		}
+
+		// Step 3: Get function symbols
+		const functions = await this.getFunctionDefinitions(file, model);
+		if (functions.length === 0) {
+			this.logService.info('[GraphPickers] No functions found in file', file.toString(true));
+			return undefined;
+		}
+
+		// Step 4: Create QuickPick
+		const quickPick = this.quickInputService.createQuickPick<FunctionQuickPickItem>();
+		quickPick.placeholder = 'Select a function to analyze data flow';
+		quickPick.matchOnDescription = true;
+		quickPick.matchOnDetail = true;
+		quickPick.canSelectMany = false;
+
+		const items: FunctionQuickPickItem[] = functions.map(func => ({
+			label: func.name,
+			description: `${func.kind} at line ${func.range.startLineNumber}`,
+			detail: func.signature || `${func.isExported ? 'exported ' : ''}${func.kind}`,
+			function: func
+		}));
+
+		quickPick.items = items.sort((a, b) => {
+			// Sort by line number
+			return a.function.range.startLineNumber - b.function.range.startLineNumber;
+		});
+
+		const disposables = new DisposableStore();
+		disposables.add(quickPick);
+
+		return new Promise<{ file: URI; function: FunctionDefinition } | undefined>((resolve) => {
+			let finished = false;
+			const finalize = (result: { file: URI; function: FunctionDefinition } | undefined) => {
+				if (finished) {
+					return;
+				}
+				finished = true;
+				disposables.dispose();
+				// Clean up model if we created it
+				if (model && !this.modelService.getModel(file)) {
+					model.dispose();
+				}
+				resolve(result);
+			};
+
+			disposables.add(quickPick.onDidAccept(() => {
+				const selected = quickPick.selectedItems[0] as FunctionQuickPickItem | undefined;
+				if (selected) {
+					finalize({ file, function: selected.function });
+					quickPick.hide();
+				}
+			}));
+
+			disposables.add(quickPick.onDidHide(() => {
+				finalize(undefined);
+			}));
+
+			quickPick.show();
+		});
+	}
+
+	private async getFunctionDefinitions(file: URI, model: any): Promise<FunctionDefinition[]> {
+		const functions: FunctionDefinition[] = [];
+		const cancellationToken = new CancellationTokenSource();
+
+		try {
+			const providers = this.languageFeaturesService.documentSymbolProvider.all(model);
+			if (providers.length === 0) {
+				this.logService.debug('[GraphPickers] No document symbol providers available');
+				return functions;
+			}
+
+			for (const provider of providers) {
+				try {
+					const symbols = await provider.provideDocumentSymbols(model, cancellationToken.token);
+					if (!symbols) {
+						continue;
+					}
+
+					// Flatten nested symbols
+					const flattenSymbols = (symbols: any[]): any[] => {
+						const result: any[] = [];
+						for (const symbol of symbols) {
+							result.push(symbol);
+							if (symbol.children && symbol.children.length > 0) {
+								result.push(...flattenSymbols(symbol.children));
+							}
+						}
+						return result;
+					};
+
+					const flatSymbols = flattenSymbols(Array.isArray(symbols) ? symbols : [symbols]);
+
+					for (const symbol of flatSymbols) {
+						// Filter for functions
+						if (
+							symbol.kind === SymbolKind.Function ||
+							symbol.kind === SymbolKind.Method ||
+							symbol.kind === SymbolKind.Constructor
+						) {
+							const range = symbol.range || symbol.selectionRange;
+							if (!range) {
+								continue;
+							}
+
+							// Determine function kind
+							let funcKind: FunctionDefinition['kind'] = 'function';
+							if (symbol.kind === SymbolKind.Method) {
+								funcKind = 'method';
+							} else if (symbol.kind === SymbolKind.Constructor) {
+								funcKind = 'constructor';
+							}
+
+							// Check if async (simplified - could be improved)
+							const name = symbol.name || 'anonymous';
+							const isAsync = symbol.name?.includes('async') || false;
+
+							const funcId = `${file.toString()}:${name}:${range.startLineNumber}:${range.startColumn}`;
+							const funcDef: FunctionDefinition = {
+								id: funcId,
+								name: name,
+								fileUri: file,
+								range: new Range(
+									range.startLineNumber,
+									range.startColumn,
+									range.endLineNumber,
+									range.endColumn
+								),
+								signature: symbol.detail || symbol.name,
+								isExported: symbol.containerName?.includes('export') || false,
+								kind: isAsync ? 'async' : funcKind
+							};
+
+							functions.push(funcDef);
+						}
+					}
+				} catch (error) {
+					if (!isCancellationError(error)) {
+						this.logService.debug('[GraphPickers] Error getting symbols from provider', error);
+					}
+				}
+			}
+		} catch (error) {
+			if (!isCancellationError(error)) {
+				this.logService.error('[GraphPickers] Error getting function definitions', error);
+			}
+		} finally {
+			cancellationToken.dispose();
+		}
+
+		return functions;
 	}
 }
 

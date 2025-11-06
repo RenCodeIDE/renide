@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '../../../../../../base/common/uri.js';
+import { Range } from '../../../../../../editor/common/core/range.js';
 
 export type GraphNodeKind = 'root' | 'relative' | 'external';
 
@@ -111,7 +112,7 @@ export interface ImportDescriptor {
 	isSideEffectOnly: boolean;
 }
 
-export type GraphMode = 'file' | 'folder' | 'workspace' | 'architecture' | 'gitHeatmap';
+export type GraphMode = 'file' | 'folder' | 'workspace' | 'architecture' | 'gitHeatmap' | 'dataFlow';
 
 export type GraphStatusLevel = 'info' | 'warning' | 'error' | 'loading' | 'success';
 
@@ -123,5 +124,29 @@ export interface GraphScopeOptions {
 export interface GraphBuildContext {
 	initialFiles: URI[];
 	options: GraphScopeOptions;
+}
+
+export interface FunctionDefinition {
+	id: string; // Unique identifier: `${fileUri}:${functionName}:${line}:${column}`
+	name: string;
+	fileUri: URI;
+	range: Range;
+	signature?: string;
+	isExported: boolean;
+	kind: 'function' | 'method' | 'constructor' | 'arrow' | 'async';
+}
+
+export interface FunctionCall {
+	caller: FunctionDefinition;
+	callee: FunctionDefinition;
+	callSite: Range; // Location where the call is made
+	callType: 'direct' | 'indirect'; // direct = explicit call, indirect = callback/promise
+}
+
+export interface DataFlowGraphOptions {
+	maxDepth?: number; // Maximum depth to traverse (default: 10)
+	includeUpstream: boolean; // Include callers (default: true)
+	includeDownstream: boolean; // Include callees (default: true)
+	includeExternal: boolean; // Include external/imported functions (default: false)
 }
 
