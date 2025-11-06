@@ -36,6 +36,7 @@ import { ISecretStorageService } from '../../../../../platform/secrets/common/se
 import { CHATGPT_MODELS } from './models.js';
 import { ChatGPTAgentImplementation } from './agent.js';
 import { reduceMessageParts } from './utils.js';
+import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 
 class ChatGPTAgentContribution
 	extends Disposable
@@ -52,6 +53,7 @@ class ChatGPTAgentContribution
 		@ILanguageModelToolsService
 		languageModelToolsService: ILanguageModelToolsService,
 		@ISecretStorageService private readonly secretStorageService: ISecretStorageService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
 	) {
 		super();
 
@@ -125,6 +127,7 @@ class ChatGPTAgentContribution
 			textModelService,
 			languageModelToolsService,
 			languageModelsService,
+			this.configurationService,
 		);
 		this._register(this.chatAgentService.registerAgentImplementation(agentId, implementation));
 

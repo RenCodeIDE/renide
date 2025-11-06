@@ -49,6 +49,7 @@ import { validateIDEFormat } from "./validation.js";
 import { sendChatGPTRequest } from "./request.js";
 import { extractTextFromParts } from "./utils.js";
 import { ContextBuilder } from "./context.js";
+import { IConfigurationService } from "../../../../../platform/configuration/common/configuration.js";
 
 export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 	private readonly requestTools = new Map<string, UserSelectedTools>();
@@ -65,7 +66,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		private readonly logService: ILogService,
 		textModelService: any,
 		private readonly languageModelToolsService: ILanguageModelToolsService,
-		private readonly languageModelsService: ILanguageModelsService
+		private readonly languageModelsService: ILanguageModelsService,
+		private readonly configurationService: IConfigurationService
 	) {
 		this.contextBuilder = new ContextBuilder(textModelService, logService);
 	}
@@ -179,7 +181,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 
 		const maxIterations = 10;
 		let iteration = 0;
-		let toolResults: ServerToolResult[] | undefined = undefined;
+		let pendingToolResults: ServerToolResult[] | undefined = undefined;
+		const conversationToolResults = new Map<string, ServerToolResult>();
 
 		try {
 			while (iteration < maxIterations) {
@@ -187,9 +190,65 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					return { details: "cancelled" };
 				}
 
+				if (pendingToolResults && pendingToolResults.length > 0) {
+					for (const result of pendingToolResults) {
+						conversationToolResults.set(result.toolCallId, result);
+					}
+					const addedIds = pendingToolResults
+						.map((result) => result.toolCallId)
+						.join(", ");
+					this.logService.info(
+						`[chatgpt-server] Added ${pendingToolResults.length} tool result(s) to conversation history: ${addedIds}`
+					);
+					pendingToolResults = undefined;
+				}
+
 				this.logService.info(
 					`[chatgpt-server] invoke iteration ${iteration + 1}/${maxIterations}`
 				);
+
+				// Keep a handle on tool results used for this request. Do NOT materialize tool
+				// results into the messages array here, because our IDE -> server converter drops
+				// tool-role messages. Instead, pass toolResults to the server so it appends
+				// proper tool messages after the assistant tool_calls (OpenAI-required order).
+				const toolResultsForServer: ServerToolResult[] | undefined =
+					conversationToolResults.size > 0
+						? Array.from(conversationToolResults.values())
+						: undefined;
+
+				if (toolResultsForServer && toolResultsForServer.length > 0) {
+					const pendingIds = toolResultsForServer
+						.map((tr) => tr.toolCallId)
+						.join(", ");
+					this.logService.info(
+						`[chatgpt-server] Forwarding ${toolResultsForServer.length} tool result(s) to server: ${pendingIds}`
+					);
+				} else {
+					this.logService.info(
+						`[chatgpt-server] No pending tool results to forward for this iteration`
+					);
+				}
+
+				const lastAssistantWithTools = [...messages]
+					.reverse()
+					.find(
+						(message) =>
+							message.role === "assistant" &&
+							Array.isArray((message as OpenAIMessage).tool_calls) &&
+							(message as OpenAIMessage).tool_calls!.length > 0
+					);
+				if (lastAssistantWithTools && lastAssistantWithTools.tool_calls) {
+					const lastIds = lastAssistantWithTools.tool_calls
+						.map((tc) => tc.id)
+						.join(", ");
+					this.logService.info(
+						`[chatgpt-server] Last assistant message before request contains tool_calls: ${lastIds}`
+					);
+				} else {
+					this.logService.warn(
+						`[chatgpt-server] No assistant message with tool_calls found before request`
+					);
+				}
 
 				const streamingResponse = await this.performRequest(
 					messages,
@@ -197,7 +256,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					token,
 					modelToUse,
 					contextString,
-					toolResults
+					toolResultsForServer
 				);
 				let streamedText = false;
 
@@ -264,6 +323,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				const responseData = await streamingResponse.result;
 				const responseParts = responseData.parts;
 
+				// (No-op here now; tool results are materialized before the request.)
+
 				this.logService.info(
 					`[chatgpt-server] Response received: ${responseParts.length} parts total`
 				);
@@ -329,44 +390,66 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						} tool call(s): ${toolCallIds.join(", ")}`
 					);
 
-					// Execute tools sequentially to ensure callId is preserved
-					for (const callPart of toolCallParts) {
+					// Bounded-parallel execution of tool calls with per-call timeout
+					const maxConcurrency =
+						this.configurationService.getValue<number>(
+							"chat.toolCalls.maxConcurrency"
+						) ?? 3;
+					const timeoutMs =
+						this.configurationService.getValue<number>(
+							"chat.toolCalls.timeoutMs"
+						) ?? 30000;
+
+					interface ToolTask {
+						index: number;
+						callId: string;
+						toolName: string;
+						toolId?: string;
+						parameters: Record<string, unknown>;
+					}
+
+					const tasks: ToolTask[] = toolCallParts.map((part, index) => ({
+						index,
+						callId: part.toolCall!.id,
+						toolName: part.toolCall!.name,
+						toolId: nameToToolId.get(part.toolCall!.name),
+						parameters: part.toolCall!.args ?? {},
+					}));
+
+					const resultsBuffer: (ServerToolResult | undefined)[] = new Array(
+						tasks.length
+					);
+
+					const runTask = async (task: ToolTask): Promise<void> => {
 						if (token.isCancellationRequested) {
-							this.logService.warn(
-								`[chatgpt-server] Tool execution cancelled. Collected ${toolResultsForNextRequest.length} results, expected ${toolCallParts.length}`
-							);
-							return { details: "cancelled" };
+							return;
 						}
 
-						// Capture callId at the start of each iteration to ensure it's preserved
-						const toolName = callPart.toolCall!.name;
-						const callId = callPart.toolCall!.id;
+						const { callId, toolName, toolId, parameters, index } = task;
 
-						// Verify callId is not empty or undefined
 						if (!callId || callId.trim().length === 0) {
 							this.logService.error(
-								`[chatgpt-server] CRITICAL: Tool call has empty or missing callId for tool ${toolName}. Tool call part: ${JSON.stringify(
-									callPart
-								)}`
+								`[chatgpt-server] CRITICAL: Tool call has empty or missing callId for tool ${toolName}.`
 							);
-							throw new Error(
-								`Tool call missing callId for tool ${toolName}. Cannot execute tool without valid callId.`
-							);
+							resultsBuffer[index] = {
+								toolCallId: callId || `invalid_call_id_${index}`,
+								content: [
+									{
+										type: "text",
+										value: `Invalid callId for tool ${toolName}`,
+									},
+								],
+							};
+							return;
 						}
 
-						this.logService.debug(
-							`[chatgpt-server] Executing tool: ${toolName} (callId: ${callId})`
-						);
-
-						const toolId = nameToToolId.get(toolName);
 						if (!toolId) {
 							this.logService.error(
 								`[chatgpt-server] model requested unknown tool name '${toolName}'. Available names: ${Array.from(
 									nameToToolId.keys()
 								).join(", ")}`
 							);
-							// Use the captured callId
-							toolResultsForNextRequest.push({
+							resultsBuffer[index] = {
 								toolCallId: callId,
 								content: [
 									{
@@ -378,16 +461,10 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 										),
 									},
 								],
-							});
-							this.logService.debug(
-								`[chatgpt-server] Added error result for unknown tool (callId: ${callId})`
-							);
-							continue;
+							};
+							return;
 						}
 
-						const parameters = callPart.toolCall!.args ?? {};
-
-						// Verify invocation has the correct callId before executing
 						const invocation = this.createToolInvocation(
 							callId,
 							toolId,
@@ -395,63 +472,66 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 							request
 						);
 
-						// Double-check invocation has correct callId
 						if (invocation.callId !== callId) {
 							this.logService.error(
 								`[chatgpt-server] CRITICAL: callId mismatch! Expected ${callId}, but invocation has ${invocation.callId}`
 							);
-							throw new Error(
-								`callId mismatch in tool invocation: expected ${callId}, got ${invocation.callId}`
-							);
+							resultsBuffer[index] = {
+								toolCallId: callId,
+								content: [
+									{ type: "text", value: `callId mismatch for ${toolName}` },
+								],
+							};
+							return;
 						}
 
+						this.logService.debug(
+							`[chatgpt-server] Executing tool: ${toolName} (callId: ${callId})`
+						);
+
+						const runWithTimeout = async (): Promise<ServerToolResult> => {
+							const timer = new Promise<never>((_, reject) => {
+								const id = setTimeout(() => {
+									clearTimeout(id);
+									reject(new Error(`Tool timed out after ${timeoutMs}ms`));
+								}, timeoutMs);
+							});
+
+							const exec = this.languageModelToolsService
+								.invokeTool(invocation, this.fallbackCountTokens, token)
+								.then((result) => {
+									if (!result) {
+										throw new Error("Tool execution returned undefined result");
+									}
+									const textOutput = (result.content ?? [])
+										.filter(
+											(part): part is IToolResultTextPart =>
+												part.kind === "text"
+										)
+										.map((part) => part.value ?? "")
+										.filter((value) => value.length > 0)
+										.join("\n");
+
+									const finalOutput =
+										textOutput.trim().length > 0
+											? textOutput
+											: result.toolResultError
+											? `Error: ${result.toolResultError}`
+											: "Tool executed successfully but returned no output.";
+
+									return {
+										toolCallId: callId,
+										content: [{ type: "text" as const, value: finalOutput }],
+									};
+								});
+
+							return Promise.race([exec, timer]);
+						};
+
 						try {
-							const result = await this.languageModelToolsService.invokeTool(
-								invocation,
-								this.fallbackCountTokens,
-								token
-							);
-
-							// Verify result was received
-							if (!result) {
-								throw new Error("Tool execution returned undefined result");
-							}
-
-							const textOutput = (result.content ?? [])
-								.filter(
-									(part): part is IToolResultTextPart => part.kind === "text"
-								)
-								.map((part) => part.value ?? "")
-								.filter((value) => value.length > 0)
-								.join("\n");
-
-							// Ensure we always have a non-empty response
-							const finalOutput =
-								textOutput.trim().length > 0
-									? textOutput
-									: result.toolResultError
-									? `Error: ${result.toolResultError}`
-									: "Tool executed successfully but returned no output.";
-
-							// Use the captured callId from the start of iteration
-							const toolResult: ServerToolResult = {
-								toolCallId: callId,
-								content: [{ type: "text", value: finalOutput }],
-							};
-
-							// Verify the toolResult has the correct callId before pushing
-							if (toolResult.toolCallId !== callId) {
-								this.logService.error(
-									`[chatgpt-server] CRITICAL: toolResult callId mismatch! Expected ${callId}, but toolResult has ${toolResult.toolCallId}`
-								);
-								throw new Error(
-									`callId mismatch in tool result: expected ${callId}, got ${toolResult.toolCallId}`
-								);
-							}
-
-							toolResultsForNextRequest.push(toolResult);
+							resultsBuffer[index] = await runWithTimeout();
 							this.logService.debug(
-								`[chatgpt-server] Successfully executed tool ${toolName} (callId: ${callId}), result length: ${finalOutput.length}`
+								`[chatgpt-server] Finished tool ${toolName} (callId: ${callId})`
 							);
 						} catch (error) {
 							const message =
@@ -459,35 +539,37 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 							this.logService.error(
 								`[chatgpt-server] tool ${toolId} (callId: ${callId}) failed: ${message}`
 							);
-
-							// Use the captured callId from the start of iteration
-							const errorResult: ServerToolResult = {
+							resultsBuffer[index] = {
 								toolCallId: callId,
 								content: [
 									{
-										type: "text",
-										value:
-											message || "Tool execution failed with unknown error.",
+										type: "text" as const,
+										value: message || "Tool execution failed",
 									},
 								],
 							};
+						}
+					};
 
-							// Verify the errorResult has the correct callId before pushing
-							if (errorResult.toolCallId !== callId) {
-								this.logService.error(
-									`[chatgpt-server] CRITICAL: errorResult callId mismatch! Expected ${callId}, but errorResult has ${errorResult.toolCallId}. Recreating with correct callId.`
-								);
-								// Recreate with correct callId (can't assign to read-only property)
-								toolResultsForNextRequest.push({
-									toolCallId: callId,
-									content: errorResult.content,
-								});
-							} else {
-								toolResultsForNextRequest.push(errorResult);
-							}
-							this.logService.debug(
-								`[chatgpt-server] Added error result for failed tool (callId: ${callId})`
-							);
+					let next = 0;
+					const workers: Promise<void>[] = [];
+					const startWorker = (): Promise<void> => {
+						if (next >= tasks.length) {
+							return Promise.resolve();
+						}
+						const task = tasks[next++];
+						return runTask(task).then(() => startWorker());
+					};
+					for (let i = 0; i < Math.min(maxConcurrency, tasks.length); i++) {
+						workers.push(startWorker());
+					}
+					await Promise.all(workers);
+
+					// Collect results in input order, ensuring a message per callId
+					for (let i = 0; i < resultsBuffer.length; i++) {
+						const r = resultsBuffer[i];
+						if (r) {
+							toolResultsForNextRequest.push(r);
 						}
 					}
 
@@ -500,10 +582,12 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						);
 					}
 
-					toolResults = toolResultsForNextRequest;
-					const resultCallIds = toolResults.map((tr) => tr.toolCallId);
+					pendingToolResults = toolResultsForNextRequest;
+					const resultCallIds = toolResultsForNextRequest.map(
+						(tr) => tr.toolCallId
+					);
 					this.logService.info(
-						`[chatgpt-server] Collected ${toolResults.length} tool results for next request. ` +
+						`[chatgpt-server] Collected ${toolResultsForNextRequest.length} tool results for next request. ` +
 							`Expected: ${toolCallIds.join(", ")}, ` +
 							`Got: ${resultCallIds.join(", ")}`
 					);
@@ -540,7 +624,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						"ChatGPT did not return any text."
 					);
 
-				toolResults = undefined;
+				pendingToolResults = undefined;
 
 				await this.contextBuilder.tryAutoApplyEdits(
 					responseText,

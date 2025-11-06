@@ -4,7 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { localize } from "../../../../../../nls.js";
-import { Disposable, IDisposable } from "../../../../../../base/common/lifecycle.js";
+import {
+	Disposable,
+	IDisposable,
+} from "../../../../../../base/common/lifecycle.js";
 import {
 	ViewPane,
 	IViewPaneOptions,
@@ -34,7 +37,7 @@ export class DocsViewPane extends ViewPane {
 	private chunksListContainer: HTMLElement | undefined;
 	private previewContainer: HTMLElement | undefined;
 	private selectedChunkId: string | undefined;
-    private renderedMarkdownDisposable: IDisposable | undefined;
+	private renderedMarkdownDisposable: IDisposable | undefined;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -271,13 +274,13 @@ export class DocsViewPane extends ViewPane {
 		}
 
 		console.log("[DocsViewPane] Rendering preview for chunk:", chunkId);
-		
+
 		// Dispose previous markdown render
 		if (this.renderedMarkdownDisposable) {
 			this.renderedMarkdownDisposable.dispose();
 			this.renderedMarkdownDisposable = undefined;
 		}
-		
+
 		this.previewContainer.textContent = "";
 
 		const doc = this.docsService.getChunkDocs(chunkId);
@@ -298,33 +301,58 @@ export class DocsViewPane extends ViewPane {
 			doc.content.length,
 			"chars"
 		);
-		
+
 		// Render markdown content using markdown renderer service
 		const markdown = new MarkdownString(doc.content, { isTrusted: true });
-        const renderedMarkdown = this.markdownRendererService.render(
-			markdown,
-			{
-                sanitizerConfig: {
-                    allowedTags: {
-                        override: [
-                            "p", "h1", "h2", "h3", "h4", "h5", "h6",
-                            "ul", "ol", "li",
-                            "code", "pre", "blockquote",
-                            "strong", "em", "a", "img",
-                            "table", "thead", "tbody", "tr", "th", "td"
-                        ]
-                    },
-                    allowedAttributes: {
-                        // Attribute allow-list across all tags
-                        override: ["href", "title", "src", "alt", "class", "id", "name", "role", "tabindex"]
-                    }
-                },
-			}
-		);
-		
+		const renderedMarkdown = this.markdownRendererService.render(markdown, {
+			sanitizerConfig: {
+				allowedTags: {
+					override: [
+						"p",
+						"h1",
+						"h2",
+						"h3",
+						"h4",
+						"h5",
+						"h6",
+						"ul",
+						"ol",
+						"li",
+						"code",
+						"pre",
+						"blockquote",
+						"strong",
+						"em",
+						"a",
+						"img",
+						"table",
+						"thead",
+						"tbody",
+						"tr",
+						"th",
+						"td",
+					],
+				},
+				allowedAttributes: {
+					// Attribute allow-list across all tags
+					override: [
+						"href",
+						"title",
+						"src",
+						"alt",
+						"class",
+						"id",
+						"name",
+						"role",
+						"tabindex",
+					],
+				},
+			},
+		});
+
 		// Store disposable for cleanup
 		this.renderedMarkdownDisposable = renderedMarkdown;
-		
+
 		// Add styling class and append to container
 		renderedMarkdown.element.classList.add("ren-docs-view__preview-content");
 		this.previewContainer.appendChild(renderedMarkdown.element);
@@ -348,6 +376,24 @@ export class DocsViewPane extends ViewPane {
 			"No file selected or no chunks available. Open a file to see its documentation chunks."
 		);
 		this.previewContainer.appendChild(empty);
+	}
+
+	// Public API for commands: reveal a symbol within a chunk
+	public revealSymbol(chunkId?: string, symbolName?: string): void {
+		if (chunkId) {
+			this.selectedChunkId = chunkId;
+			this.renderChunkPreview(chunkId);
+			this.updateChunksListSelection();
+		}
+		if (symbolName && this.previewContainer) {
+			// Try to scroll to a matching link or heading containing the symbol name
+			const el = this.previewContainer.querySelector(
+				`a, h1, h2, h3, h4, h5, h6`
+			);
+			if (el) {
+				(el as HTMLElement).scrollIntoView({ block: "nearest" });
+			}
+		}
 	}
 
 	protected override layoutBody(height: number, width: number): void {

@@ -31,6 +31,7 @@ import { localize, localize2 } from "../../../../nls.js";
 import { registerIcon } from "../../../../platform/theme/common/iconRegistry.js";
 import { Codicon } from "../../../../base/common/codicons.js";
 import { SyncDescriptor } from "../../../../platform/instantiation/common/descriptors.js";
+import { URI } from "../../../../base/common/uri.js";
 import { ViewPaneContainer } from "../../../browser/parts/views/viewPaneContainer.js";
 import {
 	ViewContainerLocation,
@@ -42,6 +43,10 @@ import {
 import { MonitorXChangelogViewPane } from "./views/monitorXChangelogViewPane.js";
 import { DocsViewPane } from "./views/docsView/docsViewPane.js";
 import { CommandsRegistry } from "../../../../platform/commands/common/commands.js";
+import { IQuickInputService } from "../../../../platform/quickinput/common/quickInput.js";
+import { IViewsService } from "../../../services/views/common/viewsService.js";
+import { IConfigurationRegistry, Extensions as ConfigurationExtensions } from "../../../../platform/configuration/common/configurationRegistry.js";
+import { Registry as PlatformRegistry } from "../../../../platform/registry/common/platform.js";
 import {
 	IRenWorkspaceStore,
 	IMonitorXChangelogEntryInput,
@@ -431,6 +436,7 @@ Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(
 const DOCS_INITIALIZE_COMMAND = "ren.docs.initialize";
 const DOCS_REGENERATE_FILE_COMMAND = "ren.docs.regenerateFile";
 const DOCS_REGENERATE_CHUNK_COMMAND = "ren.docs.regenerateChunk";
+const REN_SYMBOL_OPEN_COMMAND = "ren.symbol.open";
 
 if (!CommandsRegistry.getCommand(DOCS_INITIALIZE_COMMAND)) {
 	CommandsRegistry.registerCommand({
@@ -494,6 +500,82 @@ if (!CommandsRegistry.getCommand(DOCS_REGENERATE_CHUNK_COMMAND)) {
 			const result = await docsService.regenerateChunk(chunkId);
 			if (!result) {
 				throw new Error("Failed to regenerate chunk. Chunk may not exist.");
+			}
+		},
+	});
+}
+
+// --- Configuration: clickable symbols flag ---
+const configurationRegistry = PlatformRegistry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration);
+configurationRegistry.registerConfiguration({
+	id: "renDocs",
+    title: localize("renDocsConfigurationTitle", "Ren Docs"),
+	type: "object",
+	properties: {
+		"ren.docs.clickableSymbols.enabled": {
+			type: "boolean",
+            markdownDescription: localize(
+				"renDocs.clickableSymbols.enabled",
+				"Controls whether symbol mentions in Docs are clickable to open source or docs."
+			),
+			default: true,
+		},
+	},
+});
+
+// --- Symbol command: open source / docs ---
+if (!CommandsRegistry.getCommand(REN_SYMBOL_OPEN_COMMAND)) {
+	CommandsRegistry.registerCommand({
+		id: REN_SYMBOL_OPEN_COMMAND,
+		handler: async (accessor, args?: {
+			uri: { scheme: string; path: string; fsPath?: string; fragment?: string } | string;
+			position?: { lineNumber: number; column: number };
+			symbolName?: string;
+			chunkId?: string;
+		}) => {
+            const editorService = accessor.get(IEditorService);
+            const quickInput = accessor.get(IQuickInputService) as import("../../../../platform/quickinput/common/quickInput.js").IQuickInputService;
+            const viewsService = accessor.get(IViewsService);
+
+			if (!args || !args.uri) {
+				throw new Error("ren.symbol.open requires args with a uri");
+			}
+
+			const uriObj = typeof args.uri === "string" ? URI.parse(args.uri) : URI.from(args.uri as any);
+
+			const picks = [
+				{ label: localize("renDocs.openSource", "Open Source"), id: "openSource" },
+				{ label: localize("renDocs.openDocs", "Open Docs"), id: "openDocs" },
+			] as const;
+
+			const pick = await new Promise<{ id: string } | undefined>((resolve) => {
+				const qp = quickInput.createQuickPick();
+				qp.items = picks;
+				qp.onDidAccept(() => {
+					const sel = qp.selectedItems[0];
+					qp.hide();
+					resolve(sel as any);
+				});
+				qp.onDidHide(() => resolve(undefined));
+				qp.title = localize("renDocs.symbolActions", "Symbol Actions");
+				qp.show();
+			});
+
+			const action = pick?.id || "openSource";
+			if (action === "openSource") {
+				await editorService.openEditor({
+					resource: uriObj,
+					options: args.position
+						? { selection: { startLineNumber: args.position.lineNumber, startColumn: args.position.column } }
+						: undefined,
+				});
+				return;
+			}
+
+			// Open Docs view and attempt to reveal
+			const view = await viewsService.openView<DocsViewPane>(DOCS_VIEW_ID, true);
+			if (view && typeof (view as any).revealSymbol === "function") {
+				(view as any).revealSymbol(args.chunkId, args.symbolName);
 			}
 		},
 	});

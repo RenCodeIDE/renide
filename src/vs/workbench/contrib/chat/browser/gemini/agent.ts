@@ -46,6 +46,7 @@ import { sendChatGPTRequest } from '../chatgpt/request.js';
 import { extractTextFromParts, extractResponseContent } from './utils.js';
 import { ContextBuilder } from './context.js';
 import type { GeminiContentPart, IContextBlockMetadata } from './types.js';
+import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 
 export class GeminiAgentImplementation implements IChatAgentImplementation {
 	private readonly requestTools = new Map<string, UserSelectedTools>();
@@ -64,6 +65,7 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 		private readonly languageModelToolsService: ILanguageModelToolsService,
 		private readonly languageModelsService: ILanguageModelsService,
 		private readonly chatAgentService: IChatAgentService,
+		private readonly configurationService: IConfigurationService,
 	) {
 		this.contextBuilder = new ContextBuilder(textModelService, logService);
 	}
@@ -149,7 +151,8 @@ Only call a tool if it is necessary; otherwise respond normally.`
 		}
 		const maxIterations = 10;
 		let iteration = 0;
-		let toolResults: ServerToolResult[] | undefined = undefined;
+		let pendingToolResults: ServerToolResult[] | undefined = undefined;
+		const conversationToolResults = new Map<string, ServerToolResult>();
 
 		try {
 			while (iteration < maxIterations) {
@@ -157,7 +160,36 @@ Only call a tool if it is necessary; otherwise respond normally.`
 					return { details: 'cancelled' };
 				}
 
-				const streamingResponse = await this.performRequest(messages, toolConfigs, token, modelToUse, toolResults);
+				if (pendingToolResults && pendingToolResults.length > 0) {
+					for (const result of pendingToolResults) {
+						conversationToolResults.set(result.toolCallId, result);
+					}
+					const ids = pendingToolResults.map(result => result.toolCallId).join(', ');
+					this.logService.info(`[gemini-server] Added ${pendingToolResults.length} tool result(s) to conversation history: ${ids}`);
+					pendingToolResults = undefined;
+				}
+
+				if (conversationToolResults.size > 0) {
+					const ids = Array.from(conversationToolResults.values()).map(result => result.toolCallId).join(', ');
+					this.logService.info(`[gemini-server] Forwarding ${conversationToolResults.size} total tool result(s) to server: ${ids}`);
+				} else {
+					this.logService.info('[gemini-server] No pending tool results to forward for this iteration');
+				}
+				const lastAssistantWithTools = [...messages]
+					.reverse()
+					.find(message => message.role === ChatMessageRole.Assistant && message.content.some(part => part.type === 'tool_use'));
+				if (lastAssistantWithTools) {
+					const ids = lastAssistantWithTools.content
+						.filter(part => part.type === 'tool_use')
+						.map(part => part.toolCallId)
+						.join(', ');
+					this.logService.info(`[gemini-server] Last assistant message before request contains tool_use parts: ${ids}`);
+				} else {
+					this.logService.warn('[gemini-server] No assistant message with tool_use parts found before request');
+				}
+
+				const toolResultsForServer = conversationToolResults.size > 0 ? Array.from(conversationToolResults.values()) : undefined;
+				const streamingResponse = await this.performRequest(messages, toolConfigs, token, modelToUse, toolResultsForServer);
 				let streamedText = false;
 
 				try {
@@ -195,6 +227,9 @@ Only call a tool if it is necessary; otherwise respond normally.`
 
 				const responseData = await streamingResponse.result;
 				const responseParts = responseData.parts;
+
+				// Note: For Gemini path we do not mutate prior tool results into messages here;
+				// the server-side transformer handles tool result placement for the current request only.
 
 				// Add assistant message with both text and tool_use parts if present
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -265,53 +300,78 @@ Only call a tool if it is necessary; otherwise respond normally.`
 
 				const toolResultsForNextRequest: ServerToolResult[] = [];
 
-				for (const callPart of toolCallParts) {
-					if (token.isCancellationRequested) {
-						return { details: 'cancelled' };
+				// Bounded-parallel execution with per-call timeout
+				const maxConcurrency = this.configurationService.getValue<number>('chat.toolCalls.maxConcurrency') ?? 3;
+				const timeoutMs = this.configurationService.getValue<number>('chat.toolCalls.timeoutMs') ?? 30000;
+
+				interface ToolTask { index: number; callId: string; toolName: string; toolId?: string; parameters: Record<string, unknown>; }
+				const tasks: ToolTask[] = toolCallParts.map((part: any, index: number) => ({
+					index,
+					callId: part.toolCall!.id,
+					toolName: part.toolCall!.name,
+					toolId: nameToToolId.get(part.toolCall!.name),
+					parameters: part.toolCall!.args ?? {},
+				}));
+
+				const resultsBuffer: (ServerToolResult | undefined)[] = new Array(tasks.length);
+
+				const runTask = async (task: ToolTask): Promise<void> => {
+					if (token.isCancellationRequested) { return; }
+					const { callId, toolName, toolId, parameters, index } = task;
+
+					if (!callId || callId.trim().length === 0) {
+						resultsBuffer[index] = { toolCallId: callId || `invalid_call_id_${index}`, content: [{ type: 'text', value: `Invalid callId for tool ${toolName}` }] };
+						return;
 					}
 
-					const toolName = callPart.toolCall!.name;
-					const toolId = nameToToolId.get(toolName);
 					if (!toolId) {
-						this.logService.error(
-							`[gemini-server] model requested unknown tool name '${toolName}'. Available names: ${Array.from(nameToToolId.keys()).join(', ')}`,
-						);
-						toolResultsForNextRequest.push({
-							toolCallId: callPart.toolCall!.id,
-							content: [{
-								type: 'text',
-								value: localize('gemini.unknownToolCall', 'Gemini requested unknown tool {0}.', toolName),
-							}],
-						});
-						continue;
+						this.logService.error(`[gemini-server] model requested unknown tool name '${toolName}'. Available names: ${Array.from(nameToToolId.keys()).join(', ')}`);
+						resultsBuffer[index] = { toolCallId: callId, content: [{ type: 'text', value: localize('gemini.unknownToolCall', 'Gemini requested unknown tool {0}.', toolName) }] };
+						return;
 					}
 
-					const parameters = callPart.toolCall!.args ?? {};
-					const callId = callPart.toolCall!.id;
 					const invocation = this.createToolInvocation(callId, toolId, parameters, request);
 
-					try {
-						const result = await this.languageModelToolsService.invokeTool(
-							invocation,
-							this.fallbackCountTokens,
-							token,
-						);
-						const textOutput = (result.content ?? [])
-							.filter((part): part is IToolResultTextPart => part.kind === 'text')
-							.map(part => part.value)
-							.join('\n');
-						toolResultsForNextRequest.push({
-							toolCallId: callId,
-							content: [{ type: 'text', value: textOutput }],
+					const runWithTimeout = async (): Promise<ServerToolResult> => {
+						const timer = new Promise<never>((_, reject) => {
+							const id = setTimeout(() => { clearTimeout(id); reject(new Error(`Tool timed out after ${timeoutMs}ms`)); }, timeoutMs);
 						});
+
+						const exec = this.languageModelToolsService.invokeTool(invocation, this.fallbackCountTokens, token)
+							.then(result => {
+								const textOutput = (result.content ?? [])
+									.filter((part): part is IToolResultTextPart => part.kind === 'text')
+									.map(part => part.value)
+									.filter(v => v && v.length > 0)
+									.join('\n');
+								const finalOutput = textOutput.trim().length > 0 ? textOutput : (result as any).toolResultError ? `Error: ${(result as any).toolResultError}` : 'Tool executed successfully but returned no output.';
+                                return { toolCallId: callId, content: [{ type: 'text' as const, value: finalOutput }] };
+							});
+
+						return Promise.race([exec, timer]);
+					};
+
+					try {
+						resultsBuffer[index] = await runWithTimeout();
 					} catch (error) {
 						const message = error instanceof Error ? error.message : String(error);
 						this.logService.error(`[gemini-server] tool ${toolId} failed: ${message}`);
-						toolResultsForNextRequest.push({
-							toolCallId: callId,
-							content: [{ type: 'text', value: message }],
-						});
+                        resultsBuffer[index] = { toolCallId: callId, content: [{ type: 'text' as const, value: message || 'Tool execution failed' }] };
 					}
+				};
+
+				let next = 0; const workers: Promise<void>[] = [];
+                const startWorker = (): Promise<void> => {
+                    if (next >= tasks.length) { return Promise.resolve(); }
+					const task = tasks[next++];
+					return runTask(task).then(() => startWorker());
+				};
+				for (let i = 0; i < Math.min(maxConcurrency, tasks.length); i++) { workers.push(startWorker()); }
+				await Promise.all(workers);
+
+				for (let i = 0; i < resultsBuffer.length; i++) {
+					const r = resultsBuffer[i];
+					if (r) { toolResultsForNextRequest.push(r); }
 				}
 
 				if (toolResultsForNextRequest.length === 0) {
@@ -320,8 +380,8 @@ Only call a tool if it is necessary; otherwise respond normally.`
 					);
 				}
 
-				toolResults = toolResultsForNextRequest;
-				this.logService.info(`[gemini-server] Collected ${toolResults.length} tool results for next request`);
+				pendingToolResults = toolResultsForNextRequest;
+				this.logService.info(`[gemini-server] Collected ${toolResultsForNextRequest.length} tool results for next request`);
 				iteration++;
 			}
 

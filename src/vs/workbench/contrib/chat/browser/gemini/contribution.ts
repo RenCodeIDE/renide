@@ -35,6 +35,7 @@ import {
 } from '../../common/languageModelToolsService.js';
 import { IRequestService } from '../../../../../platform/request/common/request.js';
 import { ISecretStorageService } from '../../../../../platform/secrets/common/secrets.js';
+import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { GEMINI_MODELS } from './models.js';
 import { GeminiAgentImplementation } from './agent.js';
 import { reduceMessageParts } from './conversion.js';
@@ -57,6 +58,7 @@ class GeminiAgentContribution
 		@ITextModelService textModelService: ITextModelService,
 		@ILanguageModelToolsService languageModelToolsService: ILanguageModelToolsService,
 		@ISecretStorageService private readonly secretStorageService: ISecretStorageService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
 	) {
 		super();
 
@@ -108,6 +110,7 @@ class GeminiAgentContribution
 			languageModelToolsService,
 			languageModelsService,
 			this.chatAgentService,
+			this.configurationService,
 		);
 		this._register(this.chatAgentService.registerAgentImplementation(agentId, implementation));
 

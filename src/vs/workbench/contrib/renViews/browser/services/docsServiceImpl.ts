@@ -22,6 +22,7 @@ import { ISecretStorageService } from "../../../../../platform/secrets/common/se
 import { IProductService } from "../../../../../platform/product/common/productService.js";
 import { ILogService } from "../../../../../platform/log/common/log.js";
 import { env } from "../../../../../base/common/process.js";
+import { IConfigurationService } from "../../../../../platform/configuration/common/configuration.js";
 import { CancellationToken } from "../../../../../base/common/cancellation.js";
 import { streamToBuffer } from "../../../../../base/common/buffer.js";
 
@@ -53,6 +54,8 @@ export class DocsService extends Disposable implements IDocsService {
 	private latest: string | undefined;
 	private chunkDocsCache: Map<string, ChunkDocs> = new Map();
 
+	private readonly symbolToChunkIndex: Map<string, string> = new Map();
+
 	constructor(
 		@IStorageService private readonly storageService: IStorageService,
 		@IChunkIndexService private readonly chunkIndexService: IChunkIndexService,
@@ -61,7 +64,9 @@ export class DocsService extends Disposable implements IDocsService {
 		@ISecretStorageService
 		private readonly secretStorageService: ISecretStorageService,
 		@IProductService private readonly productService: IProductService,
-		@ILogService private readonly logService: ILogService
+		@ILogService private readonly logService: ILogService,
+		@IConfigurationService
+		private readonly configurationService: IConfigurationService
 	) {
 		super();
 		this.latest = this.storageService.get(
@@ -242,7 +247,7 @@ export class DocsService extends Disposable implements IDocsService {
 						8
 					)}... (model: ${result.model})`
 				);
-				return result.documentation;
+				return this.enhanceWithClickableSymbols(chunk, result.documentation);
 			}
 
 			this.logService.warn(
@@ -253,6 +258,86 @@ export class DocsService extends Disposable implements IDocsService {
 			this.logService.error(`[DocsService] Error generating docs:`, error);
 			return this.generatePlaceholderContent(chunk);
 		}
+	}
+
+	private buildSymbolKey(name: string, uri: URI, startLine?: number): string {
+		return `${name}|${uri.toString()}|${startLine ?? 0}`;
+	}
+
+	private buildSymbolCommandLink(args: {
+		uri: URI;
+		position?: { lineNumber: number; column: number };
+		symbolName?: string;
+		chunkId?: string;
+	}): string {
+		const payload = [
+			{
+				uri: args.uri.toJSON(),
+				position: args.position,
+				symbolName: args.symbolName,
+				chunkId: args.chunkId,
+			},
+		];
+		return `command:ren.symbol.open?${encodeURIComponent(
+			JSON.stringify(payload)
+		)}`;
+	}
+
+	private enhanceWithClickableSymbols(
+		chunk: import("./chunkIndexService.js").ChunkRecord,
+		markdown: string
+	): string {
+		const enabled =
+			this.configurationService.getValue<boolean>(
+				"ren.docs.clickableSymbols.enabled"
+			) !== false;
+		if (!enabled) {
+			return markdown;
+		}
+
+		const lines: string[] = [];
+		lines.push(markdown.trim());
+		lines.push("\n\n---\n");
+		lines.push(`### Symbols`);
+
+		const chunkId = getChunkId(chunk.uri, chunk.hash);
+
+		// Index symbols and list them with links
+		const addEntry = (
+			name: string,
+			uri: URI,
+			startLine?: number,
+			startColumn?: number
+		) => {
+			const key = this.buildSymbolKey(name, uri, startLine);
+			this.symbolToChunkIndex.set(key, chunkId);
+			const link = this.buildSymbolCommandLink({
+				uri,
+				position:
+					startLine && startColumn
+						? { lineNumber: startLine, column: startColumn }
+						: undefined,
+				symbolName: name,
+				chunkId,
+			});
+			lines.push(`- [${name}](${link})`);
+		};
+
+		// From symbols
+		for (const s of chunk.refs.symbols ?? []) {
+			addEntry(s.name, s.uri, s.range?.startLineNumber, s.range?.startColumn);
+		}
+		// From functions
+		for (const f of chunk.refs.functions ?? []) {
+			addEntry(
+				f.name,
+				chunk.uri,
+				f.range?.startLineNumber,
+				f.range?.startColumn
+			);
+		}
+
+		return lines.join("\n");
 	}
 
 	private detectLanguage(fileExtension: string): string {

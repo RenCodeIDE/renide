@@ -86,6 +86,12 @@ export async function sendChatGPTRequest(
 	}
 	if (options?.toolResults && options.toolResults.length > 0) {
 		payload["toolResults"] = options.toolResults;
+		const toolResultIds = options.toolResults
+			.map((tr) => tr.toolCallId)
+			.join(", ");
+		logService?.info(
+			`[chatgpt-server] Request payload includes ${options.toolResults.length} tool result(s): ${toolResultIds}`
+		);
 	}
 
 	const body = JSON.stringify(payload);

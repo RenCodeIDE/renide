@@ -21,11 +21,11 @@ asarUnpack:
 npmRebuild: false
 
 mac:
-  target: [zip]
+  target: [dmg]
   category: public.app-category.developer-tools
   icon: resources/darwin/code.icns # <-- full path to your .icns file
 
-artifactName: "${productName}-${version}-${os}-${arch}.zip"
+artifactName: "${productName}-${version}-${arch}.dmg"
 
 extraMetadata:
   main: "./out/main.js"

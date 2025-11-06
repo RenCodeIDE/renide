@@ -71,6 +71,15 @@ Docker / the Codespace should have at least **4 Cores and 6 GB of RAM (8 GB reco
 
 This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
 
+## Installing unsigned macOS builds
+
+If you download a `.dmg` built by CI (unsigned, not notarized), macOS may block opening the app with a message about an "unidentified developer". To open anyway:
+
+- Right-click `Ren.app` in Applications → Open → Open; or
+- System Settings → Privacy & Security → under Security, click "Open Anyway" for `Ren.app`.
+
+Unsigned builds are intended for trusted testing only.
+
 ## License
 
 Copyright (c) Microsoft Corporation. All rights reserved.

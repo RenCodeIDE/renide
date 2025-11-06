@@ -383,11 +383,16 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 			}
 
 			invocationTimeWatch = StopWatch.create(true);
-			toolResult = await tool.impl.invoke(dto, countTokens, {
+			const perCallTimeoutMs = this._configurationService.getValue<number>('chat.toolCalls.timeoutMs') ?? 30000;
+			const invokePromise = tool.impl.invoke(dto, countTokens, {
 				report: step => {
 					toolInvocation?.acceptProgress(step);
 				}
 			}, token);
+			const timeoutPromise = timeout(perCallTimeoutMs, token).then(() => {
+				throw new Error(`Tool timed out after ${perCallTimeoutMs}ms`);
+			});
+			toolResult = await Promise.race([invokePromise, timeoutPromise]);
 			invocationTimeWatch.stop();
 			this.ensureToolDetails(dto, toolResult, tool.data);
 

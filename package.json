@@ -11,6 +11,8 @@
   "private": true,
   "description": "Ren - The IDE that Codes, Logs & Explains",
   "scripts": {
+    "build:app": "npm run compile",
+    "dist:mac": "electron-builder --mac dmg",
     "pack:mac": "electron-builder --mac --publish=never",
     "test": "echo Please run any of the test scripts from the scripts folder.",
     "test-browser": "npx playwright install && node test/unit/browser/index.js",
