@@ -62,6 +62,27 @@ export function renderMonitorXChangelog(target: HTMLElement, entries: IMonitorXC
 		description.textContent = entry.description || '--';
 		item.appendChild(description);
 
+		// Optional: expandable full explanation when present in metadata
+		const meta = entry.metadata as Record<string, unknown> | undefined;
+		const fullExplanation = typeof meta?.['explanation'] === 'string' ? (meta!['explanation'] as string).trim() : '';
+		if (fullExplanation && fullExplanation.length > (entry.description?.length ?? 0)) {
+			const toggle = document.createElement('button');
+			toggle.type = 'button';
+			toggle.className = 'ren-monitorx-view-diff';
+			toggle.textContent = 'More details';
+			const details = document.createElement('p');
+			details.className = 'ren-monitorx-changelog-entry-description';
+			details.textContent = fullExplanation;
+			details.style.display = 'none';
+			toggle.addEventListener('click', () => {
+				const isHidden = details.style.display === 'none';
+				details.style.display = isHidden ? 'block' : 'none';
+				toggle.textContent = isHidden ? 'Hide details' : 'More details';
+			});
+			item.appendChild(toggle);
+			item.appendChild(details);
+		}
+
 		for (const file of entry.files) {
 			appendFileSection(item, file, options);
 		}

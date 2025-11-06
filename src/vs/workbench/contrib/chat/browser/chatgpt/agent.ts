@@ -172,10 +172,21 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					const desc = tool?.modelDescription || tool?.displayName || name;
 					return `- ${name}: ${desc}`;
 				})
-				.join("\n");
+				.join('\n');
+
+			// Enhanced guidance for edit tool usage
+			const editToolGuidance = nameToToolId.has('vscode_editFile') || Array.from(nameToToolId.values()).some(id => id === 'vscode_editFile_internal')
+				? `\n\nWhen using the edit tool (vscode_editFile), provide structured information for better accuracy:\n` +
+				`- Use 'editType' to specify: 'replace' (default), 'insert', 'delete', or 'modify'\n` +
+				`- Use 'anchorContext' with 'lineNumber', 'beforeText', or 'afterText' to precisely position edits\n` +
+				`- Provide 'contextFiles' array with related files (imports, dependencies) for better context\n` +
+				`- Always include a clear 'explanation' describing what and why you're changing\n` +
+				`- For streaming edits, ensure line numbers account for previous edits in the same stream`
+				: '';
+
 			messages.unshift({
-				role: "system",
-				content: `You can call the following tools when they would help:\n${toolSummaries}\nOnly call a tool if it is necessary; otherwise respond normally.`,
+				role: 'system',
+				content: `You can call the following tools when they would help:\n${toolSummaries}${editToolGuidance}\nOnly call a tool if it is necessary; otherwise respond normally.`,
 			});
 		}
 

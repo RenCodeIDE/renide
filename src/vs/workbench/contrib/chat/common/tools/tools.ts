@@ -23,6 +23,9 @@ export class BuiltinToolsContribution extends Disposable implements IWorkbenchCo
 	) {
 		super();
 
+		// Register EditTool FIRST - this ensures it appears early in tool lists
+		// and is more likely to be discovered by agents. EditTool is the PREFERRED
+		// method for file edits as it provides reliable changelog tracking.
 		const editTool = instantiationService.createInstance(EditTool);
 		this._register(toolsService.registerTool(EditToolData, editTool));
 

@@ -360,7 +360,7 @@ configurationRegistry.registerConfiguration({
 				nls.localize('chat.mcp.access.registry', "Allows access to MCP servers installed from the registry that VS Code is connected to."),
 				nls.localize('chat.mcp.access.any', "Allow access to any installed MCP server.")
 			],
-			default: McpAccessValue.All,
+			default: McpAccessValue.None,
 			policy: {
 				name: 'ChatMCP',
 				category: PolicyCategory.InteractiveSession,
@@ -453,7 +453,7 @@ configurationRegistry.registerConfiguration({
 		[ChatConfiguration.ExtensionToolsEnabled]: {
 			type: 'boolean',
 			description: nls.localize('chat.extensionToolsEnabled', "Enable using tools contributed by third-party extensions."),
-			default: true,
+			default: false,
 			policy: {
 				name: 'ChatAgentExtensionTools',
 				category: PolicyCategory.InteractiveSession,

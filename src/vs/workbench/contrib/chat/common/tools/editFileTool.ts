@@ -22,14 +22,39 @@ export const InternalEditToolId = 'vscode_editFile_internal';
 export const EditToolData: IToolData = {
 	id: InternalEditToolId,
 	displayName: '', // not used
-	modelDescription: '', // Not used
+	modelDescription: 'Preferred edit tool. Always include: subject (5–8 words) and description (2–4 lines, concise). Use explanation for full context. This enables high-quality changelog entries.',
 	source: ToolDataSource.Internal,
+	// Note: inputSchema is not defined here as this is an internal tool.
+	// The schema is provided by the language model/agent.
+	//
+	// IMPORTANT: This is the PREFERRED method for making file edits. Agents should:
+	// - Use EditTool for all file modifications (rather than streaming textEdit progress)
+	// - Always provide the 'explanation' parameter with a full description of the change
+	// - Optionally provide a 'subject' parameter with a short 5-6 word one-liner for the changelog subject
+	//   If subject is not provided, it will be extracted from the explanation
+	// - This ensures reliable changelog tracking with proper subject/description
+	//
+	// The agent MUST provide the 'explanation' parameter. The 'subject' parameter is optional but recommended.
 };
 
 export interface EditToolParams {
 	uri: UriComponents;
-	explanation: string;
+	explanation: string; // Required: Full description of the change
+	subject?: string; // Optional: Short subject (5–8 words)
+	description?: string; // Optional: Concise 2–4 line description; preferred for changelog
 	code: string;
+	// Enhanced parameters for better edit accuracy
+	contextFiles?: Array<{
+		uri: UriComponents;
+		content: string;
+		relevance?: 'high' | 'medium' | 'low';
+	}>; // Optional: Related files for context (imports, dependencies, etc.)
+	editType?: 'replace' | 'insert' | 'delete' | 'modify'; // Optional: Type of edit operation
+	anchorContext?: {
+		lineNumber?: number; // Optional: Target line number for the edit
+		beforeText?: string; // Optional: Text that should appear before the edit
+		afterText?: string; // Optional: Text that should appear after the edit
+	}; // Optional: Anchor context for precise edit placement
 }
 
 export class EditTool implements IToolImpl {
@@ -85,10 +110,29 @@ export class EditTool implements IToolImpl {
 			throw new Error('This tool must be called from within an editing session');
 		}
 
-		// Store the explanation for later retrieval when edits are accepted
+		// Store the explanation, subject, and description for later retrieval when edits are accepted
+		console.log('[MonitorX] EditTool.invoke: PREFERRED PATH - Using EditTool for edits', {
+			hasExplanation: !!parameters.explanation,
+			hasSubject: !!parameters.subject,
+			hasDescription: !!parameters.description,
+			explanationType: typeof parameters.explanation,
+			explanationLength: typeof parameters.explanation === 'string' ? parameters.explanation.length : 0,
+			explanationPreview: typeof parameters.explanation === 'string' ? parameters.explanation.substring(0, 100) : undefined,
+			subjectPreview: typeof parameters.subject === 'string' ? parameters.subject : undefined,
+			descriptionPreview: typeof parameters.description === 'string' ? parameters.description.substring(0, 120) : undefined,
+			uri: uri.toString(),
+			requestId: model.getRequests().at(-1)?.id,
+			allParams: Object.keys(parameters)
+		});
 		if (parameters.explanation) {
 			const request = model.getRequests().at(-1)!;
-			editSession.storeEditExplanation(request.id, uri, parameters.explanation);
+			editSession.storeEditExplanation(request.id, uri, parameters.explanation, parameters.subject, parameters.description);
+		} else {
+			console.warn('[MonitorX] EditTool.invoke: No explanation parameter provided', {
+				uri: uri.toString(),
+				parametersKeys: Object.keys(parameters),
+				parameters: parameters
+			});
 		}
 
 		const codeMapper = this.codeMapperService.providers[0];
@@ -112,8 +156,16 @@ export class EditTool implements IToolImpl {
 			}
 		} else {
 			// Use code mapper when available
+			// Note: contextFiles are available in parameters but not yet used by code mapper
+			// They can be used for future enhancements like cross-file awareness
 			const result = await this.codeMapperService.mapCode({
-				codeBlocks: [{ code: parameters.code, resource: uri, markdownBeforeBlock: parameters.explanation }],
+				codeBlocks: [{
+					code: parameters.code,
+					resource: uri,
+					markdownBeforeBlock: parameters.explanation,
+					editType: parameters.editType,
+					anchorContext: parameters.anchorContext,
+				}],
 				location: 'tool',
 				chatRequestId: invocation.chatRequestId,
 				chatRequestModel: invocation.modelId,

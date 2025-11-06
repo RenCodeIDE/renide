@@ -99,6 +99,16 @@ export class ChatEditingSession extends Disposable implements IChatEditingSessio
 	 */
 	private readonly _editExplanations = new Map<string, string>();
 
+	/**
+	 * Stores edit subjects from EditTool invocations, keyed by requestId:uri
+	 */
+	private readonly _editSubjects = new Map<string, string>();
+
+	/**
+	 * Stores edit descriptions from EditTool invocations, keyed by requestId:uri
+	 */
+	private readonly _editDescriptions = new Map<string, string>();
+
 	private readonly _baselineCreationLocks = new SequencerByKey</* URI.path */ string>();
 	private readonly _streamingEditLocks = new SequencerByKey</* URI */ string>();
 
@@ -589,8 +599,43 @@ export class ChatEditingSession extends Disposable implements IChatEditingSessio
 
 			get editExplanation(): string | undefined {
 				if (resource) {
-					const key = `${responseModel.requestId}:${resource.toString()}`;
-					return self._editExplanations.get(key);
+					// Normalize the resource URI to match the format used when storing
+					// (notebook URI for notebooks, original URI for regular files)
+					const normalizedResource = CellUri.parse(resource)?.notebook ?? resource;
+					const key = `${responseModel.requestId}:${normalizedResource.toString()}`;
+					const explanation = self._editExplanations.get(key);
+					console.log('[MonitorX] editExplanation getter:', {
+						requestId: responseModel.requestId,
+						originalResource: resource.toString(),
+						normalizedResource: normalizedResource.toString(),
+						key,
+						hasExplanation: !!explanation,
+						explanationLength: explanation?.length,
+						mapSize: self._editExplanations.size,
+						allKeys: Array.from(self._editExplanations.keys())
+					});
+					return explanation;
+				}
+				return undefined;
+			}
+
+			get editSubject(): string | undefined {
+				if (resource) {
+					// Normalize the resource URI to match the format used when storing
+					// (notebook URI for notebooks, original URI for regular files)
+					const normalizedResource = CellUri.parse(resource)?.notebook ?? resource;
+					const key = `${responseModel.requestId}:${normalizedResource.toString()}`;
+					const subject = self._editSubjects.get(key);
+					return subject;
+				}
+				return undefined;
+			}
+
+			get editDescription(): string | undefined {
+				if (resource) {
+					const normalizedResource = CellUri.parse(resource)?.notebook ?? resource;
+					const key = `${responseModel.requestId}:${normalizedResource.toString()}`;
+					return self._editDescriptions.get(key);
 				}
 				return undefined;
 			}
@@ -598,11 +643,37 @@ export class ChatEditingSession extends Disposable implements IChatEditingSessio
 	}
 
 	/**
-	 * Store edit explanation from EditTool invocation
+	 * Store edit explanation and optional subject from EditTool invocation
 	 */
-	public storeEditExplanation(requestId: string, resource: URI, explanation: string): void {
+	public storeEditExplanation(requestId: string, resource: URI, explanation: string, subject?: string, description?: string): void {
 		const key = `${requestId}:${resource.toString()}`;
+		console.log('[MonitorX] storeEditExplanation:', {
+			requestId,
+			resource: resource.toString(),
+			key,
+			explanation: explanation.substring(0, 100),
+			explanationLength: explanation.length,
+			hasSubject: !!subject,
+			subject: subject,
+			hasDescription: !!description,
+			mapSize: this._editExplanations.size
+		});
 		this._editExplanations.set(key, explanation);
+		if (subject) {
+			this._editSubjects.set(key, subject);
+		}
+		if (description) {
+			this._editDescriptions.set(key, description);
+		}
+		const stored = this._editExplanations.get(key);
+		console.log('[MonitorX] storeEditExplanation: stored successfully', {
+			key,
+			hasValue: !!stored,
+			storedLength: stored?.length,
+			hasSubject: this._editSubjects.has(key),
+			hasDescription: this._editDescriptions.has(key),
+			allKeys: Array.from(this._editExplanations.keys())
+		});
 	}
 
 	private async _resolve(requestId: string, undoStop: string | undefined, resource: URI): Promise<void> {

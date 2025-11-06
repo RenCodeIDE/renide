@@ -346,6 +346,16 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 		const description = this._generateDescription(linesAdded, linesRemoved);
 		const metadata = this._buildMetadata(linesAdded, linesRemoved);
 
+		console.log('[MonitorX] buildChangelogDraft: final result', {
+			filePath,
+			subject,
+			descriptionLength: description.length,
+			hasMetadata: !!metadata,
+			editExplanation: this._telemetryInfo.editExplanation,
+			requestId: this._telemetryInfo.requestId,
+			sessionId: this._telemetryInfo.sessionId
+		});
+
 		return {
 			subject,
 			description,
@@ -438,36 +448,135 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 	private _generateSubject(linesAdded: number, linesRemoved: number): string {
 		const fileName = basename(this.originalURI);
 		const fallback = this._buildFallbackSubject(fileName, linesAdded, linesRemoved);
+
+		// Prefer model-provided subject if available
+		const modelSubject = this._telemetryInfo.editSubject;
+		if (typeof modelSubject === 'string' && modelSubject.trim()) {
+			console.log('[MonitorX] _generateSubject: using model-provided subject', {
+				file: this.originalURI.toString(),
+				subject: modelSubject,
+				subjectWordCount: modelSubject.split(/\s+/).length,
+				requestId: this._telemetryInfo.requestId,
+				sessionId: this._telemetryInfo.sessionId
+			});
+			return modelSubject.trim();
+		}
+
+		// Fall back to extracting from explanation
 		const raw = this._telemetryInfo.editExplanation;
-		const subject = typeof raw === 'string' ? raw.trim() : '';
-		return subject || fallback;
+		if (typeof raw === 'string' && raw.trim()) {
+			// Generate a meaningful 5-6 word subject from the explanation
+			const subject = this._extractMeaningfulSubject(raw.trim());
+
+			console.log('[MonitorX] _generateSubject: extracted from explanation', {
+				file: this.originalURI.toString(),
+				rawLength: raw.length,
+				rawPreview: raw.substring(0, 100),
+				subject,
+				subjectWordCount: subject.split(/\s+/).length,
+				fallback,
+				requestId: this._telemetryInfo.requestId,
+				sessionId: this._telemetryInfo.sessionId
+			});
+
+			return subject || fallback;
+		}
+
+		console.log('[MonitorX] _generateSubject: using fallback', {
+			file: this.originalURI.toString(),
+			hasRawExplanation: !!raw,
+			hasModelSubject: !!modelSubject,
+			fallback,
+			requestId: this._telemetryInfo.requestId,
+			sessionId: this._telemetryInfo.sessionId
+		});
+
+		return fallback;
+	}
+
+	private _extractMeaningfulSubject(explanation: string): string {
+		// Clean up the explanation
+		let text = explanation.trim();
+
+		// Remove common introductory phrases that don't add meaning
+		const introPhrases = [
+			/^(of course[.,]?\s+)/i,
+			/^(i have\s+)/i,
+			/^(i've\s+)/i,
+			/^(i\s+)/i,
+			/^(yes[.,]?\s+)/i,
+			/^(sure[.,]?\s+)/i,
+			/^(okay[.,]?\s+)/i,
+			/^(ok[.,]?\s+)/i,
+		];
+
+		for (const pattern of introPhrases) {
+			text = text.replace(pattern, '');
+		}
+
+		text = text.trim();
+		if (!text) {
+			// If we removed everything, fall back to original
+			text = explanation.trim();
+		}
+
+		// Try to find the first complete sentence - prefer complete sentences
+		const sentenceMatch = text.match(/^[^.!?]+[.!?]/);
+		if (sentenceMatch) {
+			const firstSentence = sentenceMatch[0].trim();
+			const words = firstSentence.split(/\s+/).filter(w => w.length > 0);
+			// Use complete sentence if it's reasonable (up to 12 words to keep it a one-liner)
+			if (words.length <= 12) {
+				return firstSentence;
+			}
+			// If sentence is too long, try to find a natural break point
+			// Look for conjunctions, prepositions, or commas as natural breaks
+			const naturalBreaks = [' and ', ' or ', ' but ', ' with ', ' to ', ' in ', ' on ', ' for ', ' at ', ' from ', ', '];
+			let bestBreak = -1;
+			for (const breakWord of naturalBreaks) {
+				const breakIndex = firstSentence.toLowerCase().indexOf(breakWord, 30); // Start looking after 30 chars
+				if (breakIndex > 0 && breakIndex < firstSentence.length - 10) {
+					const wordsUpToBreak = firstSentence.substring(0, breakIndex).split(/\s+/).filter(w => w.length > 0);
+					if (wordsUpToBreak.length >= 5 && wordsUpToBreak.length <= 10) {
+						bestBreak = breakIndex;
+						break;
+					}
+				}
+			}
+			if (bestBreak > 0) {
+				return firstSentence.substring(0, bestBreak).trim();
+			}
+			// If no natural break, take first 10 words as a reasonable one-liner
+			const truncated = words.slice(0, 10).join(' ').trim();
+			return truncated;
+		}
+
+		// No sentence boundary found, extract meaningful phrase (up to 10 words)
+		const words = text.split(/\s+/).filter(w => w.length > 0);
+		const targetWords = Math.min(10, words.length);
+		const phrase = words.slice(0, targetWords).join(' ').trim();
+		// Remove trailing punctuation that might be incomplete
+		const cleanPhrase = phrase.replace(/[.,;:]+$/, '');
+		return cleanPhrase || phrase;
 	}
 
 	private _generateDescription(linesAdded: number, linesRemoved: number): string {
+		// Prefer model-provided description; fallback to minimal legacy summary
+		const provided = (this._telemetryInfo as unknown as { editDescription?: string }).editDescription;
+		if (typeof provided === 'string' && provided.trim()) {
+			return provided.trim();
+		}
 		const parts: string[] = [];
-		const explanation = (this._telemetryInfo.editExplanation || '').trim();
-		if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
-			console.log('[MonitorX changelog]', {
-				file: this.originalURI.toString(),
-				explanation,
-				linesAdded,
-				linesRemoved
-			});
-		}
-		if (explanation) {
-			parts.push(this.ensureSentence(explanation));
-		}
 		if (linesAdded || linesRemoved) {
-			parts.push(`Lines changed: +${linesAdded}, -${linesRemoved}.`);
+			parts.push(`Lines changed: +${linesAdded}/-${linesRemoved}.`);
 		}
 		if (this._telemetryInfo.command) {
 			parts.push(`Invoked via ${this._telemetryInfo.command}.`);
 		}
-		if (!parts.length) {
-			parts.push(`Applied AI edit to ${basename(this.originalURI)}.`);
-		}
-		return parts.join(' ');
+		return parts.join(' ') || `Edited ${basename(this.originalURI)}.`;
 	}
+
+	// concise helpers removed per model-provided description plan
 
 	private _buildMetadata(linesAdded: number, linesRemoved: number): Record<string, unknown> {
 		const metadata: Record<string, unknown> = {
@@ -478,7 +587,9 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 			requestId: this._telemetryInfo.requestId,
 			modeId: this._telemetryInfo.modeId,
 			modelId: this._telemetryInfo.modelId,
-			command: this._telemetryInfo.command
+			command: this._telemetryInfo.command,
+			// Preserve full explanation separately for optional UI expansion
+			explanation: (this._telemetryInfo.editExplanation || '').trim()
 		};
 		for (const key of Object.keys(metadata)) {
 			if (metadata[key] === undefined) {

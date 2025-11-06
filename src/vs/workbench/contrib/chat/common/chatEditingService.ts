@@ -92,6 +92,8 @@ export interface IModifiedEntryTelemetryInfo {
 	readonly applyCodeBlockSuggestionId: EditSuggestionId | undefined;
 	readonly feature: 'sideBarChat' | 'inlineChat' | undefined;
 	readonly editExplanation?: string;
+	readonly editSubject?: string;
+	readonly editDescription?: string;
 }
 
 export interface ISnapshotEntry {
@@ -161,7 +163,7 @@ export interface IChatEditingSession extends IDisposable {
 	/**
 	 * Store edit explanation from EditTool invocation
 	 */
-	storeEditExplanation(requestId: string, resource: URI, explanation: string): void;
+	storeEditExplanation(requestId: string, resource: URI, explanation: string, subject?: string, description?: string): void;
 }
 
 export interface IEditSessionEntryDiff {

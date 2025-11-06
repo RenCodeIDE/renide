@@ -58,6 +58,7 @@ import { IEditorService } from "../../../services/editor/common/editorService.js
 import "./renWorkspaceStore.js";
 import "./renChangelogBuffer.js";
 import { MonitorXChangelogToolContribution } from "./monitorXChangelogTool.js";
+import { MonitorXChangelogQueryToolContribution } from "./monitorXChangelogQueryTools.js";
 import { isWeb } from "../../../../base/common/platform.js";
 import {
 	registerSingleton,
@@ -239,6 +240,10 @@ workbenchRegistry.registerWorkbenchContribution(
 );
 workbenchRegistry.registerWorkbenchContribution(
 	MonitorXChangelogToolContribution,
+	LifecyclePhase.Restored
+);
+workbenchRegistry.registerWorkbenchContribution(
+	MonitorXChangelogQueryToolContribution,
 	LifecyclePhase.Restored
 );
 workbenchRegistry.registerWorkbenchContribution(

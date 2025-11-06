@@ -1162,38 +1162,106 @@ export class ChatEditingModifiedNotebookEntry extends AbstractChatEditingModifie
 	private _generateNotebookSubject(added: number, modified: number, deleted: number): string {
 		const fileName = `${basename(this.originalURI)} notebook`;
 		const fallback = this._buildNotebookFallbackSubject(fileName, added, modified, deleted);
+
+		// Prefer model-provided subject if available
+		const modelSubject = this._telemetryInfo.editSubject;
+		if (typeof modelSubject === 'string' && modelSubject.trim()) {
+			return modelSubject.trim();
+		}
+
+		// Fall back to extracting from explanation
 		const raw = this._telemetryInfo.editExplanation;
-		const subject = typeof raw === 'string' ? raw.trim() : '';
-		return subject || fallback;
+		if (typeof raw === 'string' && raw.trim()) {
+			// Generate a meaningful 5-6 word subject from the explanation
+			const subject = this._extractMeaningfulNotebookSubject(raw.trim());
+			return subject || fallback;
+		}
+
+		return fallback;
+	}
+
+	private _extractMeaningfulNotebookSubject(explanation: string): string {
+		// Clean up the explanation
+		let text = explanation.trim();
+
+		// Remove common introductory phrases that don't add meaning
+		const introPhrases = [
+			/^(of course[.,]?\s+)/i,
+			/^(i have\s+)/i,
+			/^(i've\s+)/i,
+			/^(i\s+)/i,
+			/^(yes[.,]?\s+)/i,
+			/^(sure[.,]?\s+)/i,
+			/^(okay[.,]?\s+)/i,
+			/^(ok[.,]?\s+)/i,
+		];
+
+		for (const pattern of introPhrases) {
+			text = text.replace(pattern, '');
+		}
+
+		text = text.trim();
+		if (!text) {
+			// If we removed everything, fall back to original
+			text = explanation.trim();
+		}
+
+		// Try to find the first complete sentence - prefer complete sentences
+		const sentenceMatch = text.match(/^[^.!?]+[.!?]/);
+		if (sentenceMatch) {
+			const firstSentence = sentenceMatch[0].trim();
+			const words = firstSentence.split(/\s+/).filter(w => w.length > 0);
+			// Use complete sentence if it's reasonable (up to 12 words to keep it a one-liner)
+			if (words.length <= 12) {
+				return firstSentence;
+			}
+			// If sentence is too long, try to find a natural break point
+			// Look for conjunctions, prepositions, or commas as natural breaks
+			const naturalBreaks = [' and ', ' or ', ' but ', ' with ', ' to ', ' in ', ' on ', ' for ', ' at ', ' from ', ', '];
+			let bestBreak = -1;
+			for (const breakWord of naturalBreaks) {
+				const breakIndex = firstSentence.toLowerCase().indexOf(breakWord, 30); // Start looking after 30 chars
+				if (breakIndex > 0 && breakIndex < firstSentence.length - 10) {
+					const wordsUpToBreak = firstSentence.substring(0, breakIndex).split(/\s+/).filter(w => w.length > 0);
+					if (wordsUpToBreak.length >= 5 && wordsUpToBreak.length <= 10) {
+						bestBreak = breakIndex;
+						break;
+					}
+				}
+			}
+			if (bestBreak > 0) {
+				return firstSentence.substring(0, bestBreak).trim();
+			}
+			// If no natural break, take first 10 words as a reasonable one-liner
+			const truncated = words.slice(0, 10).join(' ').trim();
+			return truncated;
+		}
+
+		// No sentence boundary found, extract meaningful phrase (up to 10 words)
+		const words = text.split(/\s+/).filter(w => w.length > 0);
+		const targetWords = Math.min(10, words.length);
+		const phrase = words.slice(0, targetWords).join(' ').trim();
+		// Remove trailing punctuation that might be incomplete
+		const cleanPhrase = phrase.replace(/[.,;:]+$/, '');
+		return cleanPhrase || phrase;
 	}
 
 	private _generateNotebookDescription(added: number, modified: number, deleted: number): string {
-		const parts: string[] = [];
-		const explanation = (this._telemetryInfo.editExplanation || '').trim();
-		if (explanation) {
-			parts.push(this.ensureSentence(explanation));
+		const provided = (this._telemetryInfo as unknown as { editDescription?: string }).editDescription;
+		if (typeof provided === 'string' && provided.trim()) {
+			return provided.trim();
 		}
 		const details: string[] = [];
-		if (added) {
-			details.push(`+${added} cell${added === 1 ? '' : 's'} added`);
-		}
-		if (modified) {
-			details.push(`${modified} cell${modified === 1 ? '' : 's'} modified`);
-		}
-		if (deleted) {
-			details.push(`-${deleted} cell${deleted === 1 ? '' : 's'} deleted`);
-		}
-		if (details.length) {
-			parts.push(`Changes: ${details.join(', ')}.`);
-		}
-		if (this._telemetryInfo.command) {
-			parts.push(`Invoked via ${this._telemetryInfo.command}.`);
-		}
-		if (!parts.length) {
-			parts.push(`Applied AI edit to ${basename(this.originalURI)}.`);
-		}
-		return parts.join(' ');
+		if (added) { details.push(`+${added} added`); }
+		if (modified) { details.push(`${modified} modified`); }
+		if (deleted) { details.push(`-${deleted} deleted`); }
+		const parts: string[] = [];
+		if (details.length) { parts.push(`Cells: ${details.join(', ')}.`); }
+		if (this._telemetryInfo.command) { parts.push(`Invoked via ${this._telemetryInfo.command}.`); }
+		return parts.join(' ') || `Edited ${basename(this.originalURI)} notebook.`;
 	}
+
+	// concise helpers removed per model-provided description plan
 
 	private _buildNotebookMetadata(added: number, modified: number, deleted: number): Record<string, unknown> {
 		const metadata: Record<string, unknown> = {
@@ -1205,7 +1273,8 @@ export class ChatEditingModifiedNotebookEntry extends AbstractChatEditingModifie
 			requestId: this._telemetryInfo.requestId,
 			modeId: this._telemetryInfo.modeId,
 			modelId: this._telemetryInfo.modelId,
-			command: this._telemetryInfo.command
+			command: this._telemetryInfo.command,
+			explanation: (this._telemetryInfo.editExplanation || '').trim()
 		};
 		for (const key of Object.keys(metadata)) {
 			if (metadata[key] === undefined) {

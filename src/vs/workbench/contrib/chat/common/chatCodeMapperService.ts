@@ -19,6 +19,12 @@ export interface ICodeMapperCodeBlock {
 	readonly code: string;
 	readonly resource: URI;
 	readonly markdownBeforeBlock?: string;
+	readonly editType?: 'replace' | 'insert' | 'delete' | 'modify';
+	readonly anchorContext?: {
+		lineNumber?: number;
+		beforeText?: string;
+		afterText?: string;
+	};
 }
 
 export interface ICodeMapperRequest {

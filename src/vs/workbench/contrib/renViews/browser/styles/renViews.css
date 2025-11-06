@@ -220,11 +220,37 @@
 }
 
 .ren-monitorx-changelog-body {
-	background-color: var(--vscode-editorWidget-background);
-	border: 1px solid var(--vscode-panel-border);
-	border-radius: 8px;
-	padding: 16px;
-	overflow: auto;
+    background-color: var(--vscode-editorWidget-background);
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 8px;
+    padding: 16px;
+    /* Only vertical scrolling, hide horizontal */
+    overflow-y: auto;
+    overflow-x: hidden;
+    /* Themed thin scrollbar (Firefox) */
+    scrollbar-width: thin;
+    scrollbar-color: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4)) transparent;
+}
+
+/* WebKit scrollbar styling for changelog body */
+.ren-monitorx-changelog-body::-webkit-scrollbar {
+    width: 10px;
+    height: 10px; /* keep small if any horizontal appears */
+}
+
+.ren-monitorx-changelog-body::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.ren-monitorx-changelog-body::-webkit-scrollbar-thumb {
+    background-color: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4));
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+.ren-monitorx-changelog-body::-webkit-scrollbar-thumb:hover {
+    background-color: var(--vscode-scrollbarSlider-hoverBackground, rgba(100, 100, 100, 0.6));
 }
 
 .monitorx-pane-container .ren-monitorx-changelog-body {
