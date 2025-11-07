@@ -1,0 +1,279 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import { CancellationToken } from '../../../../../base/common/cancellation.js';
+import { isWindows } from '../../../../../base/common/platform.js';
+import { localize } from '../../../../../nls.js';
+import { URI } from '../../../../../base/common/uri.js';
+import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
+import { ISearchService, ITextQuery, QueryType, IPatternInfo, ISearchProgressItem, resultIsMatch, isFileMatch, ExcludeGlobPattern } from '../../../../services/search/common/search.js';
+import { IExpression } from '../../../../../base/common/glob.js';
+import { CountTokensCallback, IPreparedToolInvocation, IToolData, IToolImpl, IToolInvocation, IToolInvocationPreparationContext, IToolResult, ToolDataSource, ToolProgress } from '../../common/languageModelToolsService.js';
+
+export const SearchFilesToolData: IToolData = {
+	id: 'search_files',
+	toolReferenceName: 'searchFiles',
+	displayName: localize('searchFilesTool.displayName', 'Search Files'),
+	modelDescription: localize('searchFilesTool.modelDescription', 'Searches for text patterns in files using ripgrep. Use this to find occurrences of text, code patterns, or regular expressions across the workspace. The includePattern parameter supports fuzzy matching for filenames (e.g., "config" will match "config.json", "config.yaml", etc.).'),
+	source: ToolDataSource.Internal,
+	canBeReferencedInPrompt: true,
+	inputSchema: {
+		type: 'object',
+		properties: {
+			pattern: {
+				type: 'string',
+				description: localize('searchFilesTool.pattern', 'The text pattern to search for. Can be a plain string or regular expression if useRegex is true.')
+			},
+			folder: {
+				type: 'string',
+				description: localize('searchFilesTool.folder', 'Optional: The workspace folder to search in. If not specified, searches all workspace folders.')
+			},
+			includePattern: {
+				type: 'string',
+				description: localize('searchFilesTool.includePattern', 'Optional: File glob patterns to include (e.g., "*.ts", "**/*.js"). Filenames without wildcards will use fuzzy matching (e.g., "config" matches "config.json", "config.yaml"). Multiple patterns can be separated by commas.')
+			},
+			excludePattern: {
+				type: 'string',
+				description: localize('searchFilesTool.excludePattern', 'Optional: File glob patterns to exclude (e.g., "node_modules/**", "*.min.js"). Multiple patterns can be separated by commas.')
+			},
+			caseSensitive: {
+				type: 'boolean',
+				description: localize('searchFilesTool.caseSensitive', 'Optional: Whether the search should be case-sensitive. Defaults to false.')
+			},
+			useRegex: {
+				type: 'boolean',
+				description: localize('searchFilesTool.useRegex', 'Optional: Whether to treat the pattern as a regular expression. Defaults to false.')
+			},
+			maxResults: {
+				type: 'number',
+				description: localize('searchFilesTool.maxResults', 'Optional: Maximum number of results to return. Defaults to 1000.')
+			}
+		},
+		required: ['pattern']
+	}
+};
+
+export interface ISearchFilesToolInput {
+	pattern: string;
+	folder?: string;
+	includePattern?: string;
+	excludePattern?: string;
+	caseSensitive?: boolean;
+	useRegex?: boolean;
+	maxResults?: number;
+}
+
+export class SearchFilesTool implements IToolImpl {
+	constructor(
+		@ISearchService private readonly searchService: ISearchService,
+		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
+	) { }
+
+	async prepareToolInvocation(context: IToolInvocationPreparationContext, token: CancellationToken): Promise<IPreparedToolInvocation | undefined> {
+		const args = context.parameters as ISearchFilesToolInput;
+
+		return {
+			invocationMessage: localize('searchFilesTool.invocationMessage', 'Searching for: {0}', args.pattern),
+			pastTenseMessage: localize('searchFilesTool.pastTenseMessage', 'Searched for: {0}', args.pattern),
+		};
+	}
+
+	async invoke(invocation: IToolInvocation, _countTokens: CountTokensCallback, _progress: ToolProgress, token: CancellationToken): Promise<IToolResult> {
+		const args = invocation.parameters as ISearchFilesToolInput;
+
+		try {
+			// Determine workspace folders to search
+			const workspace = this.workspaceService.getWorkspace();
+			let folders = workspace.folders.map(f => f.uri);
+
+			if (args.folder) {
+				const folderUri = this.parseUri(args.folder);
+				// Check if the specified folder is in the workspace
+				const folderInWorkspace = folders.find(f =>
+					folderUri.toString().startsWith(f.toString()) || folderUri.toString() === f.toString()
+				);
+				if (folderInWorkspace) {
+					folders = [folderUri];
+				} else {
+					// If folder is not in workspace, try to use it anyway
+					folders = [folderUri];
+				}
+			}
+
+			if (folders.length === 0) {
+				return {
+					content: [{
+						kind: 'text',
+						value: localize('searchFilesTool.noWorkspace', 'No workspace folder found to search in.')
+					}],
+					toolResultMessage: localize('searchFilesTool.noWorkspace', 'No workspace folder found to search in.')
+				};
+			}
+
+			// Build search query
+			const patternInfo: IPatternInfo = {
+				pattern: args.pattern,
+				isRegExp: args.useRegex ?? false,
+				isCaseSensitive: args.caseSensitive ?? false,
+			};
+
+			// Parse include/exclude patterns
+			const includePattern: IExpression | undefined = args.includePattern ? this.parseGlobPattern(args.includePattern) : undefined;
+			const excludePattern: ExcludeGlobPattern<URI>[] | undefined = args.excludePattern
+				? folders.map(folder => ({
+					folder,
+					pattern: this.parseGlobPattern(args.excludePattern!)
+				}))
+				: undefined;
+
+			const query: ITextQuery = {
+				type: QueryType.Text,
+				contentPattern: patternInfo,
+				folderQueries: folders.map(folder => ({
+					folder,
+					includePattern,
+					excludePattern,
+				})),
+				maxResults: args.maxResults ?? 1000,
+			};
+
+			// Collect search results
+			const results: string[] = [];
+			let resultCount = 0;
+			const maxResults = args.maxResults ?? 1000;
+
+			await this.searchService.textSearch(query, token, (progress: ISearchProgressItem) => {
+				if (isFileMatch(progress)) {
+					const fileMatch = progress;
+					if (fileMatch.results && fileMatch.results.length > 0) {
+						const relativePath = this.getRelativePath(fileMatch.resource);
+						results.push(`\n${relativePath}:`);
+
+						for (const result of fileMatch.results) {
+							if (resultIsMatch(result)) {
+								resultCount++;
+								if (resultCount > maxResults) {
+									return; // Stop collecting if we hit the limit
+								}
+
+								// Format match result
+								const match = result;
+								if (match.rangeLocations && match.rangeLocations.length > 0) {
+									for (const rangeLocation of match.rangeLocations) {
+										const lineNumber = rangeLocation.source.startLineNumber;
+										const column = rangeLocation.source.startColumn;
+										const preview = match.previewText || '';
+										results.push(`  ${lineNumber}:${column} ${preview.trim()}`);
+									}
+								}
+							}
+						}
+					}
+				}
+			});
+
+			if (results.length === 0) {
+				return {
+					content: [{
+						kind: 'text',
+						value: localize('searchFilesTool.noResults', 'No results found for pattern: {0}', args.pattern)
+					}],
+					toolResultMessage: localize('searchFilesTool.noResults', 'No results found for pattern: {0}', args.pattern)
+				};
+			}
+
+			const resultText = results.join('\n');
+			const summary = localize('searchFilesTool.summary', 'Found {0} result(s) for pattern "{1}"', resultCount, args.pattern);
+
+			return {
+				content: [{
+					kind: 'text',
+					value: `${summary}\n${resultText}`
+				}],
+				toolResultMessage: summary
+			};
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			return {
+				content: [{
+					kind: 'text',
+					value: localize('searchFilesTool.error', 'Error searching files: {0}', errorMessage)
+				}],
+				toolResultMessage: localize('searchFilesTool.error', 'Error searching files: {0}', errorMessage)
+			};
+		}
+	}
+
+	private parseUri(uriString: string): URI {
+		try {
+			// Try parsing as URI first
+			if (uriString.includes('://') || uriString.startsWith('file://')) {
+				return URI.parse(uriString);
+			}
+
+			// If it's a relative path, try to resolve it relative to workspace
+			const workspace = this.workspaceService.getWorkspace();
+			if (workspace.folders.length > 0) {
+				const workspaceRoot = workspace.folders[0].uri;
+				// Check if it's already an absolute path
+				if (uriString.startsWith('/') || (uriString.match(/^[A-Za-z]:/) && uriString.length > 2 && uriString[2] === '/')) {
+					return URI.file(uriString);
+				}
+				// Relative path - resolve against workspace root
+				return URI.joinPath(workspaceRoot, uriString);
+			}
+
+			// Fallback to file URI
+			return URI.file(uriString);
+		} catch {
+			// If parsing fails, treat as file path
+			return URI.file(uriString);
+		}
+	}
+
+	private parseGlobPattern(pattern: string): IExpression {
+		// Convert comma-separated patterns to glob expression
+		const patterns = pattern.split(',').map(p => p.trim()).filter(p => p.length > 0);
+		const result: Record<string, boolean> = {};
+		for (const p of patterns) {
+			// Check if it's a simple filename (no wildcards, no path separators) - apply fuzzy matching
+			if (!p.includes('*') && !p.includes('?') && !p.includes('/') && !(isWindows && p.includes('\\'))) {
+				// Simple filename - apply fuzzy matching
+				const fuzzyPattern = '*' + p.split('').join('*') + '*';
+				// Make case-insensitive
+				let caseInsensitivePattern = '';
+				for (let i = 0; i < fuzzyPattern.length; i++) {
+					const char = fuzzyPattern[i];
+					if (/[a-zA-Z]/.test(char)) {
+						caseInsensitivePattern += `[${char.toLowerCase()}${char.toUpperCase()}]`;
+					} else {
+						caseInsensitivePattern += char;
+					}
+				}
+				result[`**/${caseInsensitivePattern}`] = true;
+			} else {
+				result[p] = true;
+			}
+		}
+		return result;
+	}
+
+	private getRelativePath(uri: URI): string {
+		const workspace = this.workspaceService.getWorkspace();
+		if (workspace.folders.length === 0) {
+			return uri.fsPath;
+		}
+
+		const rootPath = workspace.folders[0].uri.fsPath;
+		const absolutePath = uri.fsPath;
+
+		if (absolutePath.startsWith(rootPath)) {
+			return absolutePath.slice(rootPath.length).replace(/^[\\/]+/, '');
+		}
+
+		return uri.fsPath;
+	}
+}
+

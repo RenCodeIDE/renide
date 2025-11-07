@@ -29,9 +29,10 @@ import { GetTerminalOutputTool, GetTerminalOutputToolData } from './tools/getTer
 import { GetTerminalSelectionTool, GetTerminalSelectionToolData } from './tools/getTerminalSelectionTool.js';
 import { ConfirmTerminalCommandTool, ConfirmTerminalCommandToolData } from './tools/runInTerminalConfirmationTool.js';
 import { RunInTerminalTool, createRunInTerminalToolData } from './tools/runInTerminalTool.js';
-import { CreateAndRunTaskTool, CreateAndRunTaskToolData } from './tools/task/createAndRunTaskTool.js';
-import { GetTaskOutputTool, GetTaskOutputToolData } from './tools/task/getTaskOutputTool.js';
-import { RunTaskTool, RunTaskToolData } from './tools/task/runTaskTool.js';
+// Tasks tools imports disabled - tools are not registered
+// import { CreateAndRunTaskTool, CreateAndRunTaskToolData } from './tools/task/createAndRunTaskTool.js';
+// import { GetTaskOutputTool, GetTaskOutputToolData } from './tools/task/getTaskOutputTool.js';
+// import { RunTaskTool, RunTaskToolData } from './tools/task/runTaskTool.js';
 
 class ShellIntegrationTimeoutMigrationContribution extends Disposable implements IWorkbenchContribution {
 	static readonly ID = 'terminal.shellIntegrationTimeoutMigration';
@@ -93,22 +94,22 @@ class ChatAgentToolsContribution extends Disposable implements IWorkbenchContrib
 		// #endregion
 
 		// #region Tasks
+		// Tasks tools disabled - user doesn't want VS Code tasks tools registered
+		// const runTaskTool = instantiationService.createInstance(RunTaskTool);
+		// this._register(toolsService.registerTool(RunTaskToolData, runTaskTool));
 
-		const runTaskTool = instantiationService.createInstance(RunTaskTool);
-		this._register(toolsService.registerTool(RunTaskToolData, runTaskTool));
+		// const getTaskOutputTool = instantiationService.createInstance(GetTaskOutputTool);
+		// this._register(toolsService.registerTool(GetTaskOutputToolData, getTaskOutputTool));
 
-		const getTaskOutputTool = instantiationService.createInstance(GetTaskOutputTool);
-		this._register(toolsService.registerTool(GetTaskOutputToolData, getTaskOutputTool));
+		// const createAndRunTaskTool = instantiationService.createInstance(CreateAndRunTaskTool);
+		// this._register(toolsService.registerTool(CreateAndRunTaskToolData, createAndRunTaskTool));
 
-		const createAndRunTaskTool = instantiationService.createInstance(CreateAndRunTaskTool);
-		this._register(toolsService.registerTool(CreateAndRunTaskToolData, createAndRunTaskTool));
-
-		const runTasksToolSet = this._register(toolsService.createToolSet(ToolDataSource.Internal, 'runTasks', 'runTasks', {
-			description: localize('toolset.runTasks', 'Runs tasks and gets their output for your workspace'),
-		}));
-		runTasksToolSet.addTool(RunTaskToolData);
-		runTasksToolSet.addTool(GetTaskOutputToolData);
-		runTasksToolSet.addTool(CreateAndRunTaskToolData);
+		// const runTasksToolSet = this._register(toolsService.createToolSet(ToolDataSource.Internal, 'runTasks', 'runTasks', {
+		// 	description: localize('toolset.runTasks', 'Runs tasks and gets their output for your workspace'),
+		// }));
+		// runTasksToolSet.addTool(RunTaskToolData);
+		// runTasksToolSet.addTool(GetTaskOutputToolData);
+		// runTasksToolSet.addTool(CreateAndRunTaskToolData);
 
 		// #endregion
 	}
