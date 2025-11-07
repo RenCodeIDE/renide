@@ -6,142 +6,10 @@
 import * as vscode from 'vscode';
 
 /**
- * Computes similarity score between two strings using Levenshtein distance.
- * Returns a value between 0 (completely different) and 1 (identical).
+ * Computes minimal text edits between original and new code using a line-by-line diff.
+ * Uses a simple prefix/suffix optimization to minimize the diff size.
  */
-function computeSimilarity(str1: string, str2: string): number {
-	if (str1 === str2) {
-		return 1;
-	}
-	if (str1.length === 0 || str2.length === 0) {
-		return 0;
-	}
-
-	const maxLen = Math.max(str1.length, str2.length);
-	const distance = levenshteinDistance(str1, str2);
-	return 1 - distance / maxLen;
-}
-
-/**
- * Computes Levenshtein distance between two strings.
- */
-function levenshteinDistance(str1: string, str2: string): number {
-	const len1 = str1.length;
-	const len2 = str2.length;
-	const matrix: number[][] = [];
-
-	for (let i = 0; i <= len1; i++) {
-		matrix[i] = [i];
-	}
-	for (let j = 0; j <= len2; j++) {
-		matrix[0][j] = j;
-	}
-
-	for (let i = 1; i <= len1; i++) {
-		for (let j = 1; j <= len2; j++) {
-			if (str1[i - 1] === str2[j - 1]) {
-				matrix[i][j] = matrix[i - 1][j - 1];
-			} else {
-				matrix[i][j] = Math.min(
-					matrix[i - 1][j] + 1,     // deletion
-					matrix[i][j - 1] + 1,     // insertion
-					matrix[i - 1][j - 1] + 1  // substitution
-				);
-			}
-		}
-	}
-
-	return matrix[len1][len2];
-}
-
-/**
- * Finds the best matching line in oldLines for a given newLine using fuzzy matching.
- * Returns the index and confidence score.
- */
-function findBestMatch(newLine: string, oldLines: string[], startIndex: number, endIndex: number): { index: number; confidence: number } | null {
-	let bestIndex = -1;
-	let bestConfidence = 0;
-	const threshold = 0.7; // Minimum similarity threshold
-
-	for (let i = startIndex; i < endIndex && i < oldLines.length; i++) {
-		const similarity = computeSimilarity(newLine.trim(), oldLines[i].trim());
-		if (similarity > bestConfidence && similarity >= threshold) {
-			bestConfidence = similarity;
-			bestIndex = i;
-		}
-	}
-
-	if (bestIndex >= 0) {
-		return { index: bestIndex, confidence: bestConfidence };
-	}
-	return null;
-}
-
-/**
- * Finds anchor position using beforeText and afterText context.
- */
-function findAnchorPosition(
-	oldLines: string[],
-	beforeText: string | undefined,
-	afterText: string | undefined,
-	targetLine: number | undefined
-): { startLine: number; endLine: number } | null {
-	if (targetLine !== undefined && targetLine >= 0 && targetLine < oldLines.length) {
-		// Use explicit line number if provided
-		return { startLine: targetLine, endLine: targetLine };
-	}
-
-	let startLine = -1;
-	let endLine = -1;
-
-	// Find beforeText anchor
-	if (beforeText) {
-		const beforeLines = beforeText.split(/\r?\n/);
-		const beforePattern = beforeLines[beforeLines.length - 1]?.trim();
-		if (beforePattern) {
-			for (let i = 0; i < oldLines.length; i++) {
-				if (oldLines[i].trim().includes(beforePattern) || computeSimilarity(oldLines[i].trim(), beforePattern) > 0.8) {
-					startLine = i + 1; // Position after the anchor
-					break;
-				}
-			}
-		}
-	}
-
-	// Find afterText anchor
-	if (afterText) {
-		const afterLines = afterText.split(/\r?\n/);
-		const afterPattern = afterLines[0]?.trim();
-		if (afterPattern) {
-			for (let i = (startLine >= 0 ? startLine : 0); i < oldLines.length; i++) {
-				if (oldLines[i].trim().includes(afterPattern) || computeSimilarity(oldLines[i].trim(), afterPattern) > 0.8) {
-					endLine = i; // Position before the anchor
-					break;
-				}
-			}
-		}
-	}
-
-	if (startLine >= 0 || endLine >= 0) {
-		return {
-			startLine: startLine >= 0 ? startLine : 0,
-			endLine: endLine >= 0 ? endLine : oldLines.length
-		};
-	}
-
-	return null;
-}
-
-/**
- * Computes minimal text edits between original and new code using an enhanced diff algorithm.
- * Supports anchor-based positioning, fuzzy matching, and edit type hints.
- */
-function computeTextEdits(
-	original: string,
-	newCode: string,
-	editType?: 'replace' | 'insert' | 'delete' | 'modify',
-	anchorContext?: { lineNumber?: number; beforeText?: string; afterText?: string }
-): vscode.TextEdit[] {
+function computeTextEdits(original: string, newCode: string): vscode.TextEdit[] {
 	// Handle empty cases
 	if (original === newCode) {
 		return [];
@@ -150,96 +18,31 @@ function computeTextEdits(
 	const oldLines = original.split(/\r?\n/);
 	const newLines = newCode.split(/\r?\n/);
 
-	// Try to use anchor context if provided
-	let anchorRange: { startLine: number; endLine: number } | null = null;
-	if (anchorContext) {
-		anchorRange = findAnchorPosition(
-			oldLines,
-			anchorContext.beforeText,
-			anchorContext.afterText,
-			anchorContext.lineNumber !== undefined ? anchorContext.lineNumber - 1 : undefined // Convert to 0-based
-		);
+	// Find common prefix
+	let prefixEnd = 0;
+	while (
+		prefixEnd < oldLines.length &&
+		prefixEnd < newLines.length &&
+		oldLines[prefixEnd] === newLines[prefixEnd]
+	) {
+		prefixEnd++;
 	}
 
-	let prefixEnd = 0;
+	// Find common suffix (only in the remaining sections)
 	let suffixStart = oldLines.length;
 	let suffixStartNew = newLines.length;
-
-	// If we have anchor context, use it to narrow the search range
-	if (anchorRange) {
-		// Still find common prefix/suffix but within the anchor range
-		const anchorStart = Math.max(0, anchorRange.startLine);
-		const anchorEnd = Math.min(oldLines.length, anchorRange.endLine);
-
-		// Find prefix up to anchor start
-		prefixEnd = Math.min(anchorStart, oldLines.length);
-		for (let i = 0; i < prefixEnd && i < newLines.length; i++) {
-			if (oldLines[i] === newLines[i]) {
-				prefixEnd = i + 1;
-			} else {
-				break;
-			}
-		}
-
-		// Find suffix from anchor end
-		suffixStart = anchorEnd;
-		suffixStartNew = newLines.length;
-		for (let i = 0; i < Math.min(oldLines.length - anchorEnd, newLines.length); i++) {
-			const oldIdx = oldLines.length - 1 - i;
-			const newIdx = newLines.length - 1 - i;
-			if (oldIdx >= anchorEnd && newIdx >= 0 && oldLines[oldIdx] === newLines[newIdx]) {
-				suffixStart = oldIdx;
-				suffixStartNew = newIdx;
-			} else {
-				break;
-			}
-		}
-	} else {
-		// Standard prefix/suffix matching with fuzzy fallback
-		// Find common prefix
-		while (
-			prefixEnd < oldLines.length &&
-			prefixEnd < newLines.length &&
-			oldLines[prefixEnd] === newLines[prefixEnd]
-		) {
-			prefixEnd++;
-		}
-
-		// Try fuzzy matching for the first differing line
-		if (prefixEnd < newLines.length && prefixEnd < oldLines.length) {
-			const fuzzyMatch = findBestMatch(newLines[prefixEnd], oldLines, prefixEnd, Math.min(prefixEnd + 5, oldLines.length));
-			if (fuzzyMatch && fuzzyMatch.confidence > 0.85) {
-				// Skip similar lines
-				prefixEnd = fuzzyMatch.index + 1;
-			}
-		}
-
-		// Find common suffix (only in the remaining sections)
-		while (
-			suffixStart > prefixEnd &&
-			suffixStartNew > prefixEnd &&
-			oldLines[suffixStart - 1] === newLines[suffixStartNew - 1]
-		) {
-			suffixStart--;
-			suffixStartNew--;
-		}
-
-		// Try fuzzy matching for the last differing line
-		if (suffixStartNew > prefixEnd && suffixStart > prefixEnd) {
-			const fuzzyMatch = findBestMatch(
-				newLines[suffixStartNew - 1],
-				oldLines,
-				Math.max(prefixEnd, suffixStart - 5),
-				suffixStart
-			);
-			if (fuzzyMatch && fuzzyMatch.confidence > 0.85) {
-				suffixStart = fuzzyMatch.index;
-				suffixStartNew = suffixStartNew - 1;
-			}
-		}
+	while (
+		suffixStart > prefixEnd &&
+		suffixStartNew > prefixEnd &&
+		oldLines[suffixStart - 1] === newLines[suffixStartNew - 1]
+	) {
+		suffixStart--;
+		suffixStartNew--;
 	}
 
 	// Calculate ranges (0-based line numbers for VS Code API)
+	// prefixEnd: first line that differs (0-based)
+	// suffixStart: first line after differences from end (0-based, exclusive)
 	const startLine = prefixEnd;
 	const endLine = suffixStart;
 
@@ -264,32 +67,22 @@ function computeTextEdits(
 		return [];
 	}
 
-	// Determine edit range based on edit type
+	// Determine the end position for the range
+	// VS Code Range end is exclusive, so Range(startLine, 0, endLine, 0) means:
+	// "from start of line startLine to start of line endLine" (replacing lines startLine to endLine-1)
+
 	let endLineNumber: number;
 	let endCharacter: number;
 
-	if (editType === 'insert') {
-		// Insert mode: don't replace existing lines
-		const insertLine = anchorContext?.lineNumber !== undefined
-			? Math.max(0, Math.min(anchorContext.lineNumber - 1, oldLines.length))
-			: startLine;
-		endLineNumber = insertLine;
-		endCharacter = 0;
-	} else if (editType === 'delete') {
-		// Delete mode: remove lines without adding new ones
-		if (startLine === endLine) {
-			// Nothing to delete
-			return [];
-		}
-		endLineNumber = endLine;
-		endCharacter = 0;
-		newText = '';
-	} else if (startLine === endLine) {
+	if (startLine === endLine) {
 		// Insertion case: inserting at a specific line position
 		if (startLine >= oldLines.length) {
+			// Appending to end of file - clamp to valid position
 			endLineNumber = oldLines.length;
 			endCharacter = 0;
+			// For insertion at end, both start and end should be at the end
 		} else {
+			// Inserting at existing line - use same line for start and end
 			endLineNumber = startLine;
 			endCharacter = 0;
 		}
@@ -303,7 +96,8 @@ function computeTextEdits(
 		endCharacter = 0;
 	}
 
-	// Clamp startLine to document bounds
+	// Clamp startLine to document bounds only if it's beyond the document
+	// (for insertion at end case)
 	const rangeStartLine = startLine > oldLines.length ? oldLines.length : startLine;
 
 	// Create the edit
@@ -335,12 +129,12 @@ async function readFileContent(uri: vscode.Uri, token: vscode.CancellationToken)
 /**
  * MappedEditsProvider2 implementation that computes precise diffs.
  */
-const provider: any = {
+const provider: vscode.MappedEditsProvider2 = {
 	async provideMappedEdits(
-		request: any,
-		result: any,
+		request: vscode.MappedEditsRequest,
+		result: vscode.MappedEditsResponseStream,
 		token: vscode.CancellationToken
-	): Promise<any> {
+	): Promise<vscode.MappedEditsResult | undefined> {
 		try {
 			for (const codeBlock of request.codeBlocks) {
 				if (token.isCancellationRequested) {
@@ -354,16 +148,8 @@ const provider: any = {
 					return { errorMessage: 'Operation was cancelled' };
 				}
 
-				// Compute edits with enhanced parameters
-				// Access custom properties that may be present on the codeBlock
-				const editType = (codeBlock as any).editType;
-				const anchorContext = (codeBlock as any).anchorContext;
-				const edits = computeTextEdits(
-					originalContent,
-					codeBlock.code,
-					editType,
-					anchorContext
-				);
+				// Compute edits
+				const edits = computeTextEdits(originalContent, codeBlock.code);
 
 				// Stream edits to the result
 				if (edits.length > 0) {
@@ -380,7 +166,7 @@ const provider: any = {
 };
 
 export function activate(context: vscode.ExtensionContext): void {
-	const disposable = (vscode.chat as any).registerMappedEditsProvider2(provider);
+	const disposable = vscode.chat.registerMappedEditsProvider2(provider);
 	context.subscriptions.push(disposable);
 }
 

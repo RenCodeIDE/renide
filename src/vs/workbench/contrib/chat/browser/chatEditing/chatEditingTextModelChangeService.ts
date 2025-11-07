@@ -119,11 +119,6 @@ export class ChatEditingTextModelChangeService extends Disposable {
 	private linesAdded: number = 0;
 	private linesRemoved: number = 0;
 
-	// Streaming-aware line tracking: maps original line numbers to their current offset
-	// This tracks how line numbers shift as edits are applied during streaming
-	private readonly _lineOffsetMap = new Map<number, number>(); // original line -> cumulative offset
-	private _lastAppliedEditEndLine: number = 0; // Track the last line that was edited
-
 	constructor(
 		private readonly originalModel: ITextModel,
 		private readonly modifiedModel: ITextModel,
@@ -236,14 +231,8 @@ export class ChatEditingTextModelChangeService extends Disposable {
 
 		} else {
 			// EDIT a bit, then DONE
-			// Adjust edit ranges to account for previous streaming edits
-			const adjustedEdits = this._adjustEditsForStreaming(textEdits);
-			const ops = adjustedEdits.map(TextEdit.asEditOperation);
+			const ops = textEdits.map(TextEdit.asEditOperation);
 			const undoEdits = this._applyEdits(ops, source);
-
-			// Update line offset tracking after applying edits
-			this._updateLineOffsetMap(undoEdits);
-
 			maxLineNumber = undoEdits.reduce((max, op) => Math.max(max, op.range.startLineNumber), 0);
 			rewriteRatio = Math.min(1, maxLineNumber / this.modifiedModel.getLineCount());
 
@@ -315,106 +304,6 @@ export class ChatEditingTextModelChangeService extends Disposable {
 		this._originalToModifiedEdit = StringEdit.empty;
 		this._diffInfo.set(nullDocumentDiff, undefined);
 		this._didUserEditModelFired = false;
-		this._lineOffsetMap.clear();
-		this._lastAppliedEditEndLine = 0;
-	}
-
-	/**
-	 * Adjusts edit ranges to account for line number shifts from previous streaming edits.
-	 * This ensures that edits applied later in the stream are positioned correctly.
-	 */
-	private _adjustEditsForStreaming(edits: TextEdit[]): TextEdit[] {
-		if (this._lineOffsetMap.size === 0) {
-			// No previous edits, no adjustment needed
-			return edits;
-		}
-
-		return edits.map(edit => {
-			const originalStartLine = edit.range.startLineNumber;
-			const originalEndLine = edit.range.endLineNumber;
-
-			// Calculate cumulative offset for the start line
-			// Find the largest line number <= originalStartLine in the map
-			let startOffset = 0;
-			for (const [line, offset] of this._lineOffsetMap.entries()) {
-				if (line <= originalStartLine && offset > startOffset) {
-					startOffset = offset;
-				}
-			}
-
-			// Calculate cumulative offset for the end line
-			// Find the largest line number <= originalEndLine in the map
-			let endOffset = 0;
-			for (const [line, offset] of this._lineOffsetMap.entries()) {
-				if (line <= originalEndLine && offset > endOffset) {
-					endOffset = offset;
-				}
-			}
-
-			// Adjust the range
-			const adjustedStartLine = originalStartLine + startOffset;
-			const adjustedEndLine = originalEndLine + endOffset;
-
-			return {
-				range: new Range(
-					adjustedStartLine,
-					edit.range.startColumn,
-					adjustedEndLine,
-					edit.range.endColumn
-				),
-				text: edit.text
-			};
-		});
-	}
-
-	/**
-	 * Updates the line offset map after applying edits.
-	 * This tracks how line numbers have shifted due to the edits.
-	 * The map stores the cumulative offset at each edit boundary.
-	 */
-	private _updateLineOffsetMap(undoEdits: ISingleEditOperation[]): void {
-		for (const edit of undoEdits) {
-			const startLine = edit.range.startLineNumber;
-			const endLine = edit.range.endLineNumber;
-			const linesInEdit = endLine - startLine;
-			const editText = edit.text ?? '';
-			const newTextLines = editText.split(/\r?\n/).length;
-			const lineDelta = newTextLines - linesInEdit;
-
-			if (lineDelta !== 0) {
-				// Get the current cumulative offset at the start of this edit
-				let currentCumulativeOffset = 0;
-				for (const [line, offset] of this._lineOffsetMap.entries()) {
-					if (line <= startLine) {
-						currentCumulativeOffset = Math.max(currentCumulativeOffset, offset);
-					}
-				}
-
-				// The new cumulative offset after this edit
-				const newCumulativeOffset = currentCumulativeOffset + lineDelta;
-
-				// Update offsets for all edit boundaries after this edit
-				const keysToUpdate: number[] = [];
-				for (const key of this._lineOffsetMap.keys()) {
-					if (key > endLine) {
-						keysToUpdate.push(key);
-					}
-				}
-
-				// Apply the offset change to all subsequent edit boundaries
-				for (const key of keysToUpdate) {
-					const existingOffset = this._lineOffsetMap.get(key) || 0;
-					// The offset should be relative to the cumulative offset before this edit
-					const relativeOffset = existingOffset - currentCumulativeOffset;
-					this._lineOffsetMap.set(key, newCumulativeOffset + relativeOffset);
-				}
-
-				// Record the cumulative offset at the end of this edit
-				this._lineOffsetMap.set(endLine, newCumulativeOffset);
-
-				this._lastAppliedEditEndLine = Math.max(this._lastAppliedEditEndLine, endLine);
-			}
-		}
 	}
 
 	public async resetDocumentValues(newOriginal: string | ITextSnapshot | undefined, newModified: string | undefined): Promise<void> {

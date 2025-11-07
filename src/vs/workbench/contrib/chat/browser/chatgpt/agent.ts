@@ -87,8 +87,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			return token ?? undefined;
 		} catch (error) {
 			this.logService.error(
-				`[chatgpt-server] Error retrieving access token: ${
-					error instanceof Error ? error.message : String(error)
+				`[chatgpt-server] Error retrieving access token: ${error instanceof Error ? error.message : String(error)
 				}`
 			);
 			return undefined;
@@ -140,8 +139,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 
 		if (request.userSelectedTools) {
 			this.logService.debug(
-				`[chatgpt] reading tools from request object for request ${
-					request.requestId
+				`[chatgpt] reading tools from request object for request ${request.requestId
 				}: ${JSON.stringify(request.userSelectedTools)}`
 			);
 			this.requestTools.set(request.requestId, request.userSelectedTools);
@@ -316,15 +314,13 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 
 					const iterationEndTime = Date.now();
 					this.logService.info(
-						`[Stream] [${iterationEndTime}] Completed async iteration (duration: ${
-							iterationEndTime - streamIterationStartTime
+						`[Stream] [${iterationEndTime}] Completed async iteration (duration: ${iterationEndTime - streamIterationStartTime
 						}ms)`
 					);
 				} catch (error) {
 					const errorTimestamp = Date.now();
 					this.logService.error(
-						`[Stream] [${errorTimestamp}] Error in async iteration: ${
-							error instanceof Error ? error.message : String(error)
+						`[Stream] [${errorTimestamp}] Error in async iteration: ${error instanceof Error ? error.message : String(error)
 						}`
 					);
 					if (!token.isCancellationRequested) {
@@ -401,8 +397,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					const toolResultsForNextRequest: ServerToolResult[] = [];
 					const toolCallIds = toolCallParts.map((part) => part.toolCall!.id);
 					this.logService.info(
-						`[chatgpt-server] Executing ${
-							toolCallParts.length
+						`[chatgpt-server] Executing ${toolCallParts.length
 						} tool call(s): ${toolCallIds.join(", ")}`
 					);
 
@@ -416,7 +411,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						this.configurationService.getValue<number>(
 							"chat.toolCalls.timeoutMs"
 						) ?? 30000;
-					
+
 					interface ToolTask {
 						index: number;
 						callId: string;
@@ -539,8 +534,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 										textOutput.trim().length > 0
 											? textOutput
 											: result.toolResultError
-											? `Error: ${result.toolResultError}`
-											: "Tool executed successfully but returned no output.";
+												? `Error: ${result.toolResultError}`
+												: "Tool executed successfully but returned no output.";
 
 									return {
 										toolCallId: callId,
@@ -589,7 +584,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						workers.push(startWorker());
 					}
 					await Promise.all(workers);
-					
+
 					const parallelExecutionTime = Date.now() - parallelExecutionStartTime;
 					this.logService.info(
 						`[chatgpt-server] Completed parallel execution of ${tasks.length} tool call(s) in ${parallelExecutionTime}ms ` +
@@ -620,8 +615,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					);
 					this.logService.info(
 						`[chatgpt-server] Collected ${toolResultsForNextRequest.length} tool results for next request. ` +
-							`Expected: ${toolCallIds.join(", ")}, ` +
-							`Got: ${resultCallIds.join(", ")}`
+						`Expected: ${toolCallIds.join(", ")}, ` +
+						`Got: ${resultCallIds.join(", ")}`
 					);
 
 					// Verify all tool calls have results
@@ -630,8 +625,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					);
 					if (missingResults.length > 0) {
 						this.logService.error(
-							`[chatgpt-server] CRITICAL: ${
-								missingResults.length
+							`[chatgpt-server] CRITICAL: ${missingResults.length
 							} tool call(s) missing results: ${missingResults.join(", ")}`
 						);
 					}
@@ -896,8 +890,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			}
 		}
 		this.logService.debug(
-			`[chatgpt] resolved ${
-				allowedTools.length
+			`[chatgpt] resolved ${allowedTools.length
 			} tools for request ${requestId}: ${allowedTools
 				.map((tool) => tool.id)
 				.join(", ")}`
@@ -1048,10 +1041,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 	): Promise<ChatGPTStreamingResponse> {
 		const toolNames = tools.map((f) => f.function.name);
 		this.logService.info(
-			`[chatgpt-server] performRequest: model=${model}, messages=${
-				messages.length
-			}, tools=${
-				toolNames.join(", ") || "none"
+			`[chatgpt-server] performRequest: model=${model}, messages=${messages.length
+			}, tools=${toolNames.join(", ") || "none"
 			}, hasContext=${!!context}, toolResults=${toolResults?.length || 0}`
 		);
 
@@ -1137,8 +1128,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		const hasToolResults = toolResults && toolResults.length > 0;
 
 		this.logService.info(
-			`[chatgpt-server] Using endpoint: ${endpoint} (tools=${
-				serverTools.length
+			`[chatgpt-server] Using endpoint: ${endpoint} (tools=${serverTools.length
 			}, toolResults=${toolResults?.length || 0})`
 		);
 
@@ -1161,15 +1151,13 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		response.result.then(
 			(result) => {
 				this.logService.info(
-					`[chatgpt-server] Request completed: ${
-						result.parts.length
+					`[chatgpt-server] Request completed: ${result.parts.length
 					} parts, finishReason=${result.finishReason || "none"}`
 				);
 			},
 			(error) => {
 				this.logService.error(
-					`[chatgpt-server] Streaming request failed: ${
-						error instanceof Error ? error.message : String(error)
+					`[chatgpt-server] Streaming request failed: ${error instanceof Error ? error.message : String(error)
 					}`
 				);
 			}

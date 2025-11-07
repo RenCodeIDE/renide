@@ -51,12 +51,8 @@ export class TestingChatAgentToolContribution extends Disposable implements IWor
 		@IContextKeyService contextKeyService: IContextKeyService
 	) {
 		super();
-		// Disabled per plan: Remove runTests Tool registration
-		// const runTestsTool = instantiationService.createInstance(RunTestTool);
-		// this._register(toolsService.registerTool(RunTestTool.DEFINITION, runTestsTool));
-
-		// Type-only reference to prevent "unused" error while keeping the class for potential re-enablement
-		void RunTestTool;
+		const runTestsTool = instantiationService.createInstance(RunTestTool);
+		this._register(toolsService.registerTool(RunTestTool.DEFINITION, runTestsTool));
 
 		// todo@connor4312: temporary for 1.103 release during changeover
 		contextKeyService.createKey('chat.coreTestFailureToolEnabled', true).set(true);
@@ -73,7 +69,6 @@ interface IRunTestToolParams {
 	mode?: Mode;
 }
 
-// Disabled: RunTestTool is kept for potential future re-enablement but not currently registered
 class RunTestTool implements IToolImpl {
 	public static readonly ID = 'runTests';
 	public static readonly DEFINITION: IToolData = {

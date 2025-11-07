@@ -22,8 +22,9 @@ export const InternalEditToolId = 'vscode_editFile_internal';
 export const EditToolData: IToolData = {
 	id: InternalEditToolId,
 	displayName: '', // not used
-	modelDescription: 'Preferred edit tool. Always include: subject (5–8 words) and description (2–4 lines, concise). Use explanation for full context. This enables high-quality changelog entries.',
+	modelDescription: 'Always include: subject (5-8 words summarizing the change, example: "Add feature", "Fix bug", "Refactor code") and description (2-4 lines explaining the change). Use explanation for full context. This enables high-quality changelog entries.',
 	source: ToolDataSource.Internal,
+	canBeReferencedInPrompt: true,
 	// Note: inputSchema is not defined here as this is an internal tool.
 	// The schema is provided by the language model/agent.
 	//
