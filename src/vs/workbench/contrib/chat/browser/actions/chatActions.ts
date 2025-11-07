@@ -31,7 +31,7 @@ import { DropdownWithPrimaryActionViewItem } from '../../../../../platform/actio
 import { getContextMenuActions } from '../../../../../platform/actions/browser/menuEntryActionViewItem.js';
 import { Action2, ICommandPaletteOptions, IMenuService, MenuId, MenuItemAction, MenuRegistry, registerAction2, SubmenuItemAction } from '../../../../../platform/actions/common/actions.js';
 import { CommandsRegistry, ICommandService } from '../../../../../platform/commands/common/commands.js';
-import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
+import { ConfigurationTarget, IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
 import { ContextKeyExpr, IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
 import { IsLinuxContext, IsWindowsContext } from '../../../../../platform/contextkey/common/contextkeys.js';
 import { IDialogService } from '../../../../../platform/dialogs/common/dialogs.js';
@@ -2033,6 +2033,33 @@ registerAction2(class EditToolApproval extends Action2 {
 		if (selection) {
 			toolsService.setToolAutoConfirmation(toolId, selection.id);
 		}
+	}
+});
+
+registerAction2(class ToggleToolPermissionPreference extends Action2 {
+	constructor() {
+		super({
+			id: 'workbench.action.chat.toggleToolPermissionPreference',
+			title: localize2('chat.toggleToolPermissionPreference.label', "Toggle Always Allow Tools"),
+			f1: true,
+			category: localize2('chat.category', "Chat")
+		});
+	}
+
+	async run(accessor: ServicesAccessor): Promise<void> {
+		const configurationService = accessor.get(IConfigurationService);
+		const notificationService = accessor.get(INotificationService);
+
+		const currentValue = configurationService.getValue<string>(ChatConfiguration.ToolPermissionPreference);
+		const newValue = currentValue === 'always' ? 'ask' : 'always';
+		
+		await configurationService.updateValue(ChatConfiguration.ToolPermissionPreference, newValue, ConfigurationTarget.USER);
+		
+		const message = newValue === 'always' 
+			? localize('chat.toggleToolPermissionPreference.enabled', "Always Allow Tools is now enabled. All tools will run automatically without asking for confirmation.")
+			: localize('chat.toggleToolPermissionPreference.disabled', "Always Allow Tools is now disabled. You will be asked for permission before each tool runs.");
+		
+		notificationService.info(message);
 	}
 });
 

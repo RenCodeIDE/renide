@@ -46,7 +46,7 @@ import { IInlineCompletionsService } from '../../../../editor/browser/services/i
 import { IChatSessionsService } from '../common/chatSessionsService.js';
 import { IMarkdownRendererService } from '../../../../platform/markdown/browser/markdownRenderer.js';
 import { MarkdownString } from '../../../../base/common/htmlContent.js';
-import { AGENT_SESSIONS_VIEWLET_ID } from '../common/constants.js';
+import { AGENT_SESSIONS_VIEWLET_ID, ChatConfiguration } from '../common/constants.js';
 
 const gaugeForeground = registerColor('gauge.foreground', {
 	dark: inputValidationInfoBorder,
@@ -724,6 +724,12 @@ class ChatStatusDashboard extends Disposable {
 			this.createNextEditSuggestionsSetting(setting, localize('settings.nextEditSuggestions', "Next edit suggestions"), this.getCompletionsSettingAccessor(modeId), disposables);
 		}
 
+		// --- Always Allow Tools
+		{
+			const setting = append(settings, $('div.setting'));
+			this.createAlwaysAllowToolsSetting(setting, localize('settings.alwaysAllowTools', "Always Allow Tools"), disposables);
+		}
+
 		return settings;
 	}
 
@@ -907,5 +913,24 @@ class ChatStatusDashboard extends Disposable {
 		disposables.add(this.inlineCompletionsService.onDidChangeIsSnoozing(e => {
 			updateIntervalTimer();
 		}));
+	}
+
+	private createAlwaysAllowToolsSetting(container: HTMLElement, label: string, disposables: DisposableStore): void {
+		const settingId = ChatConfiguration.ToolPermissionPreference;
+		
+		this.createSetting(container, [settingId], label, {
+			readSetting: () => {
+				const value = this.configurationService.getValue<string>(settingId);
+				return value === 'always';
+			},
+			writeSetting: async (value: boolean) => {
+				this.telemetryService.publicLog2<ChatSettingChangedEvent, ChatSettingChangedClassification>('chatStatus.settingChanged', {
+					settingIdentifier: settingId,
+					settingEnablement: value ? 'enabled' : 'disabled'
+				});
+
+				await this.configurationService.updateValue(settingId, value ? 'always' : 'ask');
+			}
+		}, disposables);
 	}
 }

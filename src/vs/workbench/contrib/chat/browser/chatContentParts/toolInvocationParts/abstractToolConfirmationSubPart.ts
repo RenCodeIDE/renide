@@ -8,10 +8,12 @@ import { assertNever } from '../../../../../../base/common/assert.js';
 import { Codicon } from '../../../../../../base/common/codicons.js';
 import { toDisposable } from '../../../../../../base/common/lifecycle.js';
 import { localize } from '../../../../../../nls.js';
+import { ConfigurationTarget, IConfigurationService } from '../../../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../../../platform/contextkey/common/contextkey.js';
 import { IInstantiationService } from '../../../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../../../platform/keybinding/common/keybinding.js';
 import { ChatContextKeys } from '../../../common/chatContextKeys.js';
+import { ChatConfiguration } from '../../../common/constants.js';
 import { ConfirmedReason, IChatToolInvocation, ToolConfirmKind } from '../../../common/chatService.js';
 import { ILanguageModelToolsService } from '../../../common/languageModelToolsService.js';
 import { IChatWidgetService } from '../../chat.js';
@@ -25,6 +27,7 @@ export const enum ConfirmationOutcome {
 	AllowWorkspace,
 	AllowGlobally,
 	AllowSession,
+	AlwaysAllowAllTools,
 }
 
 export interface IToolConfirmationConfig {
@@ -54,6 +57,7 @@ export abstract class AbstractToolConfirmationSubPart extends BaseChatToolInvoca
 		@IContextKeyService protected readonly contextKeyService: IContextKeyService,
 		@IChatWidgetService protected readonly chatWidgetService: IChatWidgetService,
 		@ILanguageModelToolsService protected readonly languageModelToolsService: ILanguageModelToolsService,
+		@IConfigurationService protected readonly configurationService: IConfigurationService,
 	) {
 		super(toolInvocation);
 
@@ -68,8 +72,22 @@ export abstract class AbstractToolConfirmationSubPart extends BaseChatToolInvoca
 		const skipKeybinding = keybindingService.lookupKeybinding(config.skipActionId)?.getLabel();
 		const skipTooltip = skipKeybinding ? `${config.skipLabel} (${skipKeybinding})` : config.skipLabel;
 
+		// Check if "Always Allow All Tools" should be shown prominently
+		const permissionPreference = this.configurationService.getValue<string>(ChatConfiguration.ToolPermissionPreference);
+		const showAlwaysAllowAllTools = permissionPreference !== 'always';
 
-		const buttons: IChatConfirmationButton<ConfirmationOutcome | (() => void)>[] = [
+		const buttons: IChatConfirmationButton<ConfirmationOutcome | (() => void)>[] = [];
+		
+		// Add prominent "Always Allow All Tools" button if preference is not already 'always'
+		if (showAlwaysAllowAllTools && this.toolInvocation.confirmationMessages?.allowAutoConfirm !== false) {
+			buttons.push({
+				label: localize('alwaysAllowAllTools', "Always Allow All Tools"),
+				tooltip: localize('alwaysAllowAllToolsTooltip', "Always allow all tools to run without asking for confirmation"),
+				data: ConfirmationOutcome.AlwaysAllowAllTools,
+			});
+		}
+
+		buttons.push(
 			{
 				label: config.allowLabel,
 				tooltip: allowTooltip,
@@ -82,7 +100,7 @@ export abstract class AbstractToolConfirmationSubPart extends BaseChatToolInvoca
 				data: ConfirmationOutcome.Skip,
 				isSecondary: true,
 			}
-		];
+		);
 
 		const contentElement = this.createContentElement();
 		const tool = languageModelToolsService.getTool(toolInvocation.toolId);
@@ -106,12 +124,17 @@ export abstract class AbstractToolConfirmationSubPart extends BaseChatToolInvoca
 		const hasToolConfirmation = ChatContextKeys.Editing.hasToolConfirmation.bindTo(this.contextKeyService);
 		hasToolConfirmation.set(true);
 
-		this._register(confirmWidget.onDidClick(button => {
+		this._register(confirmWidget.onDidClick(async button => {
 			const confirm = (reason: ConfirmedReason) => this.confirmWith(toolInvocation, reason);
 			if (typeof button.data === 'function') {
 				button.data();
 			} else {
 				switch (button.data) {
+					case ConfirmationOutcome.AlwaysAllowAllTools:
+						// Set the preference to 'always' and confirm the current tool
+						await this.configurationService.updateValue(ChatConfiguration.ToolPermissionPreference, 'always', ConfigurationTarget.USER);
+						confirm({ type: ToolConfirmKind.Setting, id: ChatConfiguration.ToolPermissionPreference });
+						break;
 					case ConfirmationOutcome.AllowGlobally:
 						confirm({ type: ToolConfirmKind.LmServicePerTool, scope: 'profile' });
 						break;

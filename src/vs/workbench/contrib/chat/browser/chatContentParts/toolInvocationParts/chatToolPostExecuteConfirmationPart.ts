@@ -8,6 +8,7 @@ import { getExtensionForMimeType } from '../../../../../../base/common/mime.js';
 import { ILanguageService } from '../../../../../../editor/common/languages/language.js';
 import { IModelService } from '../../../../../../editor/common/services/model.js';
 import { localize } from '../../../../../../nls.js';
+import { IConfigurationService } from '../../../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../../../platform/contextkey/common/contextkey.js';
 import { IInstantiationService } from '../../../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../../../platform/keybinding/common/keybinding.js';
@@ -40,8 +41,9 @@ export class ChatToolPostExecuteConfirmationPart extends AbstractToolConfirmatio
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IChatWidgetService chatWidgetService: IChatWidgetService,
 		@ILanguageModelToolsService languageModelToolsService: ILanguageModelToolsService,
+		@IConfigurationService configurationService: IConfigurationService,
 	) {
-		super(toolInvocation, context, instantiationService, keybindingService, contextKeyService, chatWidgetService, languageModelToolsService);
+		super(toolInvocation, context, instantiationService, keybindingService, contextKeyService, chatWidgetService, languageModelToolsService, configurationService);
 		const subtitle = toolInvocation.pastTenseMessage || toolInvocation.invocationMessage;
 		this.render({
 			allowActionId: AcceptToolPostConfirmationActionId,

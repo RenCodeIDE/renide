@@ -16,6 +16,7 @@ import { ILanguageService } from '../../../../../../editor/common/languages/lang
 import { IModelService } from '../../../../../../editor/common/services/model.js';
 import { localize } from '../../../../../../nls.js';
 import { ICommandService } from '../../../../../../platform/commands/common/commands.js';
+import { IConfigurationService } from '../../../../../../platform/configuration/common/configuration.js';
 import { IContextKeyService } from '../../../../../../platform/contextkey/common/contextkey.js';
 import { IInstantiationService } from '../../../../../../platform/instantiation/common/instantiation.js';
 import { IKeybindingService } from '../../../../../../platform/keybinding/common/keybinding.js';
@@ -59,12 +60,13 @@ export class ToolConfirmationSubPart extends AbstractToolConfirmationSubPart {
 		@IMarkerService private readonly markerService: IMarkerService,
 		@ILanguageModelToolsService languageModelToolsService: ILanguageModelToolsService,
 		@IChatMarkdownAnchorService private readonly chatMarkdownAnchorService: IChatMarkdownAnchorService,
+		@IConfigurationService configurationService: IConfigurationService,
 	) {
 		if (!toolInvocation.confirmationMessages?.title) {
 			throw new Error('Confirmation messages are missing');
 		}
 
-		super(toolInvocation, context, instantiationService, keybindingService, contextKeyService, chatWidgetService, languageModelToolsService);
+		super(toolInvocation, context, instantiationService, keybindingService, contextKeyService, chatWidgetService, languageModelToolsService, configurationService);
 
 		this.render({
 			allowActionId: AcceptToolConfirmationActionId,

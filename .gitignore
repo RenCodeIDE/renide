@@ -24,3 +24,5 @@ product.overrides.json
 .vscode-test
 vscode-telemetry-docs/
 *.env*
+.github/
+release/mac-arm64/
