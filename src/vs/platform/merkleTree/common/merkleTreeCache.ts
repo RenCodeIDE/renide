@@ -144,6 +144,7 @@ export class MerkleTreeCache extends Disposable {
 	}
 
 	setTree(tree: MerkleTreeNode, rootHash: string): void {
+		tree.workspaceId = this.workspaceId;
 		this.currentTree = tree;
 		this.currentRootHash = rootHash;
 		this.version++;
@@ -238,6 +239,7 @@ export class MerkleTreeCache extends Disposable {
 				rootHash: snapshot.rootHash,
 				version: snapshot.version,
 				timestamp: snapshot.timestamp,
+				workspaceId: this.workspaceId,
 			});
 
 			this.storageService.store(
@@ -272,12 +274,20 @@ export class MerkleTreeCache extends Disposable {
 
 			if (treeData) {
 				const data = JSON.parse(treeData);
+				const storedWorkspaceId = data.workspaceId ?? data.tree?.workspaceId;
+				if (storedWorkspaceId && storedWorkspaceId !== this.workspaceId) {
+					this.logService.warn(
+						`[MerkleTree] Ignoring cached tree for workspace ${storedWorkspaceId} (current workspace ${this.workspaceId})`
+					);
+					return;
+				}
 				this.currentTree = data.tree as MerkleTreeNode;
 				this.currentRootHash = data.rootHash as string;
 				this.version = data.version || 0;
 
 				// Cache the loaded tree
 				if (this.currentTree) {
+					this.currentTree.workspaceId = this.workspaceId;
 					this.cacheTreeRecursive(this.currentTree);
 				}
 

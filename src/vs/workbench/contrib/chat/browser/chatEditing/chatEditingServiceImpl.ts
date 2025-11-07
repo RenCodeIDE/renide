@@ -71,7 +71,7 @@ export class ChatEditingService extends Disposable implements IChatEditingServic
 		@IFileService private readonly _fileService: IFileService,
 		@ILifecycleService private readonly lifecycleService: ILifecycleService,
 		@IStorageService storageService: IStorageService,
-		@ILogService logService: ILogService,
+		@ILogService private readonly logService: ILogService,
 		@IExtensionService extensionService: IExtensionService,
 		@IProductService productService: IProductService,
 		@INotebookService private readonly notebookService: INotebookService,
@@ -266,8 +266,6 @@ export class ChatEditingService extends Disposable implements IChatEditingServic
 			}
 
 			let undoStop: undefined | string;
-			// Track the most recent markdown content to use as explanation for the next edit group
-			let lastMarkdownContent: string | undefined;
 
 			for (let i = 0; i < responseModel.response.value.length; i++) {
 				const part = responseModel.response.value[i];
@@ -277,60 +275,38 @@ export class ChatEditingService extends Disposable implements IChatEditingServic
 					continue;
 				}
 
-				// Capture markdown content that appears before edit groups
-				if (part.kind === 'markdownContent' && part.content) {
-					const markdownText = typeof part.content === 'string' ? part.content : part.content.value;
-					if (markdownText.trim()) {
-						// Accumulate markdown content (agent might send multiple markdown parts)
-						lastMarkdownContent = lastMarkdownContent
-							? (lastMarkdownContent + ' ' + markdownText).trim()
-							: markdownText.trim();
-					}
-					continue;
-				}
-
-				// Reset markdown when we see codeblock markers (they separate explanation from code)
-				if (part.kind === 'codeblockUri') {
-					// Don't reset here - the explanation might come after codeblockUri marker
-					continue;
-				}
-
 				if (part.kind !== 'textEditGroup' && part.kind !== 'notebookEditGroup') {
-					// Reset markdown when we see other non-edit parts (except markdown/codeblock)
-					if (part.kind !== 'toolInvocation' && part.kind !== 'toolInvocationSerialized') {
-						lastMarkdownContent = undefined;
-					}
 					continue;
 				}
 
 				ensureEditorOpen(part.uri);
+				const normalizedUri = CellUri.parse(part.uri)?.notebook ?? part.uri;
+				const uriKey = normalizedUri.toString();
 
-				// Store explanation from markdown content before this edit group
-				// NOTE: This is a FALLBACK path. EditTool is preferred for better changelog tracking.
-				if (lastMarkdownContent) {
-					const normalizedUri = CellUri.parse(part.uri)?.notebook ?? part.uri;
-					console.log('[MonitorX] FALLBACK PATH - Using progress streaming (textEditGroup) for edits:', {
+				// Check if this edit came from EditTool by checking if explanation was already stored
+				// EditTool stores explanation BEFORE emitting textEdit progress
+				const hasEditToolExplanation = session.getEditExplanation(responseModel.requestId, normalizedUri) !== undefined;
+				
+				if (!hasEditToolExplanation) {
+					// This edit did NOT come from EditTool - reject it
+					console.error('[MonitorX] REJECTED - Edit did not come from EditTool:', {
 						requestId: responseModel.requestId,
-						uri: normalizedUri.toString(),
-						explanation: lastMarkdownContent.substring(0, 100),
-						explanationLength: lastMarkdownContent.length,
-						note: 'EditTool is preferred for better changelog tracking'
-					});
-					// Derive a compact description (first ~400 chars) when tool path didn't provide one
-					const compact = lastMarkdownContent.replace(/```[\s\S]*?```/g, ' ').replace(/`[^`]*`/g, ' ').replace(/\s+/g, ' ').trim();
-					const description = compact.length > 400 ? compact.slice(0, 397).replace(/[\s,.;:]+$/, '') + '...' : compact;
-					session.storeEditExplanation(responseModel.requestId, normalizedUri, lastMarkdownContent, undefined, description);
-					// Reset after using it (or keep it if same file gets multiple edit groups?)
-					// For now, reset to avoid reusing for different files
-					lastMarkdownContent = undefined;
-				} else {
-					console.warn('[MonitorX] FALLBACK PATH - No markdown explanation found before edit group:', {
-						requestId: responseModel.requestId,
-						uri: part.uri.toString(),
+						uri: uriKey,
 						partIndex: i,
-						note: 'EditTool is preferred for better changelog tracking'
+						partKind: part.kind,
+						error: 'All edits MUST use EditTool. This edit was rejected because it came from streaming textEdit progress instead of EditTool.'
 					});
+					this.logService.error(`[ChatEditing] Rejected edit to ${uriKey} - all edits must use EditTool, not streaming textEdit progress`);
+					// Skip processing this edit group
+					continue;
 				}
+
+				// Edit came from EditTool - proceed normally
+				console.log('[MonitorX] EditTool PATH - Processing edit from EditTool:', {
+					requestId: responseModel.requestId,
+					uri: uriKey,
+					partIndex: i
+				});
 
 				// get new edits and start editing session
 				let entry = editsSeen[i];

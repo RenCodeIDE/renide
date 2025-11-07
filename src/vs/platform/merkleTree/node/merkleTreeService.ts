@@ -45,6 +45,7 @@ export class MerkleTreeService
 	private initializationPromise: Promise<void> | undefined;
 	private isBuildingInitialTree = false; // Flag to suppress change events during initial build
 	private syncTimer: IntervalTimer | undefined; // Periodic sync timer (every 5 minutes)
+	private workspaceId: string | undefined;
 
 	constructor(
 		@IFileService private readonly fileService: IFileService,
@@ -112,6 +113,7 @@ export class MerkleTreeService
 
 		const workspaceRoot = workspaceFolders[0].uri;
 		const workspaceId = workspaceRoot.toString();
+		this.workspaceId = workspaceId;
 
 		// Determine cache size based on repo size (will be updated during build)
 		const cacheSize = config?.cacheSize ?? DEFAULT_CONFIG.cacheSize;
@@ -130,7 +132,7 @@ export class MerkleTreeService
 			this.checksumService,
 			this.logService,
 			{
-				lazyTracking: config?.lazyTracking ?? DEFAULT_CONFIG.lazyTracking,
+				lazyTracking: false,
 				excludeStaticDirs:
 					config?.excludeStaticDirs ?? DEFAULT_CONFIG.excludeStaticDirs,
 				strategy:
@@ -138,7 +140,8 @@ export class MerkleTreeService
 					DEFAULT_CONFIG.strategy,
 				workspaceRoot,
 				chunkSizeLines: config?.chunkSizeLines ?? DEFAULT_CONFIG.chunkSizeLines,
-				enableChunkedHashing: config?.enableChunkedHashing ?? DEFAULT_CONFIG.enableChunkedHashing,
+				enableChunkedHashing:
+					config?.enableChunkedHashing ?? DEFAULT_CONFIG.enableChunkedHashing,
 			}
 		);
 
@@ -162,7 +165,7 @@ export class MerkleTreeService
 		// Build initial tree
 		try {
 			this.isBuildingInitialTree = true; // Suppress change events during initial build
-			
+
 			const initialHash = this._rootHash;
 			await this.buildTree();
 
@@ -178,19 +181,26 @@ export class MerkleTreeService
 			// Emit a single change event after initial build completes
 			if (this._rootHash && this._rootHash !== initialHash) {
 				this.logService.info(
-					`[MerkleTree] Initial tree built. Root hash: ${this._rootHash.substring(0, 16)}...`
+					`[MerkleTree] Initial tree built. Root hash: ${this._rootHash.substring(
+						0,
+						16
+					)}...`
 				);
 				// Emit initial tree build event (from empty to final hash)
 				const changes = this.changeTracker?.getChangeLog(0) || [];
-				this.changeTracker?.emitTreeChange(initialHash, this._rootHash, changes);
+				this.changeTracker?.emitTreeChange(
+					initialHash,
+					this._rootHash,
+					changes
+				);
 			}
 
 			this.isInitialized = true;
 			this.isBuildingInitialTree = false;
-			
+
 			// Start periodic sync timer (every 5 minutes)
 			this.startPeriodicSync();
-			
+
 			this.logService.info("[MerkleTree] Service initialized successfully");
 		} catch (error) {
 			this.isBuildingInitialTree = false;
@@ -210,12 +220,14 @@ export class MerkleTreeService
 
 		this.syncTimer = this._register(new IntervalTimer());
 		const SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-		
+
 		this.syncTimer.cancelAndSet(async () => {
 			await this.syncTree();
 		}, SYNC_INTERVAL_MS);
 
-		this.logService.info("[MerkleTree] Periodic sync started (every 5 minutes)");
+		this.logService.info(
+			"[MerkleTree] Periodic sync started (every 5 minutes)"
+		);
 	}
 
 	/**
@@ -229,10 +241,10 @@ export class MerkleTreeService
 
 		try {
 			this.logService.debug("[MerkleTree] Starting periodic sync...");
-			
+
 			const oldHash = this._rootHash;
 			let tree = this.cache.getTree();
-			
+
 			if (!tree) {
 				// Rebuild if no tree available
 				await this.buildTree();
@@ -247,22 +259,30 @@ export class MerkleTreeService
 			// This catches any changes that might have been missed by file watchers
 			// (e.g., external file changes, symlinks, etc.)
 			await this.buildTree();
-			
+
 			// Check if hash changed
 			if (this._rootHash !== oldHash) {
 				this.logService.info(
-					`[MerkleTree] Periodic sync completed. Hash changed: ${oldHash.substring(0, 8)}... → ${this._rootHash.substring(0, 8)}...`
+					`[MerkleTree] Periodic sync completed. Hash changed: ${oldHash.substring(
+						0,
+						8
+					)}... → ${this._rootHash.substring(0, 8)}...`
 				);
-				const changes = this.changeTracker.getChangeLog(Date.now() - 5 * 60 * 1000); // Last 5 minutes
+				const changes = this.changeTracker.getChangeLog(
+					Date.now() - 5 * 60 * 1000
+				); // Last 5 minutes
 				this.changeTracker.emitTreeChange(oldHash, this._rootHash, changes);
 			} else {
-				this.logService.debug("[MerkleTree] Periodic sync completed. No changes detected.");
+				this.logService.debug(
+					"[MerkleTree] Periodic sync completed. No changes detected."
+				);
 			}
 		} catch (error) {
-			this.logService.error(`[MerkleTree] Error during periodic sync: ${error}`);
+			this.logService.error(
+				`[MerkleTree] Error during periodic sync: ${error}`
+			);
 		}
 	}
-
 
 	/**
 	 * Build the tree
@@ -272,7 +292,33 @@ export class MerkleTreeService
 			return;
 		}
 
-		const tree = await this.builder.buildInitialTree();
+		const workspaceId = this.workspaceId ?? "";
+		const existingTree = this.cache.getTree();
+
+		let tree: MerkleTreeNode;
+		if (existingTree) {
+			if (existingTree.workspaceId && existingTree.workspaceId !== workspaceId) {
+				this.logService.warn(
+					`[MerkleTree] Cached tree workspace (${existingTree.workspaceId}) does not match current workspace (${workspaceId}). Clearing cache and rebuilding.`
+				);
+				this.cache.clear();
+				const rebuiltTree = await this.builder.buildInitialTree();
+				rebuiltTree.workspaceId = workspaceId;
+				tree = rebuiltTree;
+			} else {
+				this.logService.info(
+					`[MerkleTree] Existing Merkle tree detected. Refreshing in place for workspace ${workspaceId}.`
+				);
+				const refreshedTree = await this.builder.refreshExistingTree(existingTree);
+				refreshedTree.workspaceId = workspaceId;
+				tree = refreshedTree;
+			}
+		} else {
+			const freshTree = await this.builder.buildInitialTree();
+			freshTree.workspaceId = workspaceId;
+			tree = freshTree;
+		}
+
 		const rootHash = tree.hash;
 
 		this.cache.setTree(tree, rootHash);
@@ -324,7 +370,12 @@ export class MerkleTreeService
 		// This ensures sync happens after every file change
 		if (!this.isBuildingInitialTree && this._rootHash !== oldHash) {
 			this.logService.debug(
-				`[MerkleTree] File ${type}: ${uri.fsPath}. Hash changed: ${oldHash.substring(0, 8)}... → ${this._rootHash.substring(0, 8)}...`
+				`[MerkleTree] File ${type}: ${
+					uri.fsPath
+				}. Hash changed: ${oldHash.substring(
+					0,
+					8
+				)}... → ${this._rootHash.substring(0, 8)}...`
 			);
 			const changes = this.changeTracker.getChangeLog(Date.now() - 1000);
 			this.changeTracker.emitTreeChange(oldHash, this._rootHash, changes);
@@ -460,9 +511,13 @@ export class MerkleTreeService
 				const fileNode = this.findFileNodeInTree(tree, relativePath);
 				if (fileNode && fileNode.type === "file") {
 					this.cache.setNode(relativePath, fileNode);
-					const chunkHashes = fileNode.chunks?.map(c => c.hash.substring(0, 8)).join(", ") || "none";
+					const chunkHashes =
+						fileNode.chunks?.map((c) => c.hash.substring(0, 8)).join(", ") ||
+						"none";
 					this.logService.debug(
-						`[MerkleTree] ensureTracked: Updated node cache for ${relativePath} (${fileNode.chunks?.length || 0} chunks, hashes: ${chunkHashes})`
+						`[MerkleTree] ensureTracked: Updated node cache for ${relativePath} (${
+							fileNode.chunks?.length || 0
+						} chunks, hashes: ${chunkHashes})`
 					);
 				} else {
 					this.logService.debug(
@@ -484,7 +539,9 @@ export class MerkleTreeService
 		return this.builder.getRepoSizeCategory();
 	}
 
-	async getFileChunks(relativePath: string): Promise<import("../common/merkleTreeTypes.js").FileChunk[] | undefined> {
+	async getFileChunks(
+		relativePath: string
+	): Promise<import("../common/merkleTreeTypes.js").FileChunk[] | undefined> {
 		await this.initialize();
 
 		if (!this.cache) {
@@ -496,11 +553,14 @@ export class MerkleTreeService
 
 		// Try node cache first
 		let node = this.cache.getNode(relativePath);
-		
+
 		if (node && node.type === "file") {
-			const chunkHashes = node.chunks?.map(c => c.hash.substring(0, 8)).join(", ") || "none";
+			const chunkHashes =
+				node.chunks?.map((c) => c.hash.substring(0, 8)).join(", ") || "none";
 			this.logService.debug(
-				`[MerkleTree] getFileChunks: Found node in cache for ${relativePath} (${node.chunks?.length || 0} chunks, hashes: ${chunkHashes})`
+				`[MerkleTree] getFileChunks: Found node in cache for ${relativePath} (${
+					node.chunks?.length || 0
+				} chunks, hashes: ${chunkHashes})`
 			);
 			return node.chunks;
 		}
@@ -509,16 +569,19 @@ export class MerkleTreeService
 		this.logService.debug(
 			`[MerkleTree] getFileChunks: Node cache miss for ${relativePath}, searching tree...`
 		);
-		
+
 		const tree = this.cache.getTree();
 		if (tree) {
 			node = this.findFileNodeInTree(tree, relativePath);
 			// Cache it for next time
 			if (node && node.type === "file") {
 				this.cache.setNode(relativePath, node);
-				const chunkHashes = node.chunks?.map(c => c.hash.substring(0, 8)).join(", ") || "none";
+				const chunkHashes =
+					node.chunks?.map((c) => c.hash.substring(0, 8)).join(", ") || "none";
 				this.logService.debug(
-					`[MerkleTree] getFileChunks: Found node in tree for ${relativePath} (${node.chunks?.length || 0} chunks, hashes: ${chunkHashes}), cached it`
+					`[MerkleTree] getFileChunks: Found node in tree for ${relativePath} (${
+						node.chunks?.length || 0
+					} chunks, hashes: ${chunkHashes}), cached it`
 				);
 				return node.chunks;
 			}

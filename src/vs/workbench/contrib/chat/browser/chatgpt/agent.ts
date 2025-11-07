@@ -50,6 +50,11 @@ import { sendChatGPTRequest } from "./request.js";
 import { extractTextFromParts } from "./utils.js";
 import { ContextBuilder } from "./context.js";
 import { IConfigurationService } from "../../../../../platform/configuration/common/configuration.js";
+import { IAgentPlanner, PlanContext, ToolMetadata } from "../../common/agentPlanner.js";
+import { IDependencyGraphService } from "../../common/dependencyGraphService.js";
+import { IWorkspaceContextService } from "../../../../../platform/workspace/common/workspace.js";
+import { IFileService } from "../../../../../platform/files/common/files.js";
+import { URI } from "../../../../../base/common/uri.js";
 
 export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 	private readonly requestTools = new Map<string, UserSelectedTools>();
@@ -67,7 +72,11 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		textModelService: any,
 		private readonly languageModelToolsService: ILanguageModelToolsService,
 		private readonly languageModelsService: ILanguageModelsService,
-		private readonly configurationService: IConfigurationService
+		private readonly configurationService: IConfigurationService,
+		private readonly agentPlanner?: IAgentPlanner,
+		private readonly dependencyGraphService?: IDependencyGraphService,
+		private readonly workspaceService?: IWorkspaceContextService,
+		private readonly fileService?: IFileService
 	) {
 		this.contextBuilder = new ContextBuilder(textModelService, logService);
 	}
@@ -153,11 +162,73 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		const { tools: toolConfigs, nameToToolId } =
 			this.buildChatGPTToolDeclarations(request.requestId);
 
+		// Generate plan if planner is available and this is an agent mode request
+		let planId: string | undefined;
+		if (this.agentPlanner && this.dependencyGraphService && this.workspaceService && this.fileService) {
+			try {
+				// Collect workspace files for context
+				const workspaceFolders = this.workspaceService.getWorkspace().folders;
+				const workspaceFiles: URI[] = [];
+				if (workspaceFolders.length > 0) {
+					// Get a sample of workspace files (in production, this would be more comprehensive)
+					const rootUri = workspaceFolders[0].uri;
+					try {
+						const stat = await this.fileService.resolve(rootUri);
+						if (stat.children) {
+							for (const child of stat.children.slice(0, 100)) { // Limit to 100 files for performance
+								if (!child.isDirectory) {
+									workspaceFiles.push(child.resource);
+								}
+							}
+						}
+					} catch (error) {
+						this.logService.warn(`[chatgpt] Failed to list workspace files: ${error}`);
+					}
+				}
+
+				// Get dependency graphs for relevant files
+				const dependencyGraphs = await this.dependencyGraphService.getDependencyGraphs(workspaceFiles);
+
+				// Get tool metadata
+				const availableTools: ToolMetadata[] = Array.from(this.languageModelToolsService.getTools()).map(tool => ({
+					id: tool.id,
+					name: tool.displayName,
+					description: tool.modelDescription || tool.userDescription || '',
+					cost: tool.orchestration?.cost,
+					latency: tool.orchestration?.latency,
+					prerequisites: tool.orchestration?.prerequisites,
+				}));
+
+				// Generate plan
+				const planContext: PlanContext = {
+					dependencyGraphs,
+					availableTools,
+					workspaceFiles,
+				};
+
+				const plan = await this.agentPlanner.generatePlan(
+					request.requestId,
+					request.sessionId,
+					request.message,
+					planContext
+				);
+				planId = plan.id;
+
+				// Plan is now internal - agent will use manage_agent_plan tool to access it
+				// The agent should call the plan tool's sync_to_todos operation to show progress
+
+				// Approve plan automatically
+				this.agentPlanner.approvePlan(plan.id);
+			} catch (error) {
+				this.logService.warn(`[chatgpt] Failed to generate plan: ${error}`);
+			}
+		}
+
 		const contextPrompt = await this.contextBuilder.buildContextPrompt(
 			request,
 			token
 		);
-		const contextString = contextPrompt?.prompt;
+		const contextString = contextPrompt?.prompt || '';
 
 		if (toolConfigs.length > 0) {
 			const toolSummaries = Array.from(nameToToolId.keys())
@@ -182,9 +253,14 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				`- For streaming edits, ensure line numbers account for previous edits in the same stream`
 				: '';
 
+			// Add plan management guidance if plan tool is available
+			const planToolGuidance = nameToToolId.has('manage_agent_plan') || Array.from(nameToToolId.values()).some(id => id === 'manage_agent_plan')
+				? `\n\nPLAN MANAGEMENT:\n- For complex multi-step tasks, use the 'plan' tool (manage_agent_plan) to create and track execution plans.\n- Plans are internal agent state - do NOT mention plans to users directly.\n- After creating a plan, use 'plan' tool with operation 'sync_to_todos' to show progress via todos.\n- Update task status using 'plan' tool with operation 'update_task' as you work.\n- Always sync plan to todos after creating or updating a plan so users can see progress.`
+				: '';
+
 			messages.unshift({
 				role: 'system',
-				content: `You can call the following tools when they would help:\n${toolSummaries}${editToolGuidance}\nOnly call a tool if it is necessary; otherwise respond normally.`,
+				content: `You can call the following tools when they would help:\n${toolSummaries}${editToolGuidance}${planToolGuidance}\nOnly call a tool if it is necessary; otherwise respond normally.`,
 			});
 		}
 
@@ -445,6 +521,18 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						const { callId, toolName, toolId, parameters, index } = task;
 						const taskStartTime = Date.now();
 
+						// Update plan task status if planner is available
+						if (planId && this.agentPlanner && toolId) {
+							// Find task associated with this tool
+							const plan = this.agentPlanner.getPlan(request.requestId);
+							if (plan) {
+								const associatedTask = plan.tasks.find(t => t.toolId === toolId || t.description.toLowerCase().includes(toolName.toLowerCase()));
+								if (associatedTask) {
+									this.agentPlanner.updateTaskStatus(planId, associatedTask.id, 'in_progress');
+								}
+							}
+						}
+
 						if (!callId || callId.trim().length === 0) {
 							this.logService.error(
 								`[chatgpt-server] CRITICAL: Tool call has empty or missing callId for tool ${toolName}.`
@@ -552,6 +640,18 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 							this.logService.debug(
 								`[chatgpt-server] Finished tool ${toolName} (callId: ${callId}) in ${taskTime}ms`
 							);
+
+							// Update plan task status on success
+							if (planId && this.agentPlanner && toolId) {
+								const plan = this.agentPlanner.getPlan(request.requestId);
+								if (plan) {
+									const associatedTask = plan.tasks.find(t => t.toolId === toolId || t.description.toLowerCase().includes(toolName.toLowerCase()));
+									if (associatedTask) {
+										const resultText = resultsBuffer[index]?.content?.[0]?.value || 'Completed successfully';
+										this.agentPlanner.updateTaskStatus(planId, associatedTask.id, 'completed', resultText);
+									}
+								}
+							}
 						} catch (error) {
 							const taskTime = Date.now() - taskStartTime;
 							const message =
@@ -568,6 +668,17 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 									},
 								],
 							};
+
+							// Update plan task status on failure
+							if (planId && this.agentPlanner && toolId) {
+								const plan = this.agentPlanner.getPlan(request.requestId);
+								if (plan) {
+									const associatedTask = plan.tasks.find(t => t.toolId === toolId || t.description.toLowerCase().includes(toolName.toLowerCase()));
+									if (associatedTask) {
+										this.agentPlanner.updateTaskStatus(planId, associatedTask.id, 'failed', undefined, message);
+									}
+								}
+							}
 						}
 					};
 

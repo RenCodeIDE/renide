@@ -37,6 +37,12 @@ import { CHATGPT_MODELS } from './models.js';
 import { ChatGPTAgentImplementation } from './agent.js';
 import { reduceMessageParts } from './utils.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
+import { IAgentPlanner } from '../../common/agentPlanner.js';
+import { IDependencyGraphService } from '../../common/dependencyGraphService.js';
+import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
+import { IFileService } from '../../../../../platform/files/common/files.js';
+import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
+import '../../common/agentIntelligence.contribution.js';
 
 class ChatGPTAgentContribution
 	extends Disposable
@@ -54,6 +60,7 @@ class ChatGPTAgentContribution
 		languageModelToolsService: ILanguageModelToolsService,
 		@ISecretStorageService private readonly secretStorageService: ISecretStorageService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@IInstantiationService private readonly instantiationService: IInstantiationService,
 	) {
 		super();
 
@@ -119,6 +126,36 @@ class ChatGPTAgentContribution
 		});
 		this._register(registration);
 
+		// Get optional services for planning
+		let agentPlanner: IAgentPlanner | undefined;
+		let dependencyGraphService: IDependencyGraphService | undefined;
+		let workspaceService: IWorkspaceContextService | undefined;
+		let fileService: IFileService | undefined;
+
+		try {
+			agentPlanner = this.instantiationService.invokeFunction(accessor => accessor.get(IAgentPlanner));
+		} catch {
+			// Service not available
+		}
+
+		try {
+			dependencyGraphService = this.instantiationService.invokeFunction(accessor => accessor.get(IDependencyGraphService));
+		} catch {
+			// Service not available
+		}
+
+		try {
+			workspaceService = this.instantiationService.invokeFunction(accessor => accessor.get(IWorkspaceContextService));
+		} catch {
+			// Service not available
+		}
+
+		try {
+			fileService = this.instantiationService.invokeFunction(accessor => accessor.get(IFileService));
+		} catch {
+			// Service not available
+		}
+
 		const implementation = new ChatGPTAgentImplementation(
 			this.requestService,
 			normalizedServerAddress,
@@ -128,6 +165,10 @@ class ChatGPTAgentContribution
 			languageModelToolsService,
 			languageModelsService,
 			this.configurationService,
+			agentPlanner,
+			dependencyGraphService,
+			workspaceService,
+			fileService,
 		);
 		this._register(this.chatAgentService.registerAgentImplementation(agentId, implementation));
 

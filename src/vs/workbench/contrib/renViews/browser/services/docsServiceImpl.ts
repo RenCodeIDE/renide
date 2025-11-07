@@ -4,13 +4,12 @@ import {
 	registerSingleton,
 	InstantiationType,
 } from "../../../../../platform/instantiation/common/extensions.js";
-import { IDocsService, ChunkDocs } from "./docsService.js";
+import { IDocsService, FileDocs } from "./docsService.js";
 import {
 	IStorageService,
 	StorageScope,
 	StorageTarget,
 } from "../../../../../platform/storage/common/storage.js";
-import { IChunkIndexService } from "./chunkIndexService.js";
 import { URI } from "../../../../../base/common/uri.js";
 import { IFileService } from "../../../../../platform/files/common/files.js";
 import {
@@ -22,22 +21,23 @@ import { ISecretStorageService } from "../../../../../platform/secrets/common/se
 import { IProductService } from "../../../../../platform/product/common/productService.js";
 import { ILogService } from "../../../../../platform/log/common/log.js";
 import { env } from "../../../../../base/common/process.js";
-import { IConfigurationService } from "../../../../../platform/configuration/common/configuration.js";
 import { CancellationToken } from "../../../../../base/common/cancellation.js";
 import { streamToBuffer } from "../../../../../base/common/buffer.js";
+import { ITextModelService, IResolvedTextEditorModel } from "../../../../../editor/common/services/resolverService.js";
+import { ILanguageFeaturesService } from "../../../../../editor/common/services/languageFeatures.js";
+import { SymbolKind } from "../../../../../editor/common/languages.js";
+import { IRange } from "../../../../../editor/common/core/range.js";
+import { IReference } from "../../../../../base/common/lifecycle.js";
+import { ITextModel } from "../../../../../editor/common/model.js";
 
 const STORAGE_KEY = "ren.docs.latest";
-const STORAGE_KEY_PREFIX_CHUNK = "ren.docs.content.";
+const STORAGE_KEY_PREFIX_FILE = "ren.docs.file.";
 const REN_AUTH_STORAGE_KEYS = {
 	ACCESS_TOKEN: "ren.auth.accessToken",
 };
 
-function getChunkId(uri: URI, hash: string): string {
-	return `${uri.toString()}#${hash}`;
-}
-
-function getChunkStorageKey(chunkId: string): string {
-	return `${STORAGE_KEY_PREFIX_CHUNK}${chunkId}`;
+function getFileStorageKey(uri: URI): string {
+	return `${STORAGE_KEY_PREFIX_FILE}${uri.toString()}`;
 }
 
 export class DocsService extends Disposable implements IDocsService {
@@ -46,27 +46,25 @@ export class DocsService extends Disposable implements IDocsService {
 	private readonly _onDidUpdateDocs = this._register(new Emitter<string>());
 	readonly onDidUpdateDocs = this._onDidUpdateDocs.event;
 
-	private readonly _onDidUpdateChunkDocs = this._register(
-		new Emitter<ChunkDocs>()
+	private readonly _onDidUpdateFileDocs = this._register(
+		new Emitter<FileDocs>()
 	);
-	readonly onDidUpdateChunkDocs = this._onDidUpdateChunkDocs.event;
+	readonly onDidUpdateFileDocs = this._onDidUpdateFileDocs.event;
 
 	private latest: string | undefined;
-	private chunkDocsCache: Map<string, ChunkDocs> = new Map();
-
-	private readonly symbolToChunkIndex: Map<string, string> = new Map();
+	private fileDocsCache: Map<string, FileDocs> = new Map();
 
 	constructor(
 		@IStorageService private readonly storageService: IStorageService,
-		@IChunkIndexService private readonly chunkIndexService: IChunkIndexService,
 		@IFileService private readonly fileService: IFileService,
 		@IRequestService private readonly requestService: IRequestService,
 		@ISecretStorageService
 		private readonly secretStorageService: ISecretStorageService,
 		@IProductService private readonly productService: IProductService,
 		@ILogService private readonly logService: ILogService,
-		@IConfigurationService
-		private readonly configurationService: IConfigurationService
+		@ITextModelService private readonly textModelService: ITextModelService,
+		@ILanguageFeaturesService
+		private readonly languageFeaturesService: ILanguageFeaturesService
 	) {
 		super();
 		this.latest = this.storageService.get(
@@ -74,33 +72,15 @@ export class DocsService extends Disposable implements IDocsService {
 			StorageScope.WORKSPACE,
 			undefined
 		);
-		this.loadChunkDocsFromStorage();
 	}
 
-	private loadChunkDocsFromStorage(): void {
-		// Load all chunk docs from storage (lazy load on access would be better, but this is simpler for now)
-		// We'll rely on getChunkDocs to load on-demand
-	}
-
-	private async getChunkText(
-		chunk: import("./chunkIndexService.js").ChunkRecord
-	): Promise<string> {
+	private async getFileContent(uri: URI): Promise<string> {
 		try {
-			const fileContent = await this.fileService.readFile(chunk.uri);
-			const content = fileContent.value.toString();
-			const lines = content.split(/\r?\n/);
-
-			if (chunk.range) {
-				// Extract lines for this chunk (1-indexed to 0-indexed)
-				const startLine = chunk.range.startLineNumber - 1;
-				const endLine = chunk.range.endLineNumber;
-				return lines.slice(startLine, endLine).join("\n");
-			}
-
-			return content;
+			const fileContent = await this.fileService.readFile(uri);
+			return fileContent.value.toString();
 		} catch (error) {
 			this.logService.error(
-				`[DocsService] Failed to read file for chunk: ${chunk.uri.fsPath}`,
+				`[DocsService] Failed to read file: ${uri.fsPath}`,
 				error
 			);
 			return "";
@@ -132,9 +112,7 @@ export class DocsService extends Disposable implements IDocsService {
 		);
 	}
 
-	private async generateChunkDocContent(
-		chunk: import("./chunkIndexService.js").ChunkRecord
-	): Promise<string> {
+	private async generateFileDocContent(uri: URI): Promise<string> {
 		try {
 			// Get access token
 			const accessToken = await this.secretStorageService.get(
@@ -144,16 +122,16 @@ export class DocsService extends Disposable implements IDocsService {
 				this.logService.warn(
 					"[DocsService] No access token available, using placeholder content"
 				);
-				return this.generatePlaceholderContent(chunk);
+				return this.generatePlaceholderContent(uri);
 			}
 
-			// Get chunk text
-			const chunkText = await this.getChunkText(chunk);
-			if (!chunkText.trim()) {
+			// Get file content
+			const fileContent = await this.getFileContent(uri);
+			if (!fileContent.trim()) {
 				this.logService.warn(
-					`[DocsService] Empty chunk text for ${chunk.uri.fsPath}`
+					`[DocsService] Empty file content for ${uri.fsPath}`
 				);
-				return this.generatePlaceholderContent(chunk);
+				return this.generatePlaceholderContent(uri);
 			}
 
 			// Get server address
@@ -161,38 +139,34 @@ export class DocsService extends Disposable implements IDocsService {
 			const endpoint = "/api/bg-agent/generate-docs";
 			const url = `${serverAddress}${endpoint}`;
 
-			// Prepare request payload
-			const fileExtension = chunk.uri.path.split(".").pop() || "";
+			// Prepare request payload - send entire file as single chunk
+			const fileExtension = uri.path.split(".").pop() || "";
 			const language = this.detectLanguage(fileExtension);
+
+			// Collect symbol/state summary to help documentation quality
+			const symbolSummary = await this.collectSymbolSummary(uri);
 
 			const payload = {
 				chunks: [
 					{
-						text: chunkText,
+						text: fileContent,
 						metadata: {
-							filePath: chunk.uri.fsPath,
+							filePath: uri.fsPath,
 							language: language,
-							startLine: chunk.range?.startLineNumber,
-							endLine: chunk.range?.endLineNumber,
-							functionName: chunk.refs.functions[0]?.name,
-							className: chunk.refs.symbols.find((s) => s.kind === "class")
-								?.name,
+							symbolSummary: symbolSummary,
 						},
 					},
 				],
 				options: {
 					documentationStyle: "markdown" as const,
-					includeExamples: true,
-					includeParameters: true,
+					includeExamples: false,
+					includeParameters: false,
 				},
 			};
 
 			// Make API call
 			this.logService.info(
-				`[DocsService] Generating docs for chunk ${chunk.hash.substring(
-					0,
-					8
-				)}...`
+				`[DocsService] Generating docs for file ${uri.fsPath}...`
 			);
 			const response = await this.requestService.request(
 				{
@@ -221,7 +195,7 @@ export class DocsService extends Disposable implements IDocsService {
 					}
 				}
 				this.logService.error(`[DocsService] API call failed: ${errorMessage}`);
-				return this.generatePlaceholderContent(chunk);
+				return this.generatePlaceholderContent(uri);
 			}
 
 			// Parse response
@@ -237,107 +211,271 @@ export class DocsService extends Disposable implements IDocsService {
 
 			if (!result) {
 				this.logService.warn(`[DocsService] API returned empty response`);
-				return this.generatePlaceholderContent(chunk);
+				return this.generatePlaceholderContent(uri);
 			}
 
 			if (result.documentation) {
 				this.logService.info(
-					`[DocsService] Successfully generated docs for chunk ${chunk.hash.substring(
-						0,
-						8
-					)}... (model: ${result.model})`
+					`[DocsService] Successfully generated docs for file ${uri.fsPath} (model: ${result.model})`
 				);
-				return this.enhanceWithClickableSymbols(chunk, result.documentation);
+				return result.documentation;
 			}
 
 			this.logService.warn(
 				`[DocsService] API response missing documentation field`
 			);
-			return this.generatePlaceholderContent(chunk);
+			return this.generatePlaceholderContent(uri);
 		} catch (error) {
 			this.logService.error(`[DocsService] Error generating docs:`, error);
-			return this.generatePlaceholderContent(chunk);
+			return this.generatePlaceholderContent(uri);
 		}
 	}
 
-	private buildSymbolKey(name: string, uri: URI, startLine?: number): string {
-		return `${name}|${uri.toString()}|${startLine ?? 0}`;
-	}
+	private async collectSymbolSummary(uri: URI): Promise<string | undefined> {
+		let reference: IReference<IResolvedTextEditorModel> | undefined;
+		try {
+			reference = await this.textModelService.createModelReference(uri);
+			const textModel = reference.object.textEditorModel;
+			const providers =
+				this.languageFeaturesService.documentSymbolProvider.all(textModel);
 
-	private buildSymbolCommandLink(args: {
-		uri: URI;
-		position?: { lineNumber: number; column: number };
-		symbolName?: string;
-		chunkId?: string;
-	}): string {
-		const payload = [
-			{
-				uri: args.uri.toJSON(),
-				position: args.position,
-				symbolName: args.symbolName,
-				chunkId: args.chunkId,
-			},
-		];
-		return `command:ren.symbol.open?${encodeURIComponent(
-			JSON.stringify(payload)
-		)}`;
-	}
+			const symbolNodes = await this.getDocumentSymbols(providers, textModel);
+			if (!symbolNodes || symbolNodes.length === 0) {
+				return undefined;
+			}
 
-	private enhanceWithClickableSymbols(
-		chunk: import("./chunkIndexService.js").ChunkRecord,
-		markdown: string
-	): string {
-		const enabled =
-			this.configurationService.getValue<boolean>(
-				"ren.docs.clickableSymbols.enabled"
-			) !== false;
-		if (!enabled) {
-			return markdown;
-		}
+			const topLevelLines: string[] = [];
+			const nestedLines: string[] = [];
+			const functionLines: string[] = [];
+			const stateLines: string[] = [];
 
-		const lines: string[] = [];
-		lines.push(markdown.trim());
-		lines.push("\n\n---\n");
-		lines.push(`### Symbols`);
+			const visit = (
+				symbol: SymbolNode,
+				depth: number,
+				ancestors: string[]
+			): void => {
+				const lineSpan = this.formatRange(symbol.range);
+				const kindLabel = this.describeSymbolKind(symbol.kind);
+				const parentName = ancestors[ancestors.length - 1];
 
-		const chunkId = getChunkId(chunk.uri, chunk.hash);
+				if (this.isSummarizableSymbol(symbol.kind)) {
+					if (depth === 0) {
+						const childNames = (symbol.children || [])
+							.filter((child) => this.isSummarizableSymbol(child.kind))
+							.map((child) => `\`${child.name}\``);
+						const childSuffix = childNames.length
+							? ` -> children: ${childNames.join(", ")}`
+							: "";
+						topLevelLines.push(
+							`- ${kindLabel} \`${symbol.name}\` (${lineSpan})${childSuffix}`
+						);
+					} else {
+						nestedLines.push(
+							`- ${kindLabel} \`${symbol.name}\` (${lineSpan}) inside ${parentName}`
+						);
+					}
+				}
 
-		// Index symbols and list them with links
-		const addEntry = (
-			name: string,
-			uri: URI,
-			startLine?: number,
-			startColumn?: number
-		) => {
-			const key = this.buildSymbolKey(name, uri, startLine);
-			this.symbolToChunkIndex.set(key, chunkId);
-			const link = this.buildSymbolCommandLink({
-				uri,
-				position:
-					startLine && startColumn
-						? { lineNumber: startLine, column: startColumn }
-						: undefined,
-				symbolName: name,
-				chunkId,
-			});
-			lines.push(`- [${name}](${link})`);
-		};
+				if (this.isFunctionSymbol(symbol.kind)) {
+					const context = parentName
+						? ` inside ${parentName}`
+						: " (top-level)";
+					functionLines.push(
+						`- \`${symbol.name}\` (${kindLabel}, ${lineSpan})${context}`
+					);
+				}
 
-		// From symbols
-		for (const s of chunk.refs.symbols ?? []) {
-			addEntry(s.name, s.uri, s.range?.startLineNumber, s.range?.startColumn);
-		}
-		// From functions
-		for (const f of chunk.refs.functions ?? []) {
-			addEntry(
-				f.name,
-				chunk.uri,
-				f.range?.startLineNumber,
-				f.range?.startColumn
+				if (this.isStateSymbol(symbol.kind)) {
+					const context = parentName
+						? `inside ${parentName}`
+						: "top-level";
+					stateLines.push(
+						`- \`${symbol.name}\` (${kindLabel}, ${lineSpan}) ${context}`
+					);
+				}
+
+				for (const child of symbol.children || []) {
+					visit(child, depth + 1, [...ancestors, symbol.name]);
+				}
+			};
+
+			for (const symbol of symbolNodes) {
+				visit(symbol, 0, []);
+			}
+
+			const sections: string[] = [];
+			if (topLevelLines.length > 0) {
+				sections.push(
+					"Top-Level Symbols:\n" + this.joinWithLimit(topLevelLines)
+				);
+			}
+			if (nestedLines.length > 0) {
+				sections.push(
+					"Nested Symbols:\n" + this.joinWithLimit(nestedLines)
+				);
+			}
+			if (stateLines.length > 0) {
+				sections.push("State Candidates:\n" + this.joinWithLimit(stateLines));
+			}
+			if (functionLines.length > 0) {
+				sections.push(
+					"Functions & Methods:\n" + this.joinWithLimit(functionLines)
+				);
+			}
+
+			if (sections.length === 0) {
+				return undefined;
+			}
+
+			return sections.join("\n\n");
+		} catch (error) {
+			this.logService.warn(
+				"[DocsService] Failed to collect symbol summary for docs:",
+				error
 			);
+			return undefined;
+		} finally {
+			reference?.dispose();
 		}
+	}
 
+	private async getDocumentSymbols(
+		providers: readonly any[],
+		textModel: ITextModel
+	): Promise<SymbolNode[] | undefined> {
+		let fallback: SymbolNode[] | undefined;
+		for (const provider of providers) {
+			try {
+				const result = await provider.provideDocumentSymbols(
+					textModel,
+					CancellationToken.None
+				);
+				if (!result) {
+					continue;
+				}
+
+				if (Array.isArray(result) && result.length > 0) {
+					// DocumentSymbol[] has children property
+					if (typeof result[0].children !== "undefined") {
+						return result.map((symbol: any) => this.convertDocumentSymbol(symbol));
+					}
+
+					// SymbolInformation[] – treat as flat list
+					if (!fallback) {
+						fallback = result.map((info: any) => this.convertSymbolInformation(info));
+					}
+				}
+			} catch (error) {
+				this.logService.debug(
+					"[DocsService] document symbol provider failed:",
+					error
+				);
+				continue;
+			}
+		}
+		return fallback;
+	}
+
+	private convertDocumentSymbol(symbol: any): SymbolNode {
+		return {
+			name: symbol.name,
+			kind: typeof symbol.kind === "number" ? symbol.kind : SymbolKind.Variable,
+			range: symbol.range as IRange,
+			children: (symbol.children || []).map((child: any) =>
+				this.convertDocumentSymbol(child)
+			),
+		};
+	}
+
+	private convertSymbolInformation(symbol: any): SymbolNode {
+		const range = symbol.location?.range || symbol.range;
+		return {
+			name: symbol.name,
+			kind: typeof symbol.kind === "number" ? symbol.kind : SymbolKind.Variable,
+			range: range as IRange,
+			children: [],
+		};
+	}
+
+	private formatRange(range: IRange): string {
+		if (!range) {
+			return "unknown lines";
+		}
+		const start = range.startLineNumber;
+		const end = range.endLineNumber;
+		return start === end ? `line ${start}` : `lines ${start}-${end}`;
+	}
+
+	private describeSymbolKind(kind: number): string {
+		switch (kind) {
+			case SymbolKind.Function:
+				return "function";
+			case SymbolKind.Method:
+				return "method";
+			case SymbolKind.Constructor:
+				return "constructor";
+			case SymbolKind.Class:
+				return "class";
+			case SymbolKind.Interface:
+				return "interface";
+			case SymbolKind.Module:
+				return "module";
+			case SymbolKind.Namespace:
+				return "namespace";
+			case SymbolKind.Enum:
+				return "enum";
+			case SymbolKind.Variable:
+				return "variable";
+			case SymbolKind.Constant:
+				return "const";
+			case SymbolKind.Property:
+				return "property";
+			case SymbolKind.Field:
+				return "field";
+			case SymbolKind.TypeParameter:
+				return "type";
+			default:
+				return "symbol";
+		}
+	}
+
+	private isSummarizableSymbol(kind: number): boolean {
+		return (
+			this.isFunctionSymbol(kind) ||
+			this.isStateSymbol(kind) ||
+			kind === SymbolKind.Class ||
+			kind === SymbolKind.Interface ||
+			kind === SymbolKind.Module ||
+			kind === SymbolKind.Namespace ||
+			kind === SymbolKind.Enum
+		);
+	}
+
+	private isFunctionSymbol(kind: number): boolean {
+		return (
+			kind === SymbolKind.Function ||
+			kind === SymbolKind.Method ||
+			kind === SymbolKind.Constructor
+		);
+	}
+
+	private isStateSymbol(kind: number): boolean {
+		return (
+			kind === SymbolKind.Variable ||
+			kind === SymbolKind.Constant ||
+			kind === SymbolKind.Property ||
+			kind === SymbolKind.Field ||
+			kind === SymbolKind.EnumMember
+		);
+	}
+
+	private joinWithLimit(lines: string[], max = 24): string {
+		if (lines.length <= max) {
 		return lines.join("\n");
+		}
+		const sliced = lines.slice(0, max);
+		sliced.push(`- ... (+${lines.length - max} more)`);
+		return sliced.join("\n");
 	}
 
 	private detectLanguage(fileExtension: string): string {
@@ -367,25 +505,12 @@ export class DocsService extends Disposable implements IDocsService {
 		return extensionMap[fileExtension.toLowerCase()] || fileExtension;
 	}
 
-	private generatePlaceholderContent(
-		chunk: import("./chunkIndexService.js").ChunkRecord
-	): string {
+	private generatePlaceholderContent(uri: URI): string {
 		// Fallback placeholder content
 		const lines: string[] = [];
-		lines.push(`# ${chunk.description || "Chunk Documentation"}`);
+		lines.push(`# File Documentation`);
 		lines.push("");
-		lines.push(`**File:** \`${chunk.uri.fsPath}\``);
-		lines.push(`**Hash:** \`${chunk.hash.substring(0, 16)}...\``);
-		if (chunk.parentHash) {
-			lines.push(
-				`**Parent Hash:** \`${chunk.parentHash.substring(0, 16)}...\``
-			);
-		}
-		if (chunk.range) {
-			lines.push(
-				`**Range:** Lines ${chunk.range.startLineNumber}-${chunk.range.endLineNumber}`
-			);
-		}
+		lines.push(`**File:** \`${uri.fsPath}\``);
 		lines.push("");
 		lines.push(`*Placeholder content - API call failed or not available*`);
 		return lines.join("\n");
@@ -413,66 +538,56 @@ export class DocsService extends Disposable implements IDocsService {
 	async generateDocsForFile(
 		uri: URI,
 		mode: "initialize" | "regenerate" = "regenerate"
-	): Promise<ChunkDocs[]> {
+	): Promise<FileDocs | undefined> {
 		this.logService.info(
 			`[DocsService] generateDocsForFile called for ${uri.fsPath}, mode: ${mode}`
 		);
-		const chunks = await this.chunkIndexService.getChunksForFile(uri);
-		this.logService.info(
-			`[DocsService] Found ${chunks.length} chunks for file`
-		);
-		const results: ChunkDocs[] = [];
 
-		for (const chunk of chunks) {
-			const chunkId = getChunkId(chunk.uri, chunk.hash);
-			this.logService.info(
-				`[DocsService] Processing chunk ${chunkId.substring(
-					chunkId.length - 8
-				)}...`
-			);
-			const content = await this.generateChunkDocContent(chunk);
-			const chunkDoc: ChunkDocs = {
-				chunkId,
+		// Generate file-level documentation
+		const content = await this.generateFileDocContent(uri);
+		const fileDoc: FileDocs = {
+			uri,
 				content,
 				format: "markdown",
 				generatedAt: Date.now(),
 			};
 
 			// Store in cache and storage
-			this.chunkDocsCache.set(chunkId, chunkDoc);
+		const fileUri = uri.toString();
+		this.fileDocsCache.set(fileUri, fileDoc);
 			this.logService.info(
-				`[DocsService] Stored chunk doc in cache: ${chunkId}, content length: ${content.length} chars`
+			`[DocsService] Stored file doc in cache: ${fileUri}, content length: ${content.length} chars`
 			);
-			const storageKey = getChunkStorageKey(chunkId);
+		const storageKey = getFileStorageKey(uri);
 			this.storageService.store(
 				storageKey,
-				JSON.stringify(chunkDoc),
+			JSON.stringify(fileDoc),
 				StorageScope.WORKSPACE,
 				StorageTarget.MACHINE
 			);
 			this.logService.info(
-				`[DocsService] Stored chunk doc in storage: ${storageKey}`
+			`[DocsService] Stored file doc in storage: ${storageKey}`
 			);
 
-			results.push(chunkDoc);
+		// Emit update event
+		this._onDidUpdateFileDocs.fire(fileDoc);
 			this.logService.info(
-				`[DocsService] Firing onDidUpdateChunkDocs event for chunk: ${chunkId}`
+			`[DocsService] Firing onDidUpdateFileDocs event for file: ${fileUri}`
 			);
-			this._onDidUpdateChunkDocs.fire(chunkDoc);
-		}
 
 		this.logService.info(
-			`[DocsService] generateDocsForFile completed, returning ${results.length} docs`
+			`[DocsService] generateDocsForFile completed for ${uri.fsPath}`
 		);
-		return results;
+		return fileDoc;
 	}
 
-	getChunkDocs(chunkId: string): ChunkDocs | undefined {
+	getFileDocs(uri: URI): FileDocs | undefined {
+		const fileUri = uri.toString();
 		// Check cache first
-		if (this.chunkDocsCache.has(chunkId)) {
-			const doc = this.chunkDocsCache.get(chunkId);
+		if (this.fileDocsCache.has(fileUri)) {
+			const doc = this.fileDocsCache.get(fileUri);
 			this.logService.debug(
-				`[DocsService] getChunkDocs: Found in cache for ${chunkId}, content length: ${
+				`[DocsService] getFileDocs: Found in cache for ${fileUri}, content length: ${
 					doc?.content.length || 0
 				}`
 			);
@@ -480,10 +595,10 @@ export class DocsService extends Disposable implements IDocsService {
 		}
 
 		this.logService.debug(
-			`[DocsService] getChunkDocs: Not in cache, checking storage for ${chunkId}`
+			`[DocsService] getFileDocs: Not in cache, checking storage for ${fileUri}`
 		);
 		// Load from storage
-		const storageKey = getChunkStorageKey(chunkId);
+		const storageKey = getFileStorageKey(uri);
 		const stored = this.storageService.get(
 			storageKey,
 			StorageScope.WORKSPACE,
@@ -491,149 +606,48 @@ export class DocsService extends Disposable implements IDocsService {
 		);
 		if (stored) {
 			try {
-				const chunkDoc = JSON.parse(stored) as ChunkDocs;
-				this.chunkDocsCache.set(chunkId, chunkDoc);
+				const fileDoc = JSON.parse(stored) as FileDocs;
+				this.fileDocsCache.set(fileUri, fileDoc);
 				this.logService.debug(
-					`[DocsService] getChunkDocs: Loaded from storage for ${chunkId}, content length: ${chunkDoc.content.length}`
+					`[DocsService] getFileDocs: Loaded from storage for ${fileUri}, content length: ${fileDoc.content.length}`
 				);
-				return chunkDoc;
+				return fileDoc;
 			} catch (e) {
 				this.logService.error(
-					"[DocsService] Failed to parse stored chunk docs:",
+					"[DocsService] Failed to parse stored file docs:",
 					e
 				);
 			}
 		} else {
 			this.logService.debug(
-				`[DocsService] getChunkDocs: No stored doc found for ${chunkId}`
+				`[DocsService] getFileDocs: No stored doc found for ${fileUri}`
 			);
 		}
 
 		return undefined;
 	}
 
-	listDocsForFile(uri: URI): ChunkDocs[] {
-		const chunks = this.chunkIndexService.listFileChunks(uri);
-		const docs: ChunkDocs[] = [];
-
-		for (const chunk of chunks) {
-			const chunkId = getChunkId(chunk.uri, chunk.hash);
-			const doc = this.getChunkDocs(chunkId);
-			if (doc) {
-				docs.push(doc);
-			}
-		}
-
-		return docs.sort((a, b) => a.generatedAt - b.generatedAt);
-	}
-
-	async refreshChangedChunks(
-		uri: URI,
-		changedChunkHashes: string[]
-	): Promise<ChunkDocs[]> {
-		const chunks = await this.chunkIndexService.getChunksForFile(uri);
-		const results: ChunkDocs[] = [];
-
-		for (const chunk of chunks) {
-			if (changedChunkHashes.includes(chunk.hash)) {
-				const chunkId = getChunkId(chunk.uri, chunk.hash);
-				const content = await this.generateChunkDocContent(chunk);
-				const chunkDoc: ChunkDocs = {
-					chunkId,
-					content,
-					format: "markdown",
-					generatedAt: Date.now(),
-				};
-
-				this.chunkDocsCache.set(chunkId, chunkDoc);
-				const storageKey = getChunkStorageKey(chunkId);
-				this.storageService.store(
-					storageKey,
-					JSON.stringify(chunkDoc),
-					StorageScope.WORKSPACE,
-					StorageTarget.MACHINE
-				);
-
-				results.push(chunkDoc);
-				this._onDidUpdateChunkDocs.fire(chunkDoc);
-			}
-		}
-
-		return results;
-	}
-
-	async regenerateChunk(chunkId: string): Promise<ChunkDocs | undefined> {
-		// Get chunk from chunk index
-		const chunk = this.chunkIndexService.getChunk(chunkId);
-		if (!chunk) {
-			console.warn(
-				`[DocsService] regenerateChunk: Chunk not found for chunkId: ${chunkId}`
-			);
-			return undefined;
-		}
-
-		// Generate new doc content
-		const content = await this.generateChunkDocContent(chunk);
-		const chunkDoc: ChunkDocs = {
-			chunkId,
-			content,
-			format: "markdown",
-			generatedAt: Date.now(),
-		};
-
-		// Store in cache and storage
-		this.chunkDocsCache.set(chunkId, chunkDoc);
-		const storageKey = getChunkStorageKey(chunkId);
-		this.storageService.store(
-			storageKey,
-			JSON.stringify(chunkDoc),
-			StorageScope.WORKSPACE,
-			StorageTarget.MACHINE
-		);
-
-		// Emit update event
-		this._onDidUpdateChunkDocs.fire(chunkDoc);
-
-		console.log(
-			`[DocsService] Regenerated chunk ${chunkId} for file ${chunk.uri.fsPath}`
-		);
-
-		return chunkDoc;
-	}
-
 	async removeDocsForFile(uri: URI): Promise<void> {
-		// Get old chunks before they're removed (if they exist)
-		const oldChunks = this.chunkIndexService.listFileChunks(uri);
 		const fileUri = uri.toString();
 
-		// Remove docs for all old chunks
-		for (const chunk of oldChunks) {
-			const chunkId = getChunkId(chunk.uri, chunk.hash);
-
 			// Remove from cache
-			this.chunkDocsCache.delete(chunkId);
+		this.fileDocsCache.delete(fileUri);
 
 			// Remove from storage
-			const storageKey = getChunkStorageKey(chunkId);
+		const storageKey = getFileStorageKey(uri);
 			this.storageService.remove(storageKey, StorageScope.WORKSPACE);
-		}
 
-		// Also clean up any orphaned docs in cache that match this file URI
-		// (in case chunks were removed without calling this method)
-		const uriPrefix = fileUri + "#";
-		for (const chunkId of this.chunkDocsCache.keys()) {
-			if (chunkId.startsWith(uriPrefix)) {
-				// Check if this chunkId still exists in chunk index
-				const chunk = this.chunkIndexService.getChunk(chunkId);
-				if (!chunk) {
-					// Orphaned doc - remove it
-					this.chunkDocsCache.delete(chunkId);
-					const storageKey = getChunkStorageKey(chunkId);
-					this.storageService.remove(storageKey, StorageScope.WORKSPACE);
-				}
-			}
-		}
+		this.logService.info(
+			`[DocsService] Removed file docs for ${uri.fsPath}`
+		);
 	}
 }
 
 registerSingleton(IDocsService, DocsService, InstantiationType.Delayed);
+
+interface SymbolNode {
+	name: string;
+	kind: number;
+	range: IRange;
+	children: SymbolNode[];
+}

@@ -45,6 +45,23 @@ export interface IToolData {
 	 */
 	runsInWorkspace?: boolean;
 	alwaysDisplayInputOutput?: boolean;
+	/**
+	 * Orchestration metadata for planning and dependency management
+	 */
+	orchestration?: {
+		/**
+		 * Estimated cost/complexity (1-10 scale)
+		 */
+		cost?: number;
+		/**
+		 * Estimated latency in milliseconds
+		 */
+		latency?: number;
+		/**
+		 * Tool IDs that should run before this tool
+		 */
+		prerequisites?: readonly string[];
+	};
 }
 
 export interface IToolProgressStep {

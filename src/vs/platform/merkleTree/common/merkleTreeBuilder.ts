@@ -10,6 +10,7 @@ import { ILogService } from '../../log/common/log.js';
 import { MerkleTreeNode, FileChunk } from './merkleTreeTypes.js';
 import { isExcludedStaticDir, REPO_SIZE_THRESHOLDS, DEFAULT_CONFIG } from './merkleTreeConstants.js';
 import { join } from '../../../base/common/path.js';
+import { GitIgnoreFilter } from './gitIgnoreFilter.js';
 
 export interface MerkleTreeBuilderOptions {
 	lazyTracking?: boolean;
@@ -27,6 +28,8 @@ export class MerkleTreeBuilder {
 	private fileCount = 0;
 	private readonly chunkSizeLines: number;
 	private readonly enableChunkedHashing: boolean;
+	private gitIgnoreFilter: { initialize(): Promise<void>; shouldIgnore(path: string, isDir: boolean): boolean } | undefined;
+	private gitIgnoreInitPromise: Promise<void> | undefined;
 
 	constructor(
 		private readonly fileService: IFileService,
@@ -36,6 +39,74 @@ export class MerkleTreeBuilder {
 	) {
 		this.chunkSizeLines = options.chunkSizeLines ?? DEFAULT_CONFIG.chunkSizeLines;
 		this.enableChunkedHashing = options.enableChunkedHashing ?? DEFAULT_CONFIG.enableChunkedHashing;
+	}
+
+	private resetState(): void {
+		this.trackedFiles.clear();
+		this.fileHashes.clear();
+		this.fileChunks.clear();
+		this.fileCount = 0;
+	}
+
+	private async ensureGitIgnoreReady(): Promise<void> {
+		if (!this.gitIgnoreFilter) {
+			const workspacePath = this.options.workspaceRoot.fsPath;
+			this.gitIgnoreFilter = new GitIgnoreFilter(workspacePath, this.logService);
+			this.gitIgnoreInitPromise = this.gitIgnoreFilter
+				.initialize()
+				.catch((error) => {
+					this.logService.warn(
+							`[MerkleTree] Failed to load gitignore patterns for ${workspacePath}: ${String(error)}`
+					);
+					this.gitIgnoreFilter = undefined;
+				});
+		}
+
+		if (this.gitIgnoreInitPromise) {
+			try {
+				await this.gitIgnoreInitPromise;
+			} finally {
+				this.gitIgnoreInitPromise = undefined;
+			}
+		}
+	}
+
+	private shouldIgnore(relativePath: string, isDirectory: boolean): boolean {
+		if (!relativePath) {
+			return false;
+		}
+		if (relativePath.endsWith('.gitignore')) {
+			return true;
+		}
+		if (this.options.excludeStaticDirs && isExcludedStaticDir(relativePath)) {
+			return true;
+		}
+		return this.gitIgnoreFilter?.shouldIgnore(relativePath, isDirectory) ?? false;
+	}
+
+	private logHashEvent(
+		type: 'file' | 'directory',
+		relativePath: string,
+		oldHash: string | undefined,
+		newHash: string,
+		wasExisting: boolean
+	): void {
+		const truncatedOld = oldHash ? `${oldHash.substring(0, 12)}...` : 'none';
+		const truncatedNew = newHash ? `${newHash.substring(0, 12)}...` : 'none';
+
+		if (!wasExisting) {
+			this.logService.info(
+				`[MerkleTree] Created ${type} hash for ${relativePath}: ${truncatedNew}`
+			);
+		} else if (oldHash !== newHash) {
+			this.logService.info(
+				`[MerkleTree] Updated ${type} hash for ${relativePath}: ${truncatedOld} → ${truncatedNew}`
+			);
+		} else {
+			this.logService.debug(
+				`[MerkleTree] ${type} hash unchanged for ${relativePath}: ${truncatedNew}`
+			);
+		}
 	}
 
 	/**
@@ -66,39 +137,7 @@ export class MerkleTreeBuilder {
 	 */
 	async buildInitialTree(): Promise<MerkleTreeNode> {
 		this.logService.info('[MerkleTree] Starting initial tree build...');
-		
-		if (this.options.lazyTracking) {
-			// Lazy tracking: only track files that are currently open or recently modified
-			return this.buildLazyTree();
-		} else {
-			// Full tree: scan all files
-			return this.buildFullTree();
-		}
-	}
-
-	/**
-	 * Build tree with lazy tracking (only track changed/queried files)
-	 */
-	private async buildLazyTree(): Promise<MerkleTreeNode> {
-		this.logService.info('[MerkleTree] Building lazy tree (only tracking active files)');
-		
-		// Start with root directory
-		const rootNode: MerkleTreeNode = {
-			hash: '',
-			path: '',
-			type: 'directory',
-			children: [],
-		};
-
-		// For lazy tracking, we only build the directory structure initially
-		// Files will be added as they're tracked
-		await this.buildDirectoryStructure(this.options.workspaceRoot, rootNode);
-
-		// Calculate root hash (directory structure only, files will be added on-demand)
-		rootNode.hash = await this.hashDirectory(rootNode);
-
-		this.logService.info(`[MerkleTree] Lazy tree built with ${this.fileCount} files tracked`);
-		return rootNode;
+		return this.buildFullTree();
 	}
 
 	/**
@@ -106,54 +145,188 @@ export class MerkleTreeBuilder {
 	 */
 	private async buildFullTree(): Promise<MerkleTreeNode> {
 		this.logService.info('[MerkleTree] Building full tree (scanning all files)');
+		this.resetState();
+		await this.ensureGitIgnoreReady();
 		
 		const rootNode: MerkleTreeNode = {
 			hash: '',
 			path: '',
 			type: 'directory',
 			children: [],
+			workspaceId: this.options.workspaceRoot.toString(),
 		};
 
 		await this.buildTreeRecursive(this.options.workspaceRoot, rootNode, '');
 
 		rootNode.hash = await this.hashDirectory(rootNode);
+		this.logHashEvent('directory', '/', undefined, rootNode.hash, false);
 
 		this.logService.info(`[MerkleTree] Full tree built with ${this.fileCount} files`);
 		return rootNode;
 	}
 
-	/**
-	 * Build directory structure only (for sparse/lazy trees)
-	 */
-	private async buildDirectoryStructure(uri: URI, parentNode: MerkleTreeNode): Promise<void> {
+	async refreshExistingTree(tree: MerkleTreeNode): Promise<MerkleTreeNode> {
+		this.logService.info('[MerkleTree] Refreshing existing Merkle tree with full rescan');
+		this.resetState();
+		await this.ensureGitIgnoreReady();
+
+		const previousRootHash = tree.hash;
+		tree.path = '';
+		tree.type = 'directory';
+		tree.workspaceId = this.options.workspaceRoot.toString();
+		tree.children = tree.children ?? [];
+
+		await this.refreshDirectory(this.options.workspaceRoot, tree, '');
+
+		tree.hash = await this.hashDirectory(tree);
+		this.logHashEvent(
+			'directory',
+			'/',
+			previousRootHash,
+			tree.hash,
+			Boolean(previousRootHash)
+		);
+
+		this.logService.info(`[MerkleTree] Refresh complete with ${this.fileCount} files processed`);
+		return tree;
+	}
+
+	private async refreshDirectory(uri: URI, node: MerkleTreeNode, relativePath: string): Promise<void> {
 		try {
 			const stat = await this.fileService.resolve(uri, { resolveMetadata: true });
-			
+			const existingChildren = new Map<string, MerkleTreeNode>();
+			if (node.children) {
+				for (const existing of node.children) {
+					existingChildren.set(existing.path, existing);
+				}
+			}
+
+			const nextChildren: MerkleTreeNode[] = [];
+			const workspaceId = this.options.workspaceRoot.toString();
+
 			if (stat.isDirectory && stat.children) {
 				for (const child of stat.children) {
-					const childPath = child.resource.fsPath;
-					const relativePath = this.getRelativePath(childPath);
-					
-					// Skip excluded directories
-					if (this.options.excludeStaticDirs && isExcludedStaticDir(relativePath)) {
+					const childRelativePath = relativePath ? join(relativePath, child.name) : child.name;
+
+					if (this.shouldIgnore(childRelativePath, !!child.isDirectory)) {
+						this.logService.debug(
+							`[MerkleTree] Skipping ignored ${child.isDirectory ? 'directory' : 'file'} ${childRelativePath}`
+						);
 						continue;
 					}
 
+					const existingNode = existingChildren.get(childRelativePath);
+
 					if (child.isDirectory) {
-						const dirNode: MerkleTreeNode = {
-							hash: '',
-							path: relativePath,
-							type: 'directory',
-							children: [],
-						};
-						
-						parentNode.children!.push(dirNode);
-						await this.buildDirectoryStructure(child.resource, dirNode);
+						let dirNode: MerkleTreeNode;
+						if (existingNode && existingNode.type !== 'directory') {
+							this.logService.info(
+								`[MerkleTree] Path ${childRelativePath} changed from ${existingNode.type} to directory`
+							);
+						}
+						if (existingNode && existingNode.type === 'directory') {
+							dirNode = existingNode;
+							dirNode.children = dirNode.children ?? [];
+							dirNode.workspaceId = workspaceId;
+						} else {
+							dirNode = {
+								hash: '',
+								path: childRelativePath,
+								type: 'directory',
+								children: [],
+								workspaceId,
+							};
+						}
+
+						nextChildren.push(dirNode);
+						existingChildren.delete(childRelativePath);
+						await this.refreshDirectory(child.resource, dirNode, childRelativePath);
+					} else {
+						let fileNode: MerkleTreeNode;
+						let wasExisting = false;
+						if (existingNode && existingNode.type === 'file') {
+							fileNode = existingNode;
+							wasExisting = true;
+						} else {
+							if (existingNode && existingNode.type === 'directory') {
+								this.logService.info(
+									`[MerkleTree] Path ${childRelativePath} changed from directory to file`
+								);
+							}
+							fileNode = {
+								hash: '',
+								path: childRelativePath,
+								type: 'file',
+							};
+						}
+
+						existingChildren.delete(childRelativePath);
+
+						const previousHash = wasExisting ? fileNode.hash : undefined;
+						let fileHash: string;
+						let chunks: FileChunk[] | undefined;
+
+						if (this.enableChunkedHashing) {
+							const result = await this.hashFileChunked(child.resource);
+							fileHash = result.fileHash;
+							chunks = result.chunks;
+						} else {
+							fileHash = await this.hashFile(child.resource);
+						}
+
+						fileNode.hash = fileHash;
+						fileNode.fileHash = fileHash;
+						fileNode.chunks = chunks;
+						fileNode.size = child.size;
+						fileNode.mtime = child.mtime;
+						fileNode.isTracked = true;
+
+						nextChildren.push(fileNode);
+						this.fileCount++;
+						this.trackedFiles.add(childRelativePath);
+						this.fileHashes.set(childRelativePath, fileHash);
+						if (chunks) {
+							this.fileChunks.set(childRelativePath, chunks);
+						}
+
+						this.logHashEvent(
+							'file',
+							childRelativePath,
+							previousHash,
+							fileHash,
+							wasExisting && previousHash !== undefined
+						);
 					}
 				}
 			}
+
+			for (const [stalePath, staleNode] of existingChildren.entries()) {
+				if (staleNode.type === 'file') {
+					this.logService.info(`[MerkleTree] Removed file from Merkle tree: ${stalePath}`);
+					this.trackedFiles.delete(stalePath);
+					this.fileHashes.delete(stalePath);
+					this.fileChunks.delete(stalePath);
+				} else {
+					this.logService.info(`[MerkleTree] Removed directory from Merkle tree: ${stalePath}`);
+				}
+			}
+
+			nextChildren.sort((a, b) => a.path.localeCompare(b.path));
+			node.children = nextChildren;
+
+			const previousHash = node.hash;
+			node.hash = await this.hashDirectory(node);
+			if (relativePath) {
+				this.logHashEvent(
+					'directory',
+					relativePath,
+					previousHash,
+					node.hash,
+					Boolean(previousHash)
+				);
+			}
 		} catch (error) {
-			this.logService.warn(`[MerkleTree] Error building directory structure for ${uri.fsPath}: ${error}`);
+			this.logService.warn(`[MerkleTree] Error refreshing directory ${uri.fsPath}: ${error}`);
 		}
 	}
 
@@ -165,11 +338,17 @@ export class MerkleTreeBuilder {
 			const stat = await this.fileService.resolve(uri, { resolveMetadata: true });
 			
 			if (stat.isDirectory && stat.children) {
+				const parentPreviousHash = parentNode.hash;
+				const workspaceId = this.options.workspaceRoot.toString();
+
 				for (const child of stat.children) {
 					const childRelativePath = relativePath ? join(relativePath, child.name) : child.name;
-					
-					// Skip excluded directories
-					if (this.options.excludeStaticDirs && isExcludedStaticDir(childRelativePath)) {
+
+					// Skip ignored entries
+					if (this.shouldIgnore(childRelativePath, !!child.isDirectory)) {
+						this.logService.debug(
+							`[MerkleTree] Skipping ignored ${child.isDirectory ? 'directory' : 'file'} ${childRelativePath}`
+						);
 						continue;
 					}
 
@@ -179,15 +358,17 @@ export class MerkleTreeBuilder {
 							path: childRelativePath,
 							type: 'directory',
 							children: [],
+							workspaceId,
 						};
-						
+
 						parentNode.children!.push(dirNode);
 						await this.buildTreeRecursive(child.resource, dirNode, childRelativePath);
 					} else {
 						// File node
+						const previousHash = this.fileHashes.get(childRelativePath);
 						let fileHash: string;
 						let chunks: FileChunk[] | undefined;
-						
+
 						if (this.enableChunkedHashing) {
 							const result = await this.hashFileChunked(child.resource);
 							fileHash = result.fileHash;
@@ -195,7 +376,7 @@ export class MerkleTreeBuilder {
 						} else {
 							fileHash = await this.hashFile(child.resource);
 						}
-						
+
 						const fileNode: MerkleTreeNode = {
 							hash: fileHash,
 							path: childRelativePath,
@@ -206,16 +387,35 @@ export class MerkleTreeBuilder {
 							mtime: child.mtime,
 							isTracked: true,
 						};
-						
+
 						parentNode.children!.push(fileNode);
 						this.fileCount++;
 						this.trackedFiles.add(childRelativePath);
 						this.fileHashes.set(childRelativePath, fileHash);
+						if (chunks) {
+							this.fileChunks.set(childRelativePath, chunks);
+						}
+						this.logHashEvent(
+							'file',
+							childRelativePath,
+							previousHash,
+							fileHash,
+							previousHash !== undefined
+						);
 					}
 				}
 
-				// Hash directory after children are added
+				parentNode.children!.sort((a, b) => a.path.localeCompare(b.path));
 				parentNode.hash = await this.hashDirectory(parentNode);
+				if (relativePath) {
+					this.logHashEvent(
+						'directory',
+						relativePath,
+						parentPreviousHash,
+						parentNode.hash,
+						Boolean(parentPreviousHash)
+					);
+				}
 			}
 		} catch (error) {
 			this.logService.warn(`[MerkleTree] Error building tree for ${uri.fsPath}: ${error}`);

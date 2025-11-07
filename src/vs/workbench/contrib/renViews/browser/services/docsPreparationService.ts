@@ -1,0 +1,365 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import { Disposable, toDisposable } from '../../../../../base/common/lifecycle.js';
+import { URI } from '../../../../../base/common/uri.js';
+import { joinPath, relativePath } from '../../../../../base/common/resources.js';
+import { ILogService } from '../../../../../platform/log/common/log.js';
+import { createDecorator } from '../../../../../platform/instantiation/common/instantiation.js';
+import { registerSingleton, InstantiationType } from '../../../../../platform/instantiation/common/extensions.js';
+import { IMerkleTreeService, MerkleTreeNode } from '../../../../../platform/merkleTree/common/merkleTreeService.js';
+import { FileChunk } from '../../../../../platform/merkleTree/common/merkleTreeTypes.js';
+import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
+import { IDocsService, FileDocs } from './docsService.js';
+import { IChunkIndexService, ChunkRecord } from './chunkIndexService.js';
+import { IOutlineModelService } from '../../../../../editor/contrib/documentSymbols/browser/outlineModel.js';
+import { ITextModelService } from '../../../../../editor/common/services/resolverService.js';
+import { ILanguageFeaturesService } from '../../../../../editor/common/services/languageFeatures.js';
+import { CancellationToken } from '../../../../../base/common/cancellation.js';
+import { Range } from '../../../../../editor/common/core/range.js';
+import { Position } from '../../../../../editor/common/core/position.js';
+import { Location, LocationLink } from '../../../../../editor/common/languages.js';
+import { ITextModel } from '../../../../../editor/common/model.js';
+import { Emitter } from '../../../../../base/common/event.js';
+
+export const IDocsPreparationService = createDecorator<IDocsPreparationService>('docsPreparationService');
+
+export interface IDocsPreparationService {
+	readonly _serviceBrand: undefined;
+	prepareWorkspace(force?: boolean): Promise<void>;
+	prepareFile(uri: URI): Promise<void>;
+}
+
+export class DocsPreparationService
+	extends Disposable
+	implements IDocsPreparationService
+{
+	declare readonly _serviceBrand: undefined;
+
+	private lastProcessedRootHash: string | undefined;
+	private processingQueue: Promise<void> = Promise.resolve();
+	private readonly onWillProcessFileEmitter = new Emitter<URI>();
+	readonly onWillProcessFile = this.onWillProcessFileEmitter.event;
+
+	constructor(
+		@IMerkleTreeService private readonly merkleTreeService: IMerkleTreeService,
+		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
+		@IDocsService private readonly docsService: IDocsService,
+		@IChunkIndexService private readonly chunkIndexService: IChunkIndexService,
+		@IOutlineModelService private readonly outlineModelService: IOutlineModelService,
+		@ITextModelService private readonly textModelService: ITextModelService,
+		@ILanguageFeaturesService private readonly languageFeaturesService: ILanguageFeaturesService,
+		@ILogService private readonly logService: ILogService
+	) {
+		super();
+
+		this._register(
+			this.merkleTreeService.onDidChangeTree(async ({ newHash }) => {
+				await this.prepareWorkspace(false, newHash);
+			})
+		);
+		this._register(toDisposable(() => this.onWillProcessFileEmitter.dispose()));
+	}
+
+	prepareWorkspace(force = false, targetRootHash?: string): Promise<void> {
+		this.processingQueue = this.processingQueue
+			.then(() => this.prepareWorkspaceInternal(force, targetRootHash))
+			.catch((error) => {
+				this.logService.error(`[DocsPrep] Failed to prepare workspace docs: ${error}`);
+			});
+		return this.processingQueue;
+	}
+
+	async prepareFile(uri: URI): Promise<void> {
+		const workspaceRoot = this.getWorkspaceRoot();
+		if (!workspaceRoot) {
+			return;
+		}
+
+
+		await this.processFileUri(uri, workspaceRoot);
+	}
+
+	private async prepareWorkspaceInternal(force: boolean, targetRootHash?: string): Promise<void> {
+		const workspaceRoot = this.getWorkspaceRoot();
+		if (!workspaceRoot) {
+			this.logService.warn('[DocsPrep] Skipping workspace preparation because no workspace folder is open');
+			return;
+		}
+
+		let tree: MerkleTreeNode;
+		try {
+			tree = await this.merkleTreeService.getTree();
+		} catch (error) {
+			this.logService.warn(`[DocsPrep] Unable to fetch Merkle tree: ${error}`);
+			return;
+		}
+
+		if (!force && this.lastProcessedRootHash === tree.hash) {
+			return;
+		}
+
+		if (targetRootHash && tree.hash !== targetRootHash) {
+			// Tree updated again, defer to next invocation.
+			return;
+		}
+
+		this.lastProcessedRootHash = tree.hash;
+		this.logService.info(`[DocsPrep] Preparing documentation for workspace. Root hash ${tree.hash.substring(0, 16)}...`);
+
+		await this.processNode(tree, workspaceRoot);
+	}
+
+	private async processNode(node: MerkleTreeNode, workspaceRoot: URI): Promise<void> {
+		if (node.type === 'file') {
+			const fileUri = this.toWorkspaceUri(node.path, workspaceRoot);
+			await this.processFileNode(node, fileUri);
+		}
+
+		if (node.children) {
+			for (const child of node.children) {
+				await this.processNode(child, workspaceRoot);
+			}
+		}
+	}
+
+	private async processFileNode(node: MerkleTreeNode, fileUri: URI): Promise<void> {
+		try {
+			this.onWillProcessFileEmitter.fire(fileUri);
+
+			const relativePath = node.path;
+			const fileChunks = node.chunks ?? (await this.merkleTreeService.getFileChunks(relativePath)) ?? [];
+			if (fileChunks.length === 0) {
+				this.logService.debug(`[DocsPrep] No chunks available for ${relativePath}, skipping`);
+				return;
+			}
+
+			const storedChunks = await this.chunkIndexService.getChunksForFile(fileUri);
+			const storedHashes = storedChunks.map((chunk) => chunk.hash);
+			const currentHashes = fileChunks.map((chunk) => chunk.hash);
+			const hashesChanged =
+				storedHashes.length !== currentHashes.length ||
+				currentHashes.some((hash, index) => hash !== storedHashes[index]);
+
+			if (hashesChanged) {
+				this.logService.info(
+					`[DocsPrep] Chunk hashes changed for ${relativePath}. Rebuilding metadata and documentation.`
+				);
+				await this.chunkIndexService.removeChunksForFile(fileUri);
+				await this.createChunkMetadata(fileUri, fileChunks);
+				const mode = storedHashes.length > 0 ? 'regenerate' : 'initialize';
+				const doc = await this.docsService.generateDocsForFile(fileUri, mode);
+				if (doc) {
+					await this.logDocGeneration(relativePath, doc);
+				}
+			} else {
+				const existingDoc = this.docsService.getFileDocs(fileUri);
+				if (!existingDoc) {
+					this.logService.info(
+						`[DocsPrep] No existing documentation for ${relativePath}. Generating initial docs.`
+					);
+					const doc = await this.docsService.generateDocsForFile(fileUri, 'initialize');
+					if (doc) {
+						await this.logDocGeneration(relativePath, doc);
+					}
+				}
+			}
+		} catch (error) {
+			this.logService.warn(`[DocsPrep] Failed to process ${node.path}: ${error}`);
+		}
+	}
+
+	private async createChunkMetadata(fileUri: URI, chunks: FileChunk[]): Promise<void> {
+		for (let index = 0; index < chunks.length; index++) {
+			const fileChunk = chunks[index];
+			const symbols = await this.extractSymbolsForRange(
+				fileUri,
+				fileChunk.startLine,
+				fileChunk.endLine
+			);
+
+			const chunk: ChunkRecord = {
+				uri: fileUri,
+				hash: fileChunk.hash,
+				parentHash: fileChunk.parentHash,
+				description: `Chunk ${index + 1} (lines ${fileChunk.startLine + 1}-${fileChunk.endLine})`,
+				range: new Range(fileChunk.startLine + 1, 1, fileChunk.endLine, 1),
+				refs: {
+					symbols,
+					files: [],
+					functions: [],
+				},
+				updatedAt: Date.now(),
+			};
+
+			await this.chunkIndexService.upsertChunk(chunk);
+			this.logService.info(
+				`[DocsPrep] Stored chunk hash for ${fileUri.fsPath} [${fileChunk.startLine + 1}-${fileChunk.endLine}]: ${fileChunk.hash.substring(0, 12)}...`
+			);
+		}
+	}
+
+	private async extractSymbolsForRange(
+		uri: URI,
+		startLine: number,
+		endLine: number
+	): Promise<ChunkRecord['refs']['symbols']> {
+		const reference = await this.textModelService.createModelReference(uri);
+		try {
+			const textModel = reference.object.textEditorModel;
+			const outline = await this.outlineModelService.getOrCreate(textModel, CancellationToken.None);
+			const topLevelSymbols = outline.getTopLevelSymbols();
+
+			const symbols: ChunkRecord['refs']['symbols'] = [];
+			for (const symbol of topLevelSymbols) {
+				if (
+					symbol.range.startLineNumber >= startLine + 1 &&
+					symbol.range.endLineNumber <= endLine + 1
+				) {
+					const symbolPosition = new Position(symbol.selectionRange.startLineNumber, symbol.selectionRange.startColumn);
+					const originUri = await this.resolveSymbolOrigin(textModel, symbolPosition);
+
+					symbols.push({
+						name: symbol.name,
+						kind: symbol.kind.toString(),
+						uri: originUri,
+						range: symbol.range,
+					});
+				}
+			}
+			return symbols;
+		} finally {
+			reference.dispose();
+		}
+	}
+
+	private async resolveSymbolOrigin(textModel: ITextModel, position: Position): Promise<URI> {
+		const definitionProviders = this.languageFeaturesService.definitionProvider.all(textModel);
+		for (const provider of definitionProviders) {
+			try {
+				const result = await provider.provideDefinition(textModel, position, CancellationToken.None);
+				const linkArray: readonly (Location | LocationLink)[] = Array.isArray(result)
+					? result
+					: result
+						? [result as Location]
+						: [];
+
+				for (const link of linkArray) {
+					if (link && (link as Location).uri) {
+						return (link as Location).uri;
+					}
+				}
+			} catch (error) {
+				this.logService.debug(`[DocsPrep] Definition provider failed: ${error}`);
+			}
+		}
+
+		return textModel.uri;
+	}
+
+	private async logDocGeneration(relativePath: string, doc: FileDocs): Promise<void> {
+		try {
+			const docHash = await this.hashString(doc.content);
+			this.logService.info(
+				`[DocsPrep] Generated documentation for ${relativePath}. Doc hash ${docHash.substring(0, 16)}..., generated at ${new Date(doc.generatedAt).toISOString()}`
+			);
+		} catch (error) {
+			this.logService.warn(`[DocsPrep] Failed to compute documentation hash for ${relativePath}: ${error}`);
+		}
+	}
+
+	private async hashString(input: string): Promise<string> {
+		const encoder = new TextEncoder();
+		const data = encoder.encode(input);
+
+		if (typeof process !== 'undefined' && process.versions && process.versions.node) {
+			try {
+				const nodeCrypto = await import('crypto');
+				return nodeCrypto.createHash('sha256').update(data).digest('hex');
+			} catch {
+				// Fallback to web crypto
+			}
+		}
+
+		const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+		const hashArray = Array.from(new Uint8Array(hashBuffer));
+		return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+	}
+
+	private toWorkspaceUri(relativePath: string, workspaceRoot: URI): URI {
+		const segments = relativePath.split(/[\\/]+/).filter((segment) => !!segment);
+		let uri = workspaceRoot;
+		for (const segment of segments) {
+			uri = joinPath(uri, segment);
+		}
+		return uri;
+	}
+
+	private getRelativePath(fileUri: URI, workspaceRoot: URI): string {
+		return relativePath(workspaceRoot, fileUri) ?? fileUri.path;
+	}
+
+	private async processFileUri(fileUri: URI, workspaceRoot: URI): Promise<void> {
+		const relative = this.getRelativePath(fileUri, workspaceRoot);
+		let node: MerkleTreeNode | undefined;
+
+		try {
+			const tree = await this.merkleTreeService.getTree();
+			node = this.findNodeByPath(tree, relative);
+		} catch (error) {
+			this.logService.debug(`[DocsPrep] Failed to fetch Merkle tree for ${relative}: ${error}`);
+		}
+
+		if (!node) {
+			const chunks = await this.merkleTreeService.getFileChunks(relative);
+			if (!chunks) {
+				this.logService.debug(`[DocsPrep] No Merkle tree data available for ${relative}`);
+				return;
+			}
+
+			node = {
+				hash: '',
+				path: relative,
+				type: 'file',
+				chunks,
+			};
+		}
+
+		await this.processFileNode(node, fileUri);
+	}
+
+	private findNodeByPath(node: MerkleTreeNode, relativePath: string): MerkleTreeNode | undefined {
+		if (node.path === relativePath) {
+			return node;
+		}
+
+		if (!node.children) {
+			return undefined;
+		}
+
+		for (const child of node.children) {
+			const found = this.findNodeByPath(child, relativePath);
+			if (found) {
+				return found;
+			}
+		}
+
+		return undefined;
+	}
+
+	private getWorkspaceRoot(): URI | undefined {
+		const folders = this.workspaceService.getWorkspace().folders;
+		if (folders.length === 0) {
+			return undefined;
+		}
+		if (folders.length > 1) {
+			this.logService.warn('[DocsPrep] Multiple workspace folders detected. Using the first folder for documentation preparation.');
+		}
+		return folders[0].uri;
+	}
+}
+
+registerSingleton(IDocsPreparationService, DocsPreparationService, InstantiationType.Delayed);
+

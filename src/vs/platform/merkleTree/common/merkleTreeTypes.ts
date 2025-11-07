@@ -21,6 +21,7 @@ export interface MerkleTreeNode {
 	size?: number;                    // File size in bytes
 	mtime?: number;                   // Modification time
 	isTracked?: boolean;             // Whether this file is actively tracked (lazy tracking)
+	workspaceId?: string;            // Workspace identifier for root nodes (and propagated metadata)
 }
 
 export interface MerkleTreeSnapshot {

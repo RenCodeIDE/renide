@@ -53,7 +53,6 @@ import {
 	IMonitorXChangelogFileChange,
 } from "../common/renWorkspaceStore.js";
 import { IDocsService } from "./services/docsService.js";
-import { IChunkIndexService } from "./services/chunkIndexService.js";
 import { IEditorService } from "../../../services/editor/common/editorService.js";
 import "./renWorkspaceStore.js";
 import "./renChangelogBuffer.js";
@@ -440,7 +439,6 @@ Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(
 // --- Docs Commands ---
 const DOCS_INITIALIZE_COMMAND = "ren.docs.initialize";
 const DOCS_REGENERATE_FILE_COMMAND = "ren.docs.regenerateFile";
-const DOCS_REGENERATE_CHUNK_COMMAND = "ren.docs.regenerateChunk";
 const REN_SYMBOL_OPEN_COMMAND = "ren.symbol.open";
 
 if (!CommandsRegistry.getCommand(DOCS_INITIALIZE_COMMAND)) {
@@ -449,7 +447,6 @@ if (!CommandsRegistry.getCommand(DOCS_INITIALIZE_COMMAND)) {
 		handler: async (accessor) => {
 			const docsService = accessor.get(IDocsService);
 			const editorService = accessor.get(IEditorService);
-			const chunkIndexService = accessor.get(IChunkIndexService);
 			const activeEditor = editorService.activeEditor;
 			const uri = EditorResourceAccessor.getOriginalUri(activeEditor, {
 				supportSideBySide: SideBySideEditor.PRIMARY,
@@ -457,14 +454,6 @@ if (!CommandsRegistry.getCommand(DOCS_INITIALIZE_COMMAND)) {
 
 			if (!uri || uri.scheme !== "file") {
 				throw new Error("No active file to initialize docs for.");
-			}
-
-			// Ensure chunks exist
-			const chunks = await chunkIndexService.getChunksForFile(uri);
-			if (chunks.length === 0) {
-				throw new Error(
-					"No chunks found for file. Chunks should be created automatically when file is opened."
-				);
 			}
 
 			await docsService.generateDocsForFile(uri, "initialize");
@@ -488,24 +477,6 @@ if (!CommandsRegistry.getCommand(DOCS_REGENERATE_FILE_COMMAND)) {
 			}
 
 			await docsService.generateDocsForFile(uri, "regenerate");
-		},
-	});
-}
-
-if (!CommandsRegistry.getCommand(DOCS_REGENERATE_CHUNK_COMMAND)) {
-	CommandsRegistry.registerCommand({
-		id: DOCS_REGENERATE_CHUNK_COMMAND,
-		handler: async (accessor, chunkId: string) => {
-			const docsService = accessor.get(IDocsService);
-
-			if (!chunkId || typeof chunkId !== "string") {
-				throw new Error("Chunk ID required.");
-			}
-
-			const result = await docsService.regenerateChunk(chunkId);
-			if (!result) {
-				throw new Error("Failed to regenerate chunk. Chunk may not exist.");
-			}
 		},
 	});
 }

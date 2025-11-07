@@ -34,10 +34,6 @@ import { Location, LocationLink } from "../../../../editor/common/languages.js";
 import { ITextModel } from "../../../../editor/common/model.js";
 import { IWorkspaceContextService } from "../../../../platform/workspace/common/workspace.js";
 
-function getChunkId(uri: URI, hash: string): string {
-	return `${uri.toString()}#${hash}`;
-}
-
 export class DocsAgentContribution
 	extends Disposable
 	implements IWorkbenchContribution
@@ -85,25 +81,21 @@ export class DocsAgentContribution
 
 		// Listen to manual doc updates (from button clicks) to update timestamps
 		this._register(
-			this.docsService.onDidUpdateChunkDocs((chunkDocs) => {
-				// Get the file URI from the chunk index
-				const chunk = this.chunkIndexService.getChunk(chunkDocs.chunkId);
-				if (chunk) {
-					const fileUri = chunk.uri.toString();
-					// Update timestamp for manual regeneration (bypasses cooldown)
-					this.lastChangeTimestamps.set(fileUri, Date.now());
-					// Also update stored hashes if we have them
-					const relativePath = this.getRelativePath(chunk.uri);
-					if (relativePath) {
-						this.merkleTreeService
-							.getFileChunks(relativePath)
-							.then((chunks) => {
-								if (chunks) {
-									const hashes = chunks.map((c) => c.hash);
-									this.lastKnownChunks.set(fileUri, hashes);
-								}
-							});
-					}
+			this.docsService.onDidUpdateFileDocs((fileDocs) => {
+				const fileUri = fileDocs.uri.toString();
+				// Update timestamp for manual regeneration (bypasses cooldown)
+				this.lastChangeTimestamps.set(fileUri, Date.now());
+				// Also update stored hashes if we have them
+				const relativePath = this.getRelativePath(fileDocs.uri);
+				if (relativePath) {
+					this.merkleTreeService
+						.getFileChunks(relativePath)
+						.then((chunks) => {
+							if (chunks) {
+								const hashes = chunks.map((c) => c.hash);
+								this.lastKnownChunks.set(fileUri, hashes);
+							}
+						});
 				}
 			})
 		);
@@ -272,78 +264,33 @@ export class DocsAgentContribution
 			currentHashes.length !== storedHashes.length ||
 			currentHashes.some((hash, i) => hash !== storedHashes[i]);
 
-		// Then ensure docs exist
-		const existingChunks = this.chunkIndexService.listFileChunks(uri);
-		if (existingChunks.length === 0) {
-			// If no chunks after ensuring metadata, file might not be accessible
-			// or Merkle tree hasn't processed it yet
-			console.warn(
-				`[DocsAgent] No chunks found for ${uri.fsPath} after ensuring metadata.`
-			);
-			return;
-		}
+		// Check if file doc exists
+		const existingFileDoc = this.docsService.getFileDocs(uri);
 
-		// Check if docs already exist for all chunks
-		const existingDocs = this.docsService.listDocsForFile(uri);
-		const missingDocs = existingChunks.filter((chunk) => {
-			const chunkId = getChunkId(chunk.uri, chunk.hash);
-			return !existingDocs.find((doc) => doc.chunkId === chunkId);
-		});
-
-		// If hashes changed (active file switch), regenerate only changed chunks (bypass cooldown)
+		// If hashes changed (active file switch), regenerate entire file doc (bypass cooldown)
 		if (hashesChanged && currentHashes.length > 0) {
-			// Find which chunks changed
-			const changedHashes: string[] = [];
-			for (let i = 0; i < currentHashes.length; i++) {
-				const newHash = currentHashes[i];
-				const oldHash = storedHashes[i];
-				if (oldHash !== newHash) {
-					changedHashes.push(newHash);
-				}
-			}
-
-			// Also handle new chunks (if file got longer)
-			if (currentHashes.length > storedHashes.length) {
-				const newHashes = currentHashes.slice(storedHashes.length);
-				changedHashes.push(...newHashes);
-			}
-
 			console.log(
-				`[DocsAgent] Active file ${relativePath} hashes changed: ${changedHashes.length} chunk(s) changed out of ${currentHashes.length} total. Regenerating only changed chunks (bypassing cooldown)`
+				`[DocsAgent] Active file ${relativePath} hashes changed: regenerating file-level docs (bypassing cooldown)`
 			);
 
-			// Clean up old docs for removed/changed chunks
-			await this.docsService.removeDocsForFile(uri);
 			// Update metadata first
 			await this.chunkIndexService.removeChunksForFile(uri);
 			await this.ensureChunkMetadataForFile(uri);
-			// Regenerate only changed chunks
-			if (changedHashes.length > 0) {
-				await this.docsService.refreshChangedChunks(uri, changedHashes);
-			}
-			// Also generate docs for any new chunks that don't have docs yet
-			const allChunks = this.chunkIndexService.listFileChunks(uri);
-			const existingDocs = this.docsService.listDocsForFile(uri);
-			const missingDocs = allChunks.filter((chunk) => {
-				const chunkId = getChunkId(chunk.uri, chunk.hash);
-				return !existingDocs.find((doc) => doc.chunkId === chunkId);
-			});
-			if (missingDocs.length > 0) {
-				console.log(
-					`[DocsAgent] Generating docs for ${missingDocs.length} missing chunk(s) in ${relativePath}`
-				);
-				await this.docsService.generateDocsForFile(uri, "initialize");
-			}
+			
+			// Regenerate entire file doc
+			await this.docsService.generateDocsForFile(uri, "regenerate");
+			
 			// Update stored hashes and timestamp
 			this.lastKnownChunks.set(fileUri, currentHashes);
 			this.lastChangeTimestamps.set(fileUri, Date.now());
-		} else if (missingDocs.length > 0) {
-			// Only generate docs for missing chunks (no hash change)
+		} else if (!existingFileDoc && currentHashes.length > 0) {
+			// Generate docs if missing
+			console.log(
+				`[DocsAgent] Generating initial file-level docs for ${relativePath}`
+			);
 			await this.docsService.generateDocsForFile(uri, "initialize");
 			// Update stored hashes if we have them
-			if (currentHashes.length > 0) {
-				this.lastKnownChunks.set(fileUri, currentHashes);
-			}
+			this.lastKnownChunks.set(fileUri, currentHashes);
 		} else if (currentHashes.length > 0) {
 			// Update stored hashes even if no regeneration needed
 			this.lastKnownChunks.set(fileUri, currentHashes);
@@ -367,30 +314,16 @@ export class DocsAgentContribution
 		const oldHashes = this.lastKnownChunks.get(fileUri) || [];
 		const newHashes = currentChunks.map((c) => c.hash);
 
-		// Find changed chunks
-		const changedHashes: string[] = [];
-		for (let i = 0; i < currentChunks.length; i++) {
-			const newHash = newHashes[i];
-			const oldHash = oldHashes[i];
-			if (oldHash !== newHash) {
-				changedHashes.push(newHash);
-			}
-		}
-
-		// Also handle new chunks (if file got longer)
-		if (newHashes.length > oldHashes.length) {
-			const newChunkHashes = newHashes.slice(oldHashes.length);
-			changedHashes.push(...newChunkHashes);
-		}
-
-		// If chunks changed, update timestamp (even if we don't regenerate yet)
+		// Check if any chunks changed
 		const hasChanges =
-			changedHashes.length > 0 || oldHashes.length !== newHashes.length;
+			oldHashes.length !== newHashes.length ||
+			newHashes.some((hash, i) => hash !== oldHashes[i]);
+
 		if (hasChanges) {
 			// Update timestamp to track when change occurred
 			this.lastChangeTimestamps.set(fileUri, Date.now());
 			console.log(
-				`[DocsAgent] File ${relativePath} changed: ${changedHashes.length} chunk(s) changed (hashes: ${changedHashes.map(h => h.substring(0, 8)).join(", ")})`
+				`[DocsAgent] File ${relativePath} changed: regenerating file-level docs`
 			);
 		}
 
@@ -401,27 +334,13 @@ export class DocsAgentContribution
 		const isActiveFile = uri.toString() === this.currentActiveFile?.toString();
 		if (hasChanges && isActiveFile && this.hasCooldownExpired(fileUri)) {
 			console.log(
-				`[DocsAgent] Regenerating ${changedHashes.length} changed chunk(s) for active file ${relativePath} (cooldown expired)`
+				`[DocsAgent] Regenerating file-level docs for active file ${relativePath} (cooldown expired)`
 			);
-			// Clean up old docs for changed chunks
-			await this.docsService.removeDocsForFile(uri);
 			// Rebuild chunk metadata (this will update symbols, etc.)
 			await this.chunkIndexService.removeChunksForFile(uri);
 			await this.ensureChunkMetadataForFile(uri);
-			// Regenerate only changed chunks
-			if (changedHashes.length > 0) {
-				await this.docsService.refreshChangedChunks(uri, changedHashes);
-			}
-			// Also generate docs for any new chunks
-			const allChunks = this.chunkIndexService.listFileChunks(uri);
-			const existingDocs = this.docsService.listDocsForFile(uri);
-			const missingDocs = allChunks.filter((chunk) => {
-				const chunkId = getChunkId(chunk.uri, chunk.hash);
-				return !existingDocs.find((doc) => doc.chunkId === chunkId);
-			});
-			if (missingDocs.length > 0) {
-				await this.docsService.generateDocsForFile(uri, "initialize");
-			}
+			// Regenerate entire file doc
+			await this.docsService.generateDocsForFile(uri, "regenerate");
 			// Update timestamp after regeneration
 			this.lastChangeTimestamps.set(fileUri, Date.now());
 		} else if (hasChanges && isActiveFile) {

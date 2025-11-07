@@ -676,6 +676,15 @@ export class ChatEditingSession extends Disposable implements IChatEditingSessio
 		});
 	}
 
+	/**
+	 * Get edit explanation for a given request and resource
+	 * Returns undefined if no explanation was stored (meaning edit didn't come from EditTool)
+	 */
+	public getEditExplanation(requestId: string, resource: URI): string | undefined {
+		const key = `${requestId}:${resource.toString()}`;
+		return this._editExplanations.get(key);
+	}
+
 	private async _resolve(requestId: string, undoStop: string | undefined, resource: URI): Promise<void> {
 		const hasOtherTasks = Iterable.some(this._streamingEditLocks.keys(), k => k !== resource.toString());
 		if (!hasOtherTasks) {
