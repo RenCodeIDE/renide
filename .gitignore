@@ -26,3 +26,5 @@ vscode-telemetry-docs/
 *.env*
 .github/
 release/mac-arm64/
+*.dmg
+*.blockmap
