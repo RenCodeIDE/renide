@@ -16,6 +16,7 @@ import { ReadFileTool, ReadFileToolData } from './readFileTool.js';
 import { CreateFileTool, CreateFileToolData } from './createFileTool.js';
 import { DeleteFileTool, DeleteFileToolData } from './deleteFileTool.js';
 import { SearchFilesTool, SearchFilesToolData } from './searchFilesTool.js';
+import { GetDocsTool, GetDocsToolData } from './getDocsTool.js';
 
 export class BuiltinToolsContribution extends Disposable implements IWorkbenchContribution {
 
@@ -61,6 +62,9 @@ export class BuiltinToolsContribution extends Disposable implements IWorkbenchCo
 
 		const searchFilesTool = instantiationService.createInstance(SearchFilesTool);
 		this._register(toolsService.registerTool(SearchFilesToolData, searchFilesTool));
+
+		const getDocsTool = instantiationService.createInstance(GetDocsTool);
+		this._register(toolsService.registerTool(GetDocsToolData, getDocsTool));
 	}
 }
 

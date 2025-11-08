@@ -369,40 +369,23 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 		const originalLines = this.originalModel.getLinesContent();
 		const modifiedLines = this.modifiedModel.getLinesContent();
 
+		// Simple line-by-line diff format: only - (deleted) and + (added) lines
+		// No headers (@@), no context lines (space-prefixed)
 		for (const change of diff.changes) {
 			const originalStart = change.original.startLineNumber;
 			const originalEnd = change.original.endLineNumberExclusive;
 			const modifiedStart = change.modified.startLineNumber;
 			const modifiedEnd = change.modified.endLineNumberExclusive;
 
-			const originalLineCount = originalEnd - originalStart;
-			const modifiedLineCount = modifiedEnd - modifiedStart;
-
-			// Unified diff header: @@ -start,count +start,count @@
-			lines.push(`@@ -${originalStart},${originalLineCount} +${modifiedStart},${modifiedLineCount} @@`);
-
-			// Process inner changes if available, otherwise process the entire range
+			// Process inner changes if available for granular diff
 			if (change.innerChanges && change.innerChanges.length > 0) {
-				// Use inner changes for more granular diff
-				let lastProcessedOriginal = originalStart - 1;
-				let lastProcessedModified = modifiedStart - 1;
-
 				for (const innerChange of change.innerChanges) {
-					// Context before inner change (unchanged lines)
-					const innerOrigStart = innerChange.originalRange.startLineNumber;
-					for (let i = Math.max(originalStart, lastProcessedOriginal + 1); i < innerOrigStart; i++) {
-						if (i > 0 && i <= originalLines.length) {
-							lines.push(' ' + originalLines[i - 1]);
-						}
-					}
-
 					// Deleted lines (original) - Range.endLineNumber is inclusive
 					const origStart = innerChange.originalRange.startLineNumber;
 					const origEnd = innerChange.originalRange.endLineNumber;
 					for (let i = origStart; i <= origEnd && i > 0 && i <= originalLines.length; i++) {
 						lines.push('-' + originalLines[i - 1]);
 					}
-					lastProcessedOriginal = Math.max(lastProcessedOriginal, origEnd);
 
 					// Added lines (modified) - Range.endLineNumber is inclusive
 					const modStart = innerChange.modifiedRange.startLineNumber;
@@ -410,17 +393,9 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 					for (let i = modStart; i <= modEnd && i > 0 && i <= modifiedLines.length; i++) {
 						lines.push('+' + modifiedLines[i - 1]);
 					}
-					lastProcessedModified = Math.max(lastProcessedModified, modEnd);
-				}
-
-				// Context after last inner change
-				for (let i = lastProcessedOriginal + 1; i < Math.min(originalEnd, originalLines.length + 1); i++) {
-					if (i > 0 && i <= originalLines.length) {
-						lines.push(' ' + originalLines[i - 1]);
-					}
 				}
 			} else {
-				// No inner changes - show deleted then added
+				// No inner changes - show deleted then added (no context lines)
 				for (let i = originalStart; i < originalEnd && i > 0 && i <= originalLines.length; i++) {
 					lines.push('-' + originalLines[i - 1]);
 				}

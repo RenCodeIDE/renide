@@ -43,6 +43,7 @@ import { ChatEditingModifiedDocumentEntry } from './chatEditingModifiedDocumentE
 import { AbstractChatEditingModifiedFileEntry } from './chatEditingModifiedFileEntry.js';
 import { ChatEditingModifiedNotebookEntry } from './chatEditingModifiedNotebookEntry.js';
 import { FileOperation, FileOperationType } from './chatEditingOperations.js';
+import { ChatEditingFileOperationEntry, FileOperationEntryType } from './chatEditingFileOperationEntry.js';
 import { ChatEditingSessionStorage, IChatEditingSessionStop, StoredSessionState } from './chatEditingSessionStorage.js';
 import { ChatEditingTextModelContentProvider } from './chatEditingTextModelContentProviders.js';
 
@@ -824,5 +825,64 @@ export class ChatEditingSession extends Disposable implements IChatEditingSessio
 				isEqual(documentDiffItem.modifiedUri, multiDiffItem.modifiedUri))
 				?.collapsed.set(true, transaction);
 		}
+	}
+
+	async createFileOperationEntry(uri: URI, operationType: 'create' | 'delete', telemetryInfo: IModifiedEntryTelemetryInfo, originalContent?: string): Promise<IModifiedFileEntry> {
+		// Check if entry already exists
+		const existingEntry = this._entriesObs.get().find(e => isEqual(e.modifiedURI, uri));
+		if (existingEntry) {
+			return existingEntry;
+		}
+
+		const fileOperationType = operationType === 'create' ? FileOperationEntryType.Create : FileOperationEntryType.Delete;
+		const chatKind = operationType === 'create' ? ChatEditKind.Created : ChatEditKind.Modified;
+
+		const entry = this._instantiationService.createInstance(
+			ChatEditingFileOperationEntry,
+			uri,
+			{
+				type: fileOperationType,
+				originalContent: originalContent
+			},
+			telemetryInfo,
+			chatKind
+		);
+
+		// Register entry deletion handler
+		const listener = entry.onDidDelete(() => {
+			const newEntries = this._entriesObs.get().filter(e => !isEqual(e.modifiedURI, uri));
+			this._entriesObs.set(newEntries, undefined);
+			this._editorService.closeEditors(this._editorService.findEditors(uri));
+			entry.dispose();
+			this._store.delete(listener);
+		});
+		this._store.add(listener);
+
+		// Add entry to entries list
+		const entriesArr: AbstractChatEditingModifiedFileEntry[] = [...this._entriesObs.get(), entry];
+		this._entriesObs.set(entriesArr, undefined);
+
+		return entry;
+	}
+
+	getEntryByDraftKey(draftKey: string): IModifiedFileEntry | undefined {
+		// Draft key format: sessionId:uri
+		// Extract URI from draft key
+		const parts = draftKey.split(':');
+		if (parts.length < 2) {
+			return undefined;
+		}
+
+		// Reconstruct URI (may have : in the path, so join everything after sessionId)
+		const uriString = parts.slice(1).join(':');
+		let uri: URI;
+		try {
+			uri = URI.parse(uriString);
+		} catch {
+			return undefined;
+		}
+
+		// Find entry with matching URI
+		return this._entriesObs.get().find(e => isEqual(e.modifiedURI, uri));
 	}
 }

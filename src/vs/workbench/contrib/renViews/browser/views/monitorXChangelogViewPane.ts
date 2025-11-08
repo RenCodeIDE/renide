@@ -24,6 +24,8 @@ import { IMonitorXChangelogFilter } from '../../common/renChangelogFilter.js';
 import { getCodeEditor } from '../../../../../editor/browser/editorBrowser.js';
 import { Range } from '../../../../../editor/common/core/range.js';
 import { IModelDeltaDecoration } from '../../../../../editor/common/model.js';
+import { IChatService } from '../../../../contrib/chat/common/chatService.js';
+import { ChatModel } from '../../../../contrib/chat/common/chatModel.js';
 
 export class MonitorXChangelogViewPane extends ViewPane {
 	private bodyContainer!: HTMLElement;
@@ -47,7 +49,8 @@ export class MonitorXChangelogViewPane extends ViewPane {
 		@IHoverService hoverService: IHoverService,
 		@IRenWorkspaceStore private readonly workspaceStore: IRenWorkspaceStore,
 		@IRenMonitorXChangelogBuffer private readonly changelogBuffer: IRenMonitorXChangelogBuffer,
-		@IEditorService private readonly editorService: IEditorService
+		@IEditorService private readonly editorService: IEditorService,
+		@IChatService private readonly chatService: IChatService
 	) {
 		super(options, keybindingService, contextMenuService, configurationService, contextKeyService, viewDescriptorService, instantiationService, openerService, themeService, hoverService);
 	}
@@ -134,7 +137,8 @@ export class MonitorXChangelogViewPane extends ViewPane {
 			onFileClick: path => this.openFile(path),
 			onViewDiff: file => this.openDiff(file),
 			onSubjectChange: (sessionId, subject) => this.handleDraftUpdate(sessionId, { subject }),
-			onDescriptionChange: (sessionId, description) => this.handleDraftUpdate(sessionId, { description })
+			onDescriptionChange: (sessionId, description) => this.handleDraftUpdate(sessionId, { description }),
+			onFinalize: (sessionId) => this.handleFinalizeDraft(sessionId)
 		});
 	}
 
@@ -385,6 +389,61 @@ export class MonitorXChangelogViewPane extends ViewPane {
 		} catch (error) {
 			console.error('Failed to update MonitorX draft:', error);
 			this.renderDrafts();
+		}
+	}
+
+	private async handleFinalizeDraft(sessionId: string): Promise<void> {
+		try {
+			// Get the draft
+			const draft = this.changelogBuffer.getDraft(sessionId);
+			if (!draft) {
+				console.warn(`[MonitorX] handleFinalizeDraft: Draft not found for sessionId: ${sessionId}`);
+				return;
+			}
+
+			// Extract sessionId and URI from draft key (format: sessionId:uri)
+			const parts = sessionId.split(':');
+			if (parts.length < 2) {
+				console.warn(`[MonitorX] handleFinalizeDraft: Invalid draft key format: ${sessionId}`);
+				return;
+			}
+
+			const chatSessionId = parts[0];
+			const model = this.chatService.getSession(chatSessionId) as ChatModel | undefined;
+
+			// Try to find corresponding ChatEditingSession entry
+			if (model && model.editingSession) {
+				const editingSession = model.editingSession;
+				const entry = editingSession.getEntryByDraftKey(sessionId);
+
+				if (entry) {
+					// Entry exists (EditTool or file operation entry) - call accept() which will finalize changelog AND apply edits
+					if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+						console.log(`[MonitorX] handleFinalizeDraft: Found entry for draft, calling accept()`, { sessionId, entryUri: entry.modifiedURI.toString() });
+					}
+					await entry.accept();
+					return;
+				}
+			}
+
+			// No entry found (shouldn't happen for file operations, but handle gracefully)
+			// Finalize draft directly and add to changelog
+			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+				console.log(`[MonitorX] handleFinalizeDraft: No entry found, finalizing draft directly`, { sessionId });
+			}
+
+			const finalizedEntry = this.changelogBuffer.finalizeDraft(sessionId);
+			if (finalizedEntry) {
+				await this.workspaceStore.addChangelogEntry(finalizedEntry);
+				if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
+					console.log(`[MonitorX] handleFinalizeDraft: Draft finalized and added to changelog`, { sessionId, subject: finalizedEntry.subject?.substring(0, 50) });
+				}
+			} else {
+				console.warn(`[MonitorX] handleFinalizeDraft: Failed to finalize draft`, { sessionId });
+			}
+		} catch (error) {
+			console.error(`[MonitorX] handleFinalizeDraft: Error finalizing draft`, error, { sessionId });
+			throw error;
 		}
 	}
 }

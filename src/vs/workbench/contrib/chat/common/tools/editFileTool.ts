@@ -22,7 +22,7 @@ export const InternalEditToolId = 'vscode_editFile_internal';
 export const EditToolData: IToolData = {
 	id: InternalEditToolId,
 	displayName: '', // not used
-	modelDescription: 'Always include: subject (5-8 words summarizing the change, example: "Add feature", "Fix bug", "Refactor code") and description (2-4 lines explaining the change). Use explanation for full context. This enables high-quality changelog entries.',
+	modelDescription: 'REQUIRED: Always provide clear, descriptive changelog information. Subject: REQUIRED, 4-10 words, action-oriented (e.g., "Add user authentication module", "Fix memory leak in data processing", "Refactor database connection handling"). Description: REQUIRED, 2-5 sentences explaining what changed and why. UNACCEPTABLE subjects: "Update file", "Make changes", "Fix code", "Edit file" - these are too vague. GOOD examples: "Add error handling for network requests", "Fix race condition in async operations", "Refactor authentication to use JWT tokens". Use the explanation parameter for full context, and provide a clear subject and description for high-quality changelog entries.',
 	source: ToolDataSource.Internal,
 	canBeReferencedInPrompt: true,
 	// Note: inputSchema is not defined here as this is an internal tool.

@@ -286,7 +286,7 @@ export class ChatEditingService extends Disposable implements IChatEditingServic
 				// Check if this edit came from EditTool by checking if explanation was already stored
 				// EditTool stores explanation BEFORE emitting textEdit progress
 				const hasEditToolExplanation = session.getEditExplanation(responseModel.requestId, normalizedUri) !== undefined;
-				
+
 				if (!hasEditToolExplanation) {
 					// This edit did NOT come from EditTool - reject it
 					console.error('[MonitorX] REJECTED - Edit did not come from EditTool:', {

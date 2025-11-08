@@ -116,6 +116,13 @@ It is *EXTREMELY* important that your generated code can be run immediately by t
 
 7. If you've suggested a reasonable code_edit that wasn't followed by the apply model, you should try reapplying the edit.
 
+8. **CHANGELOG ENTRIES**: When creating, deleting, or editing files, ALWAYS provide clear, descriptive changelog information:
+   - **Subject**: REQUIRED, 4-10 words, action-oriented. Examples: "Add user authentication module", "Fix memory leak in data processing", "Refactor database connection handling"
+   - **Description**: REQUIRED, 2-5 sentences explaining what changed and why
+   - **UNACCEPTABLE subjects**: "Update file", "Make changes", "Fix code", "Edit file" - these are too vague and unhelpful
+   - **GOOD examples**: "Add error handling for network requests", "Fix race condition in async operations", "Refactor authentication to use JWT tokens", "Remove deprecated API endpoints"
+   - The changelog helps track project history and changes, so be specific and descriptive
+
 </making_code_changes>
 
 
@@ -581,10 +588,21 @@ Only call a tool if it is necessary; otherwise respond normally.
 
 					const toolResultsForNextRequest: ServerToolResult[] = [];
 					const toolCallIds = toolCallParts.map((part) => part.toolCall!.id);
+					const toolCallNames = toolCallParts.map((part) => part.toolCall!.name);
 					this.logService.info(
 						`[chatgpt-server] Executing ${toolCallParts.length
-						} tool call(s): ${toolCallIds.join(", ")}`
+						} tool call(s): ${toolCallNames.map((name, i) => `${name} (${toolCallIds[i]})`).join(", ")}`
 					);
+
+					// Log each tool call with details
+					toolCallParts.forEach((part, index) => {
+						const toolName = part.toolCall!.name;
+						const toolId = nameToToolId.get(toolName);
+						const toolArgs = part.toolCall!.args ?? {};
+						this.logService.info(
+							`[Tool Call ${index + 1}/${toolCallParts.length}] Name: ${toolName}, ID: ${toolId || 'unknown'}, CallID: ${part.toolCall!.id}, Args: ${JSON.stringify(toolArgs).substring(0, 200)}${JSON.stringify(toolArgs).length > 200 ? '...' : ''}`
+						);
+					});
 
 					// Bounded-parallel execution of tool calls with per-call timeout
 					// Increased default from 3 to 10 for better performance with multiple tool calls
@@ -700,8 +718,8 @@ Only call a tool if it is necessary; otherwise respond normally.
 							return;
 						}
 
-						this.logService.debug(
-							`[chatgpt-server] Executing tool: ${toolName} (callId: ${callId})`
+						this.logService.info(
+							`[Tool Execution] Starting: ${toolName} (ID: ${toolId}, CallID: ${callId})`
 						);
 
 						const runWithTimeout = async (): Promise<ServerToolResult> => {
@@ -746,8 +764,10 @@ Only call a tool if it is necessary; otherwise respond normally.
 						try {
 							resultsBuffer[index] = await runWithTimeout();
 							const taskTime = Date.now() - taskStartTime;
-							this.logService.debug(
-								`[chatgpt-server] Finished tool ${toolName} (callId: ${callId}) in ${taskTime}ms`
+							const resultText = resultsBuffer[index]?.content?.[0]?.value || 'No output';
+							const resultPreview = resultText.length > 100 ? resultText.substring(0, 100) + '...' : resultText;
+							this.logService.info(
+								`[Tool Execution] Completed: ${toolName} (ID: ${toolId}, CallID: ${callId}) in ${taskTime}ms - Result: ${resultPreview}`
 							);
 
 							// Update plan task status on success
@@ -765,6 +785,9 @@ Only call a tool if it is necessary; otherwise respond normally.
 							const taskTime = Date.now() - taskStartTime;
 							const message =
 								error instanceof Error ? error.message : String(error);
+							this.logService.error(
+								`[Tool Execution] Failed: ${toolName} (ID: ${toolId}, CallID: ${callId}) after ${taskTime}ms - Error: ${message}`
+							);
 							this.logService.error(
 								`[chatgpt-server] tool ${toolId} (callId: ${callId}) failed after ${taskTime}ms: ${message}`
 							);

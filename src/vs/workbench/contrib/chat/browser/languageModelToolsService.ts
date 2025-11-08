@@ -91,7 +91,7 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 	private readonly _ctxToolsCount: IContextKey<number>;
 
 	private _callsByRequestId = new Map<string, ITrackedCall[]>();
-	
+
 	// Cache for tool lookups to avoid repeated Map lookups
 	private _toolLookupCache = new LRUCache<string, IToolEntry>(100);
 
@@ -263,6 +263,9 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 	async invokeTool(dto: IToolInvocation, countTokens: CountTokensCallback, token: CancellationToken): Promise<IToolResult> {
 		const totalTimeWatch = StopWatch.create(true);
 		const toolLookupWatch = StopWatch.create(true);
+		// Log tool invocation with INFO level for visibility
+		const toolDisplayName = this._tools.get(dto.toolId)?.data.displayName || dto.toolId;
+		this._logService.info(`[Tool Invocation] Calling tool: ${toolDisplayName} (ID: ${dto.toolId}, CallID: ${dto.callId})`);
 		this._logService.trace(`[LanguageModelToolsService#invokeTool] Invoking tool ${dto.toolId} with parameters ${JSON.stringify(dto.parameters)}`);
 
 		// When invoking a tool, don't validate the "when" clause. An extension may have invoked a tool just as it was becoming disabled, and just let it go through rather than throw and break the chat.
@@ -432,7 +435,17 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 			});
 			toolResult = await Promise.race([invokePromise, timeoutPromise]);
 			invocationTimeWatch.stop();
+			const invocationTime = invocationTimeWatch.elapsed();
 			this.ensureToolDetails(dto, toolResult, tool.data);
+
+			// Log tool completion (use tool.data.displayName which is now loaded)
+			const finalToolDisplayName = tool.data.displayName || dto.toolId;
+			const resultPreview = toolResult?.content?.[0]?.kind === 'text'
+				? (toolResult.content[0].value?.substring(0, 100) || 'No output')
+				: 'Non-text output';
+			this._logService.info(
+				`[Tool Invocation] Completed: ${finalToolDisplayName} (ID: ${dto.toolId}, CallID: ${dto.callId}) in ${invocationTime}ms - Result: ${resultPreview}${resultPreview.length >= 100 ? '...' : ''}`
+			);
 
 			if (toolInvocation?.didExecuteTool(toolResult).type === IChatToolInvocation.StateKind.WaitingForPostApproval) {
 				const autoConfirmPostWatch = StopWatch.create(true);
@@ -464,12 +477,12 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 			totalTimeWatch.stop();
 			const totalTime = totalTimeWatch.elapsed();
 			const prepareTime = prepareTimeWatch?.elapsed() ?? 0;
-			const invocationTime = invocationTimeWatch?.elapsed() ?? 0;
+			// invocationTime already declared earlier (line 438) - reuse it
 			const confirmationTime = confirmationTimeWatch?.elapsed() ?? 0;
 			const postConfirmationTime = postConfirmationTimeWatch?.elapsed() ?? 0;
 			const toolLookupTime = toolLookupWatch.elapsed();
 			const extensionActivationTime = extensionActivationWatch.elapsed();
-			
+
 			this._logService.info(
 				`[ToolPerf] ${dto.toolId} completed in ${totalTime.toFixed(2)}ms ` +
 				`(lookup: ${toolLookupTime.toFixed(2)}ms, ` +
@@ -507,7 +520,7 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 			const postConfirmationTime = postConfirmationTimeWatch?.elapsed() ?? 0;
 			const toolLookupTime = toolLookupWatch.elapsed();
 			const extensionActivationTime = extensionActivationWatch.elapsed();
-			
+
 			this._logService.error(
 				`[ToolPerf] ${dto.toolId} failed after ${totalTime.toFixed(2)}ms ` +
 				`(lookup: ${toolLookupTime.toFixed(2)}ms, ` +
@@ -518,7 +531,7 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 				`postConfirm: ${postConfirmationTime.toFixed(2)}ms) - ` +
 				`Error: ${toErrorMessage(err, true)}`
 			);
-			
+
 			this._telemetryService.publicLog2<LanguageModelToolInvokedEvent, LanguageModelToolInvokedClassification>(
 				'languageModelToolInvoked',
 				{

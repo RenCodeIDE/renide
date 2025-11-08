@@ -18,6 +18,7 @@ export interface IMonitorXRenderOptions {
 export interface IMonitorXDraftRenderOptions extends IMonitorXRenderOptions {
 	readonly onSubjectChange?: (sessionId: string, subject: string) => void;
 	readonly onDescriptionChange?: (sessionId: string, description: string) => void;
+	readonly onFinalize?: (sessionId: string) => Promise<void>;
 }
 
 export function renderMonitorXChangelog(target: HTMLElement, entries: IMonitorXChangelogEntry[], options: IMonitorXRenderOptions = {}): void {
@@ -197,6 +198,34 @@ export function renderMonitorXChangelogDrafts(target: HTMLElement, drafts: reado
 		for (const file of draft.files) {
 			appendFileSection(item, file, options);
 		}
+
+		// Add finalize/apply button
+		const actionsContainer = document.createElement('div');
+		actionsContainer.className = 'ren-monitorx-draft-actions';
+
+		const finalizeButton = document.createElement('button');
+		finalizeButton.type = 'button';
+		finalizeButton.className = 'ren-monitorx-draft-finalize';
+		finalizeButton.textContent = 'Finalize';
+		finalizeButton.title = 'Finalize this changelog entry and apply changes';
+		if (options.onFinalize) {
+			finalizeButton.addEventListener('click', async (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				finalizeButton.disabled = true;
+				try {
+					await options.onFinalize!(draft.sessionId);
+				} catch (error) {
+					console.error('Failed to finalize draft:', error);
+					finalizeButton.disabled = false;
+				}
+			});
+		} else {
+			finalizeButton.disabled = true;
+		}
+
+		actionsContainer.appendChild(finalizeButton);
+		item.appendChild(actionsContainer);
 
 		list.appendChild(item);
 	}

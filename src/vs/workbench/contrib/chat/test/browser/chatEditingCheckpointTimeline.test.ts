@@ -999,7 +999,7 @@ suite('ChatEditingCheckpointTimeline', function () {
 		// At this point, we're past both checkpoints. _willUndoToCheckpoint finds
 		// the previous checkpoint before the current epoch. Since there are no operations
 		// between the start and stop1, undoing should target the start.
-		const undoTarget = timeline['_willUndoToCheckpoint'].get();
+		const undoTarget = (timeline as any)['_willUndoToCheckpoint'].get();
 
 		// The logic checks if there are operations between start and the previous checkpoint.
 		// If not, it returns the start checkpoint. However, if currentEpoch is beyond

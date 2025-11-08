@@ -12,7 +12,10 @@ import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IMerkleTreeService } from '../../../../../platform/merkleTree/common/merkleTreeService.js';
 import { ILogService } from '../../../../../platform/log/common/log.js';
+import { IRenMonitorXChangelogBuffer } from '../../../renViews/common/renChangelogBuffer.js';
 import { CountTokensCallback, IPreparedToolInvocation, IToolData, IToolImpl, IToolInvocation, IToolInvocationPreparationContext, IToolResult, ToolDataSource, ToolProgress } from '../../common/languageModelToolsService.js';
+import { IChatService } from '../../common/chatService.js';
+import { ChatModel } from '../../common/chatModel.js';
 
 export const CreateFileToolData: IToolData = {
 	id: 'create_file',
@@ -39,6 +42,14 @@ export const CreateFileToolData: IToolData = {
 			overwrite: {
 				type: 'boolean',
 				description: localize('createFileTool.overwrite', 'Optional: Whether to overwrite the file if it already exists. Defaults to false.')
+			},
+			subject: {
+				type: 'string',
+				description: localize('createFileTool.subject', 'Optional: Short subject (4-10 words) for the changelog entry. If not provided, a default subject will be generated.')
+			},
+			description: {
+				type: 'string',
+				description: localize('createFileTool.description', 'Optional: Description (2-5 sentences) for the changelog entry explaining what was created and why. If not provided, a default description will be generated.')
 			}
 		},
 		required: ['uri', 'content']
@@ -50,6 +61,8 @@ export interface ICreateFileToolInput {
 	content: string;
 	directory?: string;
 	overwrite?: boolean;
+	subject?: string;
+	description?: string;
 }
 
 export class CreateFileTool implements IToolImpl {
@@ -57,6 +70,8 @@ export class CreateFileTool implements IToolImpl {
 		@IFileService private readonly fileService: IFileService,
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
 		@IMerkleTreeService private readonly merkleTreeService: IMerkleTreeService,
+		@IRenMonitorXChangelogBuffer private readonly changelogBuffer: IRenMonitorXChangelogBuffer,
+		@IChatService private readonly chatService: IChatService,
 		@ILogService private readonly logService: ILogService,
 	) { }
 
@@ -119,6 +134,74 @@ export class CreateFileTool implements IToolImpl {
 				this.logService.warn(`[CreateFileTool] Failed to track file in merkle tree: ${error}`);
 			}
 
+			// Create changelog draft in buffer and file operation entry in ChatEditingSession
+			try {
+				const sessionId = invocation.context?.sessionId;
+				if (!sessionId) {
+					this.logService.warn(`[CreateFileTool] No sessionId available, skipping changelog entry`);
+				} else {
+					const workspaceRelativePath = this.getWorkspaceRelativePath(uri);
+					const diff = this.generateCreateFileDiff(args.content);
+					const subject = args.subject || this.generateDefaultSubject('create', workspaceRelativePath);
+					const description = args.description || this.generateDefaultDescription('create', workspaceRelativePath, args.content);
+
+					// Create draft key: sessionId:uri (similar to EditTool)
+					const draftKey = `${sessionId}:${uri.toString()}`;
+
+					// Store draft in buffer (will be finalized later when user accepts or session ends)
+					this.changelogBuffer.setDraft(draftKey, {
+						subject,
+						description,
+						files: [{
+							path: workspaceRelativePath,
+							diff
+						}]
+					});
+
+					this.logService.debug(`[CreateFileTool] Changelog draft created in buffer for: ${workspaceRelativePath}`);
+
+					// Create file operation entry in ChatEditingSession
+					try {
+						const model = this.chatService.getSession(sessionId) as ChatModel | undefined;
+						if (model && model.editingSession) {
+							const editingSession = model.editingSession;
+							const request = model.getRequests().at(-1);
+							if (request) {
+								const responseModel = request.response;
+								const agent = responseModel?.agent;
+								const telemetryInfo = {
+									agentId: agent?.id,
+									command: undefined, // File operations don't have a specific command
+									requestId: request.id,
+									sessionId: sessionId,
+									modelId: request.modelId,
+									modeId: request.modeInfo?.modeId,
+									applyCodeBlockSuggestionId: request.modeInfo?.applyCodeBlockSuggestionId,
+									result: undefined,
+									feature: undefined,
+								};
+
+								// Create file operation entry
+								await editingSession.createFileOperationEntry(
+									uri,
+									'create',
+									telemetryInfo,
+									args.content
+								);
+
+								this.logService.debug(`[CreateFileTool] File operation entry created in editing session for: ${workspaceRelativePath}`);
+							}
+						}
+					} catch (error) {
+						// Don't fail the tool if entry creation fails
+						this.logService.warn(`[CreateFileTool] Failed to create file operation entry: ${error}`);
+					}
+				}
+			} catch (error) {
+				// Don't fail the tool if changelog draft creation fails
+				this.logService.warn(`[CreateFileTool] Failed to create changelog draft: ${error}`);
+			}
+
 			return {
 				content: [{
 					kind: 'text',
@@ -136,6 +219,44 @@ export class CreateFileTool implements IToolImpl {
 				toolResultMessage: localize('createFileTool.error', 'Error creating file {0}: {1}', uri.fsPath, errorMessage)
 			};
 		}
+	}
+
+	private generateCreateFileDiff(content: string): string {
+		if (!content || content.trim().length === 0) {
+			return '';
+		}
+		// Simple line-by-line diff: each line prefixed with +
+		const lines = content.split(/\r?\n/);
+		return lines.map(line => '+' + line).join('\n');
+	}
+
+	private generateDefaultSubject(action: 'create' | 'delete', filePath: string): string {
+		const fileName = filePath.split('/').pop() || filePath;
+		if (action === 'create') {
+			return `Create ${fileName}`;
+		}
+		return `Delete ${fileName}`;
+	}
+
+	private generateDefaultDescription(action: 'create' | 'delete', filePath: string, content?: string): string {
+		if (action === 'create') {
+			if (content && content.trim().length > 0) {
+				const lineCount = content.split(/\r?\n/).length;
+				return `Created file ${filePath} with ${lineCount} line${lineCount !== 1 ? 's' : ''}.`;
+			}
+			return `Created empty file ${filePath}.`;
+		}
+		return `Deleted file ${filePath}.`;
+	}
+
+	private getWorkspaceRelativePath(uri: URI): string {
+		const workspace = this.workspaceService.getWorkspace();
+		if (workspace.folders.length === 0) {
+			return uri.fsPath;
+		}
+		const workspaceRoot = workspace.folders[0].uri;
+		const relative = uri.toString().substring(workspaceRoot.toString().length);
+		return relative.startsWith('/') ? relative.substring(1) : relative;
 	}
 
 	private resolveFileUri(uriString: string, directory?: string): URI {

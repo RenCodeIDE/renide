@@ -164,6 +164,16 @@ export interface IChatEditingSession extends IDisposable {
 	 * Store edit explanation from EditTool invocation
 	 */
 	storeEditExplanation(requestId: string, resource: URI, explanation: string, subject?: string, description?: string): void;
+
+	/**
+	 * Create a file operation entry for create/delete operations
+	 */
+	createFileOperationEntry(uri: URI, operationType: 'create' | 'delete', telemetryInfo: IModifiedEntryTelemetryInfo, originalContent?: string): Promise<IModifiedFileEntry>;
+
+	/**
+	 * Get entry by draft key (sessionId:uri format)
+	 */
+	getEntryByDraftKey(draftKey: string): IModifiedFileEntry | undefined;
 }
 
 export interface IEditSessionEntryDiff {
