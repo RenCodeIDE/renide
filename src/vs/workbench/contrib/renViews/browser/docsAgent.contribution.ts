@@ -222,6 +222,7 @@ export class DocsAgentContribution
 				uri,
 				hash,
 				parentHash: fileChunk.parentHash, // Use parentHash from Merkle tree
+				ordinal: i,
 				description: `Chunk ${i + 1} (lines ${fileChunk.startLine + 1}-${
 					fileChunk.endLine
 				})`,

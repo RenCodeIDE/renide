@@ -5,10 +5,12 @@
 
 import { Emitter } from "../../../../../base/common/event.js";
 import { Disposable } from "../../../../../base/common/lifecycle.js";
+import { relativePath } from "../../../../../base/common/resources.js";
 import {
 	registerSingleton,
 	InstantiationType,
 } from "../../../../../platform/instantiation/common/extensions.js";
+import { IInstantiationService } from "../../../../../platform/instantiation/common/instantiation.js";
 import { IChunkIndexService, ChunkRecord } from "./chunkIndexService.js";
 import {
 	IStorageService,
@@ -16,13 +18,25 @@ import {
 	StorageTarget,
 } from "../../../../../platform/storage/common/storage.js";
 import { URI } from "../../../../../base/common/uri.js";
+import { IWorkspaceContextService } from "../../../../../platform/workspace/common/workspace.js";
+import { IConfigurationService } from "../../../../../platform/configuration/common/configuration.js";
+import { DEFAULT_CONFIG } from "../../../../../platform/merkleTree/common/merkleTreeConstants.js";
+import { ChunkVectorSyncCoordinator } from "./chunkVectorSync.js";
+
+export function formatChunkIdentifier(
+	workspaceId: string,
+	relativePath: string,
+	ordinal: number
+): string {
+	const safeEncode = (value: string): string => encodeURIComponent(value);
+	const safeOrdinal = Math.max(0, Math.floor(ordinal));
+	return `${safeEncode(workspaceId)}:${safeEncode(
+		relativePath
+	)}:${safeOrdinal}`;
+}
 
 const STORAGE_KEY_INDEX = "ren.docs.chunkIndex";
 const STORAGE_KEY_FILE_MAP = "ren.docs.fileToChunks";
-
-function getChunkId(uri: URI, hash: string): string {
-	return `${uri.toString()}#${hash}`;
-}
 
 export class ChunkIndexService
 	extends Disposable
@@ -35,66 +49,60 @@ export class ChunkIndexService
 
 	private index: Map<string, ChunkRecord> = new Map();
 	private fileToChunks: Map<string, Set<string>> = new Map();
+	private readonly vectorSync: ChunkVectorSyncCoordinator | null;
 
 	constructor(
-		@IStorageService private readonly storageService: IStorageService
+		@IStorageService private readonly storageService: IStorageService,
+		@IWorkspaceContextService
+		private readonly workspaceService: IWorkspaceContextService,
+		@IConfigurationService
+		private readonly configurationService: IConfigurationService,
+		@IInstantiationService instantiationService: IInstantiationService
 	) {
 		super();
+		this.vectorSync = this._register(
+			instantiationService.createInstance(ChunkVectorSyncCoordinator)
+		);
 		this.loadFromStorage();
 	}
 
 	private loadFromStorage(): void {
-		const indexJson = this.storageService.get(
-			STORAGE_KEY_INDEX,
-			StorageScope.WORKSPACE,
-			"{}"
-		);
-		const fileMapJson = this.storageService.get(
-			STORAGE_KEY_FILE_MAP,
-			StorageScope.WORKSPACE,
-			"{}"
-		);
-
 		try {
-			const indexData = JSON.parse(indexJson);
-			const fileMapData = JSON.parse(fileMapJson);
+			this.index.clear();
+			this.fileToChunks.clear();
 
-			// Restore index
-			for (const [chunkId, record] of Object.entries(indexData)) {
-				if (record && typeof record === "object") {
-					const rec = record as any;
-					this.index.set(chunkId, {
-						uri: URI.parse(rec.uri),
-						hash: rec.hash,
-						parentHash: rec.parentHash,
-						children: rec.children || undefined,
-						description: rec.description,
-						refs: {
-							symbols: (rec.refs?.symbols || []).map((s: any) => ({
-								name: s.name,
-								kind: s.kind,
-								uri: URI.parse(s.uri),
-								range: s.range,
-							})),
-							files: (rec.refs?.files || []).map((f: string) => URI.parse(f)),
-							functions: (rec.refs?.functions || []).map((f: any) => ({
-								name: f.name,
-								uri: URI.parse(f.uri),
-								range: f.range,
-								signature: f.signature,
-							})),
-						},
-						range: rec.range,
-						updatedAt: rec.updatedAt || Date.now(),
-					});
-				}
-			}
+			const indexJson = this.storageService.get(
+				STORAGE_KEY_INDEX,
+				StorageScope.WORKSPACE,
+				"{}"
+			);
+			const fileMapJson = this.storageService.get(
+				STORAGE_KEY_FILE_MAP,
+				StorageScope.WORKSPACE,
+				"{}"
+			);
 
-			// Restore file mapping
-			for (const [fileUri, chunkIds] of Object.entries(fileMapData)) {
-				if (Array.isArray(chunkIds)) {
-					this.fileToChunks.set(fileUri, new Set(chunkIds));
+			const indexData: Record<string, unknown> =
+				typeof indexJson === "string" ? JSON.parse(indexJson) : {};
+			const fileMapData: Record<string, unknown> =
+				typeof fileMapJson === "string" ? JSON.parse(fileMapJson) : {};
+
+			for (const [legacyChunkId, rawRecord] of Object.entries(indexData)) {
+				if (!rawRecord || typeof rawRecord !== "object") {
+					continue;
 				}
+
+				const hydrated = this.normalizeRecord(
+					this.hydrateRecord(
+						rawRecord as Record<string, unknown>,
+						legacyChunkId,
+						fileMapData
+					)
+				);
+				const chunkId = this.buildChunkId(hydrated);
+
+				this.index.set(chunkId, hydrated);
+				this.ensureFileChunkSet(hydrated.uri.toString()).add(chunkId);
 			}
 		} catch (e) {
 			console.error("[ChunkIndexService] Failed to load from storage:", e);
@@ -111,6 +119,7 @@ export class ChunkIndexService
 					parentHash: record.parentHash,
 					children: record.children,
 					description: record.description,
+					ordinal: record.ordinal,
 					refs: {
 						symbols: record.refs.symbols.map((s) => ({
 							name: s.name,
@@ -133,7 +142,12 @@ export class ChunkIndexService
 
 			const fileMapData: Record<string, string[]> = {};
 			for (const [fileUri, chunkIds] of this.fileToChunks.entries()) {
-				fileMapData[fileUri] = Array.from(chunkIds);
+				const sortedChunkIds = Array.from(chunkIds).sort((a, b) => {
+					const aOrdinal = this.index.get(a)?.ordinal ?? 0;
+					const bOrdinal = this.index.get(b)?.ordinal ?? 0;
+					return aOrdinal - bOrdinal;
+				});
+				fileMapData[fileUri] = sortedChunkIds;
 			}
 
 			this.storageService.store(
@@ -167,10 +181,14 @@ export class ChunkIndexService
 				chunks.push(chunk);
 			}
 		}
-		return chunks.sort(
-			(a, b) =>
-				(a.range?.startLineNumber || 0) - (b.range?.startLineNumber || 0)
-		);
+		return chunks.sort((a, b) => {
+			if (a.ordinal !== b.ordinal) {
+				return a.ordinal - b.ordinal;
+			}
+			const aStart = a.range?.startLineNumber ?? 0;
+			const bStart = b.range?.startLineNumber ?? 0;
+			return aStart - bStart;
+		});
 	}
 
 	getChunk(chunkId: string): ChunkRecord | undefined {
@@ -212,15 +230,20 @@ export class ChunkIndexService
 	}
 
 	async upsertChunk(record: ChunkRecord): Promise<void> {
-		const chunkId = getChunkId(record.uri, record.hash);
-		const fileUri = record.uri.toString();
+		const normalized = this.normalizeRecord(record);
+		const workspaceMeta = this.getWorkspaceMetadata(normalized.uri);
+		const chunkId = this.buildChunkId(normalized, workspaceMeta);
+		const fileUri = normalized.uri.toString();
 
-		this.index.set(chunkId, { ...record, updatedAt: Date.now() });
+		this.index.set(chunkId, { ...normalized, updatedAt: Date.now() });
+		this.ensureFileChunkSet(fileUri).add(chunkId);
 
-		if (!this.fileToChunks.has(fileUri)) {
-			this.fileToChunks.set(fileUri, new Set());
-		}
-		this.fileToChunks.get(fileUri)!.add(chunkId);
+		this.vectorSync?.enqueue(
+			normalized,
+			chunkId,
+			workspaceMeta.relativePath,
+			workspaceMeta.workspaceId
+		);
 
 		this.saveToStorage();
 		this._onDidChange.fire();
@@ -259,10 +282,14 @@ export class ChunkIndexService
 				chunks.push(chunk);
 			}
 		}
-		return chunks.sort(
-			(a, b) =>
-				(a.range?.startLineNumber || 0) - (b.range?.startLineNumber || 0)
-		);
+		return chunks.sort((a, b) => {
+			if (a.ordinal !== b.ordinal) {
+				return a.ordinal - b.ordinal;
+			}
+			const aStart = a.range?.startLineNumber ?? 0;
+			const bStart = b.range?.startLineNumber ?? 0;
+			return aStart - bStart;
+		});
 	}
 
 	async removeChunksForFile(uri: URI): Promise<void> {
@@ -279,6 +306,265 @@ export class ChunkIndexService
 
 		this.saveToStorage();
 		this._onDidChange.fire();
+	}
+
+	private hydrateRecord(
+		raw: Record<string, unknown>,
+		legacyChunkId: string,
+		legacyFileMap: Record<string, unknown>
+	): ChunkRecord {
+		const rawAny = raw as any;
+
+		const uriString =
+			typeof rawAny?.uri === "string" ? rawAny.uri : String(rawAny?.uri ?? "");
+		const uri = URI.parse(uriString);
+		const fileUri = uri.toString();
+
+		const rawRefs = rawAny?.refs;
+		const refsSymbols = Array.isArray(rawRefs?.symbols)
+			? (rawRefs.symbols as unknown[])
+					.map((s) => this.mapSymbolRef(s))
+					.filter(Boolean)
+			: [];
+		const refsFiles = Array.isArray(rawRefs?.files)
+			? (rawRefs.files as unknown[])
+					.map((f) => this.safeParseUri(f))
+					.filter((uri): uri is URI => Boolean(uri))
+			: [];
+		const refsFunctions = Array.isArray(rawRefs?.functions)
+			? (rawRefs.functions as unknown[])
+					.map((f) => this.mapFunctionPointer(f))
+					.filter(Boolean)
+			: [];
+
+		const children =
+			Array.isArray(rawAny?.children) && rawAny.children.length > 0
+				? [...(rawAny.children as string[])]
+				: undefined;
+		const description =
+			typeof rawAny?.description === "string" ? rawAny.description : undefined;
+		const parentHash =
+			typeof rawAny?.parentHash === "string" ? rawAny.parentHash : undefined;
+		const updatedAt =
+			typeof rawAny?.updatedAt === "number" && Number.isFinite(rawAny.updatedAt)
+				? rawAny.updatedAt
+				: Date.now();
+		const existingOrdinal =
+			typeof rawAny?.ordinal === "number" && Number.isFinite(rawAny.ordinal)
+				? rawAny.ordinal
+				: undefined;
+
+		const ordinal = this.resolveOrdinal(
+			existingOrdinal,
+			rawAny?.range,
+			fileUri,
+			legacyChunkId,
+			legacyFileMap
+		);
+
+		return {
+			uri,
+			hash:
+				typeof rawAny?.hash === "string"
+					? rawAny.hash
+					: String(rawAny?.hash ?? ""),
+			parentHash,
+			children,
+			description,
+			ordinal,
+			refs: {
+				symbols: refsSymbols as ChunkRecord["refs"]["symbols"],
+				files: refsFiles as ChunkRecord["refs"]["files"],
+				functions: refsFunctions as ChunkRecord["refs"]["functions"],
+			},
+			range: rawAny?.range as ChunkRecord["range"],
+			updatedAt,
+		};
+	}
+
+	private mapSymbolRef(
+		entry: unknown
+	): ChunkRecord["refs"]["symbols"][number] | undefined {
+		if (!entry || typeof entry !== "object") {
+			return undefined;
+		}
+		const symbol = entry as Record<string, unknown>;
+		const uri = this.safeParseUri(symbol.uri);
+		if (!uri) {
+			return undefined;
+		}
+		return {
+			name: typeof symbol.name === "string" ? symbol.name : "",
+			kind: typeof symbol.kind === "string" ? symbol.kind : "",
+			uri,
+			range: symbol.range as any,
+		};
+	}
+
+	private mapFunctionPointer(
+		entry: unknown
+	): ChunkRecord["refs"]["functions"][number] | undefined {
+		if (!entry || typeof entry !== "object") {
+			return undefined;
+		}
+		const fn = entry as Record<string, unknown>;
+		const uri = this.safeParseUri(fn.uri);
+		if (!uri) {
+			return undefined;
+		}
+		return {
+			name: typeof fn.name === "string" ? fn.name : "",
+			uri,
+			range: fn.range as any,
+			signature: typeof fn.signature === "string" ? fn.signature : undefined,
+		};
+	}
+
+	private safeParseUri(value: unknown): URI | undefined {
+		if (typeof value !== "string" || value.length === 0) {
+			return undefined;
+		}
+		try {
+			return URI.parse(value);
+		} catch {
+			return undefined;
+		}
+	}
+
+	private resolveOrdinal(
+		existing: number | undefined,
+		range: unknown,
+		fileUri: string,
+		legacyChunkId: string,
+		fileMapData: Record<string, unknown>
+	): number {
+		if (
+			typeof existing === "number" &&
+			Number.isFinite(existing) &&
+			existing >= 0
+		) {
+			return Math.floor(existing);
+		}
+
+		const legacyEntry = fileMapData[fileUri];
+		if (Array.isArray(legacyEntry)) {
+			const idx = legacyEntry.indexOf(legacyChunkId);
+			if (idx >= 0) {
+				return idx;
+			}
+		}
+
+		return this.computeOrdinalFromRange(range);
+	}
+
+	private computeOrdinalFromRange(range: unknown): number {
+		const chunkSize = this.getChunkSizeLines();
+		if (!range || typeof (range as any).startLineNumber !== "number") {
+			return 0;
+		}
+		const startLineNumber = Math.max(
+			0,
+			Math.floor((range as any).startLineNumber) - 1
+		);
+		if (chunkSize <= 0) {
+			return 0;
+		}
+		return Math.floor(startLineNumber / chunkSize);
+	}
+
+	private getChunkSizeLines(): number {
+		const config = this.configurationService.getValue<{
+			chunkSizeLines?: number;
+		}>("merkleTree");
+		const chunkSize =
+			typeof config?.chunkSizeLines === "number"
+				? config.chunkSizeLines
+				: DEFAULT_CONFIG.chunkSizeLines;
+		return chunkSize > 0
+			? Math.floor(chunkSize)
+			: DEFAULT_CONFIG.chunkSizeLines;
+	}
+
+	private normalizeRecord(record: ChunkRecord): ChunkRecord {
+		const ordinal = this.ensureOrdinal(record);
+		const updatedAt =
+			typeof record.updatedAt === "number" && Number.isFinite(record.updatedAt)
+				? record.updatedAt
+				: Date.now();
+		return {
+			...record,
+			ordinal,
+			updatedAt,
+		};
+	}
+
+	private ensureOrdinal(
+		record: Pick<ChunkRecord, "ordinal" | "range">
+	): number {
+		if (
+			typeof record.ordinal === "number" &&
+			Number.isFinite(record.ordinal) &&
+			record.ordinal >= 0
+		) {
+			return Math.floor(record.ordinal);
+		}
+		return this.computeOrdinalFromRange(record.range);
+	}
+
+	private buildChunkId(
+		record: ChunkRecord,
+		workspaceMeta?: { workspaceId: string; relativePath: string }
+	): string {
+		const { workspaceId, relativePath } =
+			workspaceMeta ?? this.getWorkspaceMetadata(record.uri);
+		const ordinal = Math.max(0, Math.floor(record.ordinal));
+		return formatChunkIdentifier(workspaceId, relativePath, ordinal);
+	}
+
+	private getWorkspaceMetadata(uri: URI): {
+		workspaceId: string;
+		relativePath: string;
+	} {
+		const workspace = this.workspaceService.getWorkspace();
+		const workspaceId = workspace?.id ?? "workspace-default";
+		const folder = this.workspaceService.getWorkspaceFolder(uri);
+
+		let relative = "";
+
+		if (folder) {
+			const rel = relativePath(folder.uri, uri) ?? "";
+			if (rel) {
+				const sanitized = rel.replace(/\\/g, "/");
+				if (workspace.folders.length > 1) {
+					const prefix = folder.name || folder.uri.toString();
+					relative = `${prefix}/${sanitized}`;
+				} else {
+					relative = sanitized;
+				}
+			}
+		}
+
+		if (!relative) {
+			relative =
+				uri.scheme === "file" ? uri.fsPath.replace(/\\/g, "/") : uri.toString();
+		}
+
+		if (!relative) {
+			relative = "__root__";
+		}
+
+		return {
+			workspaceId,
+			relativePath: relative,
+		};
+	}
+	private ensureFileChunkSet(fileUri: string): Set<string> {
+		let set = this.fileToChunks.get(fileUri);
+		if (!set) {
+			set = new Set();
+			this.fileToChunks.set(fileUri, set);
+		}
+		return set;
 	}
 }
 

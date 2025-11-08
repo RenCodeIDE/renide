@@ -32,6 +32,10 @@ export interface ChunkRecord {
 	parentHash?: string;
 	children?: string[];
 	description?: string;
+	/**
+	 * Zero-based ordinal of this chunk within its file. Stable across content changes.
+	 */
+	ordinal: number;
 	refs: {
 		symbols: SymbolRef[];
 		files: URI[];

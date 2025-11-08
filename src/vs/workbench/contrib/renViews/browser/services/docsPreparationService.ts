@@ -5,13 +5,18 @@
 
 import { Disposable, toDisposable } from '../../../../../base/common/lifecycle.js';
 import { URI } from '../../../../../base/common/uri.js';
-import { joinPath, relativePath } from '../../../../../base/common/resources.js';
+import {
+	joinPath,
+	relativePath,
+	dirname as resourceDirname,
+} from '../../../../../base/common/resources.js';
 import { ILogService } from '../../../../../platform/log/common/log.js';
 import { createDecorator } from '../../../../../platform/instantiation/common/instantiation.js';
 import { registerSingleton, InstantiationType } from '../../../../../platform/instantiation/common/extensions.js';
 import { IMerkleTreeService, MerkleTreeNode } from '../../../../../platform/merkleTree/common/merkleTreeService.js';
 import { FileChunk } from '../../../../../platform/merkleTree/common/merkleTreeTypes.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
+import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IDocsService, FileDocs } from './docsService.js';
 import { IChunkIndexService, ChunkRecord } from './chunkIndexService.js';
 import { IOutlineModelService } from '../../../../../editor/contrib/documentSymbols/browser/outlineModel.js';
@@ -51,6 +56,7 @@ export class DocsPreparationService
 		@IOutlineModelService private readonly outlineModelService: IOutlineModelService,
 		@ITextModelService private readonly textModelService: ITextModelService,
 		@ILanguageFeaturesService private readonly languageFeaturesService: ILanguageFeaturesService,
+		@IFileService private readonly fileService: IFileService,
 		@ILogService private readonly logService: ILogService
 	) {
 		super();
@@ -148,7 +154,7 @@ export class DocsPreparationService
 					`[DocsPrep] Chunk hashes changed for ${relativePath}. Rebuilding metadata and documentation.`
 				);
 				await this.chunkIndexService.removeChunksForFile(fileUri);
-				await this.createChunkMetadata(fileUri, fileChunks);
+				await this.createChunkMetadata(fileUri, fileChunks, node.fileHash ?? node.hash);
 				const mode = storedHashes.length > 0 ? 'regenerate' : 'initialize';
 				const doc = await this.docsService.generateDocsForFile(fileUri, mode);
 				if (doc) {
@@ -171,7 +177,15 @@ export class DocsPreparationService
 		}
 	}
 
-	private async createChunkMetadata(fileUri: URI, chunks: FileChunk[]): Promise<void> {
+	private async createChunkMetadata(
+		fileUri: URI,
+		chunks: FileChunk[],
+		fileHash?: string
+	): Promise<void> {
+		const fileContent = await this.fileService.readFile(fileUri);
+		const fileLines = fileContent.value.toString().split(/\r?\n/);
+		const parentHash = fileHash;
+
 		for (let index = 0; index < chunks.length; index++) {
 			const fileChunk = chunks[index];
 			const symbols = await this.extractSymbolsForRange(
@@ -180,16 +194,43 @@ export class DocsPreparationService
 				fileChunk.endLine
 			);
 
+			const chunkLines = fileLines.slice(fileChunk.startLine, fileChunk.endLine);
+			const includeUris = this.extractIncludeDependencies(fileUri, chunkLines);
+
+			const referencedFiles = new Map<string, URI>();
+			for (const uri of includeUris) {
+				referencedFiles.set(uri.toString(), uri);
+			}
+
+			for (const symbol of symbols) {
+				if (symbol.uri && symbol.uri.toString() !== fileUri.toString()) {
+					referencedFiles.set(symbol.uri.toString(), symbol.uri);
+				}
+			}
+
+			const functionPointers =
+				symbols
+					.filter((symbol) => {
+						const kind = symbol.kind.toLowerCase();
+						return kind.includes('function') || kind.includes('method') || kind.includes('class');
+					})
+					.map((symbol) => ({
+						name: symbol.name,
+						uri: symbol.uri,
+						range: symbol.range,
+					})) ?? [];
+
 			const chunk: ChunkRecord = {
 				uri: fileUri,
 				hash: fileChunk.hash,
-				parentHash: fileChunk.parentHash,
+				parentHash,
+				ordinal: index,
 				description: `Chunk ${index + 1} (lines ${fileChunk.startLine + 1}-${fileChunk.endLine})`,
 				range: new Range(fileChunk.startLine + 1, 1, fileChunk.endLine, 1),
 				refs: {
 					symbols,
-					files: [],
-					functions: [],
+					files: Array.from(referencedFiles.values()),
+					functions: functionPointers,
 				},
 				updatedAt: Date.now(),
 			};
@@ -233,6 +274,45 @@ export class DocsPreparationService
 		} finally {
 			reference.dispose();
 		}
+	}
+
+	private extractIncludeDependencies(fileUri: URI, chunkLines: string[]): URI[] {
+		const includePattern = /^\s*#\s*include\s+([<"])([^">]+)[">]/;
+		const dependencies = new Map<string, URI>();
+		const baseDir = resourceDirname(fileUri);
+
+		for (const line of chunkLines) {
+			const match = includePattern.exec(line);
+			if (!match) {
+				continue;
+			}
+
+			const delimiter = match[1];
+			const target = match[2].trim();
+			if (!target) {
+				continue;
+			}
+
+			if (delimiter === '"') {
+				const segments = target.split('/').filter((segment) => segment.length > 0);
+				try {
+					const resolved = joinPath(baseDir, ...segments);
+					dependencies.set(resolved.toString(), resolved);
+				} catch (error) {
+					this.logService.debug(
+						`[DocsPrep] Failed to resolve include ${target} for ${fileUri.toString(true)}: ${error}`
+					);
+				}
+			} else {
+				const systemUri = URI.from({
+					scheme: 'sysinclude',
+					path: `/${target}`,
+				});
+				dependencies.set(systemUri.toString(), systemUri);
+			}
+		}
+
+		return Array.from(dependencies.values());
 	}
 
 	private async resolveSymbolOrigin(textModel: ITextModel, position: Position): Promise<URI> {
