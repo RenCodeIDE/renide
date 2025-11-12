@@ -19,6 +19,21 @@ function code() {
 	if [[ "$OSTYPE" == "darwin"* ]]; then
 		NAME=`node -p "require('./product.json').nameLong"`
 		CODE="./.build/electron/$NAME.app/Contents/MacOS/Electron"
+		# Fallbacks if expected app bundle name is not present
+		if [[ ! -f "$CODE" ]]; then
+			# Common alternate names
+			if [[ -f "./.build/electron/Ren.app/Contents/MacOS/Electron" ]]; then
+				CODE="./.build/electron/Ren.app/Contents/MacOS/Electron"
+			elif [[ -f "./.build/electron/Electron.app/Contents/MacOS/Electron" ]]; then
+				CODE="./.build/electron/Electron.app/Contents/MacOS/Electron"
+			else
+				# Pick the first .app found under .build/electron
+				ALT_APP="$(ls -1 ./\.build/electron/*.app/Contents/MacOS/Electron 2>/dev/null | head -n 1 || true)"
+				if [[ -n "$ALT_APP" && -f "$ALT_APP" ]]; then
+					CODE="$ALT_APP"
+				fi
+			fi
+		fi
 	else
 		NAME=`node -p "require('./product.json').applicationName"`
 		CODE=".build/electron/$NAME"

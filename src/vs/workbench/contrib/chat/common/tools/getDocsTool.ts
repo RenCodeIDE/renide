@@ -267,6 +267,7 @@ export class GetDocsTool implements IToolImpl {
 				hash: fileChunk.hash,
 				parentHash: fileChunk.parentHash,
 				description: `Chunk ${i + 1} (lines ${fileChunk.startLine + 1}-${fileChunk.endLine})`,
+				ordinal: i,
 				refs: {
 					symbols,
 					files: [],
