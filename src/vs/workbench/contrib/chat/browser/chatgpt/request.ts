@@ -10,14 +10,11 @@ import {
 	DeferredPromise,
 } from "../../../../../base/common/async.js";
 import { IDisposable } from "../../../../../base/common/lifecycle.js";
-import { listenStream } from "../../../../../base/common/stream.js";
 import { localize } from "../../../../../nls.js";
 import { ILogService } from "../../../../../platform/log/common/log.js";
 import {
 	IRequestService,
-	isSuccess,
 } from "../../../../../platform/request/common/request.js";
-import { streamToBuffer } from "../../../../../base/common/buffer.js";
 import { SSEParser } from "../../../../../base/common/sseParser.js";
 import { IChatMessage } from "../../common/languageModels.js";
 import { validateIDEFormatStatic } from "./validation.js";
@@ -116,47 +113,6 @@ export async function sendChatGPTRequest(
 		}`
 	);
 
-	const context = await requestService.request(
-		{
-			type: "POST",
-			url,
-			data: body,
-			headers: {
-				"Content-Type": "application/json",
-				Authorization: `Bearer ${accessToken}`,
-				Accept: "text/event-stream",
-			},
-		},
-		token
-	);
-
-	if (!isSuccess(context)) {
-		logService?.error(
-			`[chatgpt-server] Request failed with status ${context.res.statusCode}`
-		);
-		const buffer = await streamToBuffer(context.stream);
-		const errorText = buffer.toString();
-		let errorMessage = `Server error: ${context.res.statusCode}`;
-		try {
-			const errorJson = JSON.parse(errorText);
-			if (errorJson.error?.message) {
-				errorMessage = errorJson.error.message;
-			} else if (errorJson.message) {
-				errorMessage = errorJson.message;
-			}
-		} catch {
-			if (errorText) {
-				errorMessage += ` - ${errorText}`;
-			}
-		}
-		logService?.error(`[chatgpt-server] Error details: ${errorMessage}`);
-		throw new Error(errorMessage);
-	}
-
-	logService?.info(
-		`[chatgpt-server] Request successful, starting SSE stream parsing`
-	);
-
 	const stream = new AsyncIterableSource<ChatGPTContentPart[]>();
 	const deferred = new DeferredPromise<ChatGPTResponse>();
 	const aggregatedParts: ChatGPTContentPart[] = [];
@@ -165,6 +121,7 @@ export async function sendChatGPTRequest(
 	let usage: unknown;
 	let streamCompleted = false;
 	let cancellationListener: IDisposable | undefined;
+	let abortController: AbortController | undefined;
 
 	const finalizeSuccess = () => {
 		if (streamCompleted) {
@@ -209,6 +166,9 @@ export async function sendChatGPTRequest(
 			cancellationListener.dispose();
 			cancellationListener = undefined;
 		}
+		if (abortController) {
+			abortController.abort();
+		}
 
 		if (!deferred.isSettled) {
 			deferred.error(error);
@@ -219,9 +179,6 @@ export async function sendChatGPTRequest(
 	cancellationListener = token.onCancellationRequested(() => {
 		const err = new CancellationError();
 		finalizeError(err);
-		if (typeof context.stream.destroy === "function") {
-			context.stream.destroy();
-		}
 	});
 
 	const parser = new SSEParser((event: any) => {
@@ -360,40 +317,106 @@ export async function sendChatGPTRequest(
 		}
 	});
 
-	listenStream(
-		context.stream,
-		{
-			onData: (chunk: any) => {
-				const dataTimestamp = Date.now();
+	// Use native fetch for streaming
+	abortController = new AbortController();
+	cancellationListener = token.onCancellationRequested(() => {
+		abortController?.abort();
+	});
+
+	(async () => {
+		try {
+			logService?.info(
+				`[chatgpt-server] Starting fetch request, beginning SSE stream parsing`
+			);
+
+			const response = await fetch(url, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Authorization: `Bearer ${accessToken}`,
+					Accept: "text/event-stream",
+				},
+				body: body,
+				signal: abortController.signal,
+			});
+
+			if (!response.ok) {
+				const errorText = await response.text();
+				let errorMessage = `Server error: ${response.status}`;
 				try {
-					if (!chunk || !chunk.buffer) {
-						logService?.warn(
-							`[Stream] [${dataTimestamp}] Received invalid chunk data`
-						);
-						return;
+					const errorJson = JSON.parse(errorText);
+					if (errorJson.error?.message) {
+						errorMessage = errorJson.error.message;
+					} else if (errorJson.message) {
+						errorMessage = errorJson.message;
 					}
-					logService?.debug(
-						`[Stream] [${dataTimestamp}] Received raw chunk from HTTP stream (${chunk.buffer.length} bytes)`
-					);
-					parser.feed(chunk.buffer);
-				} catch (error) {
-					const err = error instanceof Error ? error : new Error(String(error));
+				} catch {
+					if (errorText) {
+						errorMessage += ` - ${errorText}`;
+					}
+				}
+				logService?.error(`[chatgpt-server] Request failed with status ${response.status}`);
+				logService?.error(`[chatgpt-server] Error details: ${errorMessage}`);
+				throw new Error(errorMessage);
+			}
+
+			if (!response.body) {
+				throw new Error("Response body is null");
+			}
+
+			const reader = response.body.getReader();
+
+			try {
+				while (true) {
+					if (token.isCancellationRequested) {
+						break;
+					}
+
+					const { done, value } = await reader.read();
+
+					if (done) {
+						logService?.debug(`[Stream] Reader finished, finalizing stream`);
+						finalizeSuccess();
+						break;
+					}
+
+					if (value) {
+						const dataTimestamp = Date.now();
+						logService?.debug(
+							`[Stream] [${dataTimestamp}] Received raw chunk from fetch stream (${value.length} bytes)`
+						);
+						parser.feed(value);
+					}
+				}
+			} catch (readError) {
+				if (readError instanceof Error && readError.name === "AbortError") {
+					logService?.debug(`[Stream] Request aborted`);
+					if (!streamCompleted) {
+						finalizeError(new CancellationError());
+					}
+				} else {
+					const err = readError instanceof Error ? readError : new Error(String(readError));
 					logService?.error(
-						`[Stream] [${dataTimestamp}] Error feeding parser: ${err.message}`
+						`[Stream] Error reading stream: ${err.message}`
 					);
 					finalizeError(err);
 				}
-			},
-			onError: (error: any) => {
-				const err = error instanceof Error ? error : new Error(String(error));
+			} finally {
+				reader.releaseLock();
+			}
+		} catch (fetchError) {
+			if (fetchError instanceof Error && fetchError.name === "AbortError") {
+				logService?.debug(`[Stream] Fetch aborted`);
+				if (!streamCompleted) {
+					finalizeError(new CancellationError());
+				}
+			} else {
+				const err = fetchError instanceof Error ? fetchError : new Error(String(fetchError));
+				logService?.error(`[chatgpt-server] Fetch error: ${err.message}`);
 				finalizeError(err);
-			},
-			onEnd: () => {
-				finalizeSuccess();
-			},
-		},
-		token
-	);
+			}
+		}
+	})();
 
 	return {
 		stream: stream.asyncIterable,

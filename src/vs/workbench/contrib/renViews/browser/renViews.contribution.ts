@@ -113,7 +113,6 @@ export class RenViewsContribution implements IWorkbenchContribution {
 		@IEditorGroupsService editorGroupsService: IEditorGroupsService,
 		@IInstantiationService instantiationService: IInstantiationService
 	) {
-		console.log("[RenViewsContribution] Constructor called, initializing...");
 		// Set up EnvOverlay for each editor group (for .env file overlays)
 		const editorGroups = observableFromEvent(
 			this,
@@ -130,23 +129,13 @@ export class RenViewsContribution implements IWorkbenchContribution {
 
 		this._store.add(
 			autorun((r) => {
-				console.log(
-					"[RenViewsContribution] Autorun executing, processing editor groups..."
-				);
 				const toDelete = new Set(overlayWidgets.keys());
 				const toDeleteViewOverlays = new Set(viewOverlays.keys());
 				const toDeleteViewButtons = new Set(viewButtonsWidgets.keys());
 				const groups = editorGroups.read(r);
-				console.log(
-					`[RenViewsContribution] Found ${groups.length} editor groups`
-				);
 
 				for (const group of groups) {
 					if (!(group instanceof EditorGroupView)) {
-						console.log(
-							"[RenViewsContribution] Skipping non-EditorGroupView:",
-							group
-						);
 						continue;
 					}
 
@@ -196,10 +185,6 @@ export class RenViewsContribution implements IWorkbenchContribution {
 					// Attach ViewButtons to each editor group container
 					if (!viewButtonsWidgets.has(group)) {
 						const container = group.element;
-						console.log(
-							"[RenViewsContribution] Creating ViewButtons for editor group:",
-							container
-						);
 						// Ensure container has relative positioning for absolute positioning of buttons
 						if (
 							container.style.position !== "relative" &&
@@ -209,10 +194,6 @@ export class RenViewsContribution implements IWorkbenchContribution {
 						}
 						const viewButtons = new ViewButtons(container);
 						viewButtonsWidgets.set(group, viewButtons);
-						console.log(
-							"[RenViewsContribution] ViewButtons created and attached:",
-							viewButtons.element
-						);
 					}
 				}
 
@@ -251,7 +232,6 @@ export class RenViewsContribution implements IWorkbenchContribution {
 }
 
 // Register the contribution
-console.log("[RenViewsContribution] Registering workbench contribution...");
 const workbenchRegistry = Registry.as<IWorkbenchContributionsRegistry>(
 	WorkbenchExtensions.Workbench
 );
@@ -270,9 +250,6 @@ workbenchRegistry.registerWorkbenchContribution(
 workbenchRegistry.registerWorkbenchContribution(
 	GraphToolsContribution,
 	LifecyclePhase.Restored
-);
-console.log(
-	"[RenViewsContribution] Workbench contribution registered successfully"
 );
 
 const MONITORX_CHANGELOG_CONTAINER_ID = "workbench.view.monitorxChangelog";

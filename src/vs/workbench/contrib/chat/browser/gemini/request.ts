@@ -9,9 +9,7 @@ import { IDisposable } from '../../../../../base/common/lifecycle.js';
 import { localize } from '../../../../../nls.js';
 import { CancellationError } from '../../../../../base/common/errors.js';
 import { SSEParser } from '../../../../../base/common/sseParser.js';
-import { IRequestService, isSuccess } from '../../../../../platform/request/common/request.js';
-import { streamToBuffer } from '../../../../../base/common/buffer.js';
-import { listenStream } from '../../../../../base/common/stream.js';
+import { IRequestService } from '../../../../../platform/request/common/request.js';
 import type { GeminiContent, GeminiContentPart, GeminiApiChunk, GeminiRequestOptions, GeminiResponse, GeminiStreamingResponse } from './types.js';
 import { normalizeFunctionCallArgs } from './conversion.js';
 
@@ -50,29 +48,41 @@ export async function sendGeminiRequest(
 
 	const body = JSON.stringify(payload);
 
-	const context = await requestService.request({
-		type: 'POST',
-		url,
-		data: body,
-		headers: {
-			'Content-Type': 'application/json',
-			'Accept': 'text/event-stream'
-		}
-	}, token);
+	// Use native fetch for streaming
+	const abortController = new AbortController();
+	token.onCancellationRequested(() => {
+		abortController.abort();
+	});
 
-	if (!isSuccess(context)) {
-		const buffer = await streamToBuffer(context.stream);
-		const errorText = buffer.toString();
-		throw new Error(`Gemini API error: ${context.res.statusCode} - ${errorText || 'Unknown error'}`);
+	let response: Response;
+	try {
+		response = await fetch(url, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'Accept': 'text/event-stream'
+			},
+			body: body,
+			signal: abortController.signal,
+		});
+	} catch (fetchError) {
+		if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+			throw new CancellationError();
+		}
+		throw fetchError;
 	}
 
-	const contentTypeHeader = context.res.headers['content-type'];
-	const contentType = Array.isArray(contentTypeHeader) ? contentTypeHeader[0] : contentTypeHeader;
+	if (!response.ok) {
+		const errorText = await response.text();
+		throw new Error(`Gemini API error: ${response.status} - ${errorText || 'Unknown error'}`);
+	}
+
+	const contentTypeHeader = response.headers.get('content-type');
+	const contentType = contentTypeHeader ?? '';
 	const isSse = typeof contentType === 'string' && contentType.toLowerCase().includes('text/event-stream');
 
 	if (!isSse) {
-		const buffer = await streamToBuffer(context.stream);
-		const responseText = buffer.toString();
+		const responseText = await response.text();
 		let parsedValue: unknown;
 		try {
 			parsedValue = responseText ? JSON.parse(responseText) : undefined;
@@ -169,6 +179,9 @@ export async function sendGeminiRequest(
 			cancellationListener.dispose();
 			cancellationListener = undefined;
 		}
+		if (abortController) {
+			abortController.abort();
+		}
 
 		if (!deferred.isSettled) {
 			deferred.error(error);
@@ -179,9 +192,6 @@ export async function sendGeminiRequest(
 	cancellationListener = token.onCancellationRequested(() => {
 		const err = new CancellationError();
 		finalizeError(err);
-		if (typeof context.stream.destroy === 'function') {
-			context.stream.destroy();
-		}
 	});
 
 	const parser = new SSEParser(event => {
@@ -232,11 +242,12 @@ export async function sendGeminiRequest(
 		for (let index = 0; index < currentParts.length; index++) {
 			const part = currentParts[index];
 			if (typeof part?.text === 'string') {
-				const existing = textAccumulators[index] ?? '';
-				const delta = part.text.slice(existing.length);
-				textAccumulators[index] = part.text;
-				if (delta.length) {
-					newParts.push({ text: delta });
+				// Treat part.text as the delta directly (fix for streaming)
+				// Update accumulator for tracking, but emit the text directly
+				const textDelta = part.text;
+				textAccumulators[index] = (textAccumulators[index] ?? '') + textDelta;
+				if (textDelta.length) {
+					newParts.push({ text: textDelta });
 				}
 			} else if (part?.functionCall) {
 				const args = normalizeFunctionCallArgs(part.functionCall.args);
@@ -260,23 +271,44 @@ export async function sendGeminiRequest(
 		}
 	});
 
-	listenStream(context.stream, {
-		onData: chunk => {
-			try {
-				parser.feed(chunk.buffer);
-			} catch (error) {
-				const err = error instanceof Error ? error : new Error(String(error));
+	// Use native fetch reader for streaming
+	if (!response.body) {
+		throw new Error('Response body is null');
+	}
+
+	const reader = response.body.getReader();
+
+	(async () => {
+		try {
+			while (true) {
+				if (token.isCancellationRequested) {
+					break;
+				}
+
+				const { done, value } = await reader.read();
+
+				if (done) {
+					finalizeSuccess();
+					break;
+				}
+
+				if (value) {
+					parser.feed(value);
+				}
+			}
+		} catch (readError) {
+			if (readError instanceof Error && readError.name === 'AbortError') {
+				if (!streamCompleted) {
+					finalizeError(new CancellationError());
+				}
+			} else {
+				const err = readError instanceof Error ? readError : new Error(String(readError));
 				finalizeError(err);
 			}
-		},
-		onError: error => {
-			const err = error instanceof Error ? error : new Error(String(error));
-			finalizeError(err);
-		},
-		onEnd: () => {
-			finalizeSuccess();
+		} finally {
+			reader.releaseLock();
 		}
-	}, token);
+	})();
 
 	return {
 		stream: stream.asyncIterable,

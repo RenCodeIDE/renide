@@ -51,30 +51,6 @@ export function applyTerminalTools(server: McpServer, appService: ApplicationSer
 		}
 	));
 
-	// Playwright can probably figure this out
-	// server.tool(
-	// 	'vscode_automation_terminal_wait_for_text',
-	// 	'Wait for specific text to appear in terminal output',
-	// 	{
-	// 		acceptFunction: z.string().describe('JavaScript function body that takes buffer array and returns boolean'),
-	// 		message: z.string().optional().describe('Optional message for waiting'),
-	// 		splitIndex: z.number().optional().describe('Split terminal index (0 or 1)')
-	// 	},
-	// 	async (args) => {
-	// 		const { acceptFunction, message, splitIndex } = args;
-	// 		// Create function from string
-	// 		const acceptFn = new Function('buffer', acceptFunction) as (buffer: string[]) => boolean;
-	// 		const terminalSplitIndex = splitIndex === 0 ? 0 : splitIndex === 1 ? 1 : undefined;
-	// 		await app.workbench.terminal.waitForTerminalText(acceptFn, message, terminalSplitIndex);
-	// 		return {
-	// 			content: [{
-	// 				type: 'text' as const,
-	// 				text: `Terminal text condition met: ${message || 'custom condition'}`
-	// 			}]
-	// 		};
-	// 	}
-	// );
-
 	tools.push(server.tool(
 		'vscode_automation_terminal_get_groups',
 		'Get current terminal groups information',
@@ -89,55 +65,6 @@ export function applyTerminalTools(server: McpServer, appService: ApplicationSer
 			};
 		}
 	));
-
-	// Seems too niche and redundant with runCommand tool
-	// server.tool(
-	// 	'vscode_automation_terminal_run_command_by_id',
-	// 	'Run a terminal command by ID',
-	// 	{
-	// 		commandId: z.enum([
-	// 			'workbench.action.terminal.split',
-	// 			'workbench.action.terminal.killAll',
-	// 			'workbench.action.terminal.unsplit',
-	// 			'workbench.action.terminal.join',
-	// 			'workbench.action.terminal.toggleTerminal',
-	// 			'workbench.action.createTerminalEditor',
-	// 			'workbench.action.createTerminalEditorSide',
-	// 			'workbench.action.terminal.moveToTerminalPanel',
-	// 			'workbench.action.terminal.moveToEditor',
-	// 			'workbench.action.terminal.newWithProfile',
-	// 			'workbench.action.terminal.selectDefaultShell',
-	// 			'workbench.action.terminal.detachSession',
-	// 			'workbench.action.terminal.new'
-	// 		]).describe('Terminal command ID to execute'),
-	// 		expectedLocation: z.enum(['editor', 'panel']).optional().describe('Expected location after command')
-	// 	},
-	// 	async (args) => {
-	// 		const { commandId, expectedLocation } = args;
-	// 		await app.workbench.terminal.runCommand(commandId as any, expectedLocation);
-	// 		return {
-	// 			content: [{
-	// 				type: 'text' as const,
-	// 				text: `Executed terminal command: ${commandId}`
-	// 			}]
-	// 		};
-	// 	}
-	// );
-
-	// Playwright can probably figure this out
-	// server.tool(
-	// 	'vscode_automation_terminal_split',
-	// 	'Split the current terminal',
-	// 	async () => {
-	// 		await app.workbench.terminal.clickSplitButton();
-	// 		return {
-	// 			content: [{
-	// 				type: 'text' as const,
-	// 				text: 'Split terminal'
-	// 			}]
-	// 		};
-	// 	}
-	// );
 
 	return tools;
 }

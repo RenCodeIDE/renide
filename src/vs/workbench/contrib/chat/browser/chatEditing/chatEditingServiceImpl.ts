@@ -302,12 +302,6 @@ export class ChatEditingService extends Disposable implements IChatEditingServic
 				}
 
 				// Edit came from EditTool - proceed normally
-				console.log('[MonitorX] EditTool PATH - Processing edit from EditTool:', {
-					requestId: responseModel.requestId,
-					uri: uriKey,
-					partIndex: i
-				});
-
 				// get new edits and start editing session
 				let entry = editsSeen[i];
 				if (!entry) {

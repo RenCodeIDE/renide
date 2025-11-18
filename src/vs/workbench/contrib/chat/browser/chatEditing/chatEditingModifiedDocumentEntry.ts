@@ -258,9 +258,6 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 
 		if (isLastEdits) {
 			try {
-				if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
-					console.log('[MonitorX] acceptAgentEdits: calling storeChangelogDraft', { isLastEdits, resource: resource.toString() });
-				}
 				// Wait a bit for diff to compute (it's async but not awaited in acceptAgentEdits)
 				await new Promise(resolve => setTimeout(resolve, 100));
 				await this.storeChangelogDraft();
@@ -313,25 +310,13 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 
 	protected override async buildChangelogDraft(): Promise<IMonitorXChangelogDraftSeed | undefined> {
 		const diffInfo = this._textModelChangeService.diffInfo.get();
-		if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
-			console.log('[MonitorX] buildChangelogDraft: called', { hasDiffInfo: !!diffInfo, isIdentical: diffInfo?.identical, uri: this.originalURI.toString() });
-		}
 		if (!diffInfo || diffInfo.identical) {
-			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
-				console.warn('[MonitorX] buildChangelogDraft: No diffInfo or identical', { hasDiffInfo: !!diffInfo, isIdentical: diffInfo?.identical });
-			}
 			return undefined;
 		}
 
 		const filePath = this._resolveWorkspaceRelativePath();
 		const diffString = this._formatUnifiedDiff(diffInfo);
-		if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
-			console.log('[MonitorX] buildChangelogDraft: diffString generated', { filePath, diffLength: diffString.length, diffTrimmed: diffString.trim().length });
-		}
 		if (!diffString.trim()) {
-			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
-				console.warn('[MonitorX] buildChangelogDraft: Empty diffString', { filePath });
-			}
 			return undefined;
 		}
 
@@ -345,16 +330,6 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 		const subject = this._generateSubject(linesAdded, linesRemoved);
 		const description = this._generateDescription(linesAdded, linesRemoved);
 		const metadata = this._buildMetadata(linesAdded, linesRemoved);
-
-		console.log('[MonitorX] buildChangelogDraft: final result', {
-			filePath,
-			subject,
-			descriptionLength: description.length,
-			hasMetadata: !!metadata,
-			editExplanation: this._telemetryInfo.editExplanation,
-			requestId: this._telemetryInfo.requestId,
-			sessionId: this._telemetryInfo.sessionId
-		});
 
 		return {
 			subject,
@@ -427,13 +402,6 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 		// Prefer model-provided subject if available
 		const modelSubject = this._telemetryInfo.editSubject;
 		if (typeof modelSubject === 'string' && modelSubject.trim()) {
-			console.log('[MonitorX] _generateSubject: using model-provided subject', {
-				file: this.originalURI.toString(),
-				subject: modelSubject,
-				subjectWordCount: modelSubject.split(/\s+/).length,
-				requestId: this._telemetryInfo.requestId,
-				sessionId: this._telemetryInfo.sessionId
-			});
 			return modelSubject.trim();
 		}
 
@@ -442,29 +410,8 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 		if (typeof raw === 'string' && raw.trim()) {
 			// Generate a meaningful 5-6 word subject from the explanation
 			const subject = this._extractMeaningfulSubject(raw.trim());
-
-			console.log('[MonitorX] _generateSubject: extracted from explanation', {
-				file: this.originalURI.toString(),
-				rawLength: raw.length,
-				rawPreview: raw.substring(0, 100),
-				subject,
-				subjectWordCount: subject.split(/\s+/).length,
-				fallback,
-				requestId: this._telemetryInfo.requestId,
-				sessionId: this._telemetryInfo.sessionId
-			});
-
 			return subject || fallback;
 		}
-
-		console.log('[MonitorX] _generateSubject: using fallback', {
-			file: this.originalURI.toString(),
-			hasRawExplanation: !!raw,
-			hasModelSubject: !!modelSubject,
-			fallback,
-			requestId: this._telemetryInfo.requestId,
-			sessionId: this._telemetryInfo.sessionId
-		});
 
 		return fallback;
 	}

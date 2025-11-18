@@ -605,16 +605,6 @@ export class ChatEditingSession extends Disposable implements IChatEditingSessio
 					const normalizedResource = CellUri.parse(resource)?.notebook ?? resource;
 					const key = `${responseModel.requestId}:${normalizedResource.toString()}`;
 					const explanation = self._editExplanations.get(key);
-					console.log('[MonitorX] editExplanation getter:', {
-						requestId: responseModel.requestId,
-						originalResource: resource.toString(),
-						normalizedResource: normalizedResource.toString(),
-						key,
-						hasExplanation: !!explanation,
-						explanationLength: explanation?.length,
-						mapSize: self._editExplanations.size,
-						allKeys: Array.from(self._editExplanations.keys())
-					});
 					return explanation;
 				}
 				return undefined;
@@ -648,17 +638,6 @@ export class ChatEditingSession extends Disposable implements IChatEditingSessio
 	 */
 	public storeEditExplanation(requestId: string, resource: URI, explanation: string, subject?: string, description?: string): void {
 		const key = `${requestId}:${resource.toString()}`;
-		console.log('[MonitorX] storeEditExplanation:', {
-			requestId,
-			resource: resource.toString(),
-			key,
-			explanation: explanation.substring(0, 100),
-			explanationLength: explanation.length,
-			hasSubject: !!subject,
-			subject: subject,
-			hasDescription: !!description,
-			mapSize: this._editExplanations.size
-		});
 		this._editExplanations.set(key, explanation);
 		if (subject) {
 			this._editSubjects.set(key, subject);
@@ -666,15 +645,6 @@ export class ChatEditingSession extends Disposable implements IChatEditingSessio
 		if (description) {
 			this._editDescriptions.set(key, description);
 		}
-		const stored = this._editExplanations.get(key);
-		console.log('[MonitorX] storeEditExplanation: stored successfully', {
-			key,
-			hasValue: !!stored,
-			storedLength: stored?.length,
-			hasSubject: this._editSubjects.has(key),
-			hasDescription: this._editDescriptions.has(key),
-			allKeys: Array.from(this._editExplanations.keys())
-		});
 	}
 
 	/**

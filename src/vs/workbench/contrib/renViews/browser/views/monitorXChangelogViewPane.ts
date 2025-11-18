@@ -129,9 +129,6 @@ export class MonitorXChangelogViewPane extends ViewPane {
 	private renderDrafts(): void {
 		const filter = this.buildFilter();
 		const drafts = this.changelogBuffer.listDrafts(filter);
-		if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
-			console.log('[MonitorX UI] renderDrafts: called', { draftCount: drafts.length, drafts: drafts.map(d => ({ sessionId: d.sessionId, subject: d.subject?.substring(0, 50) })) });
-		}
 		renderMonitorXChangelogDrafts(this.draftsContainer, drafts, {
 			emptyMessage: localize('monitorx.changelog.drafts.empty', "No pending MonitorX drafts."),
 			onFileClick: path => this.openFile(path),
@@ -376,9 +373,6 @@ export class MonitorXChangelogViewPane extends ViewPane {
 	}
 
 	private applyFilter(): void {
-		if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
-			console.log('[MonitorX UI] applyFilter: called', { filter: this.currentFilter });
-		}
 		this.renderDrafts();
 		this.renderEntries();
 	}
@@ -418,9 +412,6 @@ export class MonitorXChangelogViewPane extends ViewPane {
 
 				if (entry) {
 					// Entry exists (EditTool or file operation entry) - call accept() which will finalize changelog AND apply edits
-					if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
-						console.log(`[MonitorX] handleFinalizeDraft: Found entry for draft, calling accept()`, { sessionId, entryUri: entry.modifiedURI.toString() });
-					}
 					await entry.accept();
 					return;
 				}
@@ -428,16 +419,9 @@ export class MonitorXChangelogViewPane extends ViewPane {
 
 			// No entry found (shouldn't happen for file operations, but handle gracefully)
 			// Finalize draft directly and add to changelog
-			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
-				console.log(`[MonitorX] handleFinalizeDraft: No entry found, finalizing draft directly`, { sessionId });
-			}
-
 			const finalizedEntry = this.changelogBuffer.finalizeDraft(sessionId);
 			if (finalizedEntry) {
 				await this.workspaceStore.addChangelogEntry(finalizedEntry);
-				if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
-					console.log(`[MonitorX] handleFinalizeDraft: Draft finalized and added to changelog`, { sessionId, subject: finalizedEntry.subject?.substring(0, 50) });
-				}
 			} else {
 				console.warn(`[MonitorX] handleFinalizeDraft: Failed to finalize draft`, { sessionId });
 			}
