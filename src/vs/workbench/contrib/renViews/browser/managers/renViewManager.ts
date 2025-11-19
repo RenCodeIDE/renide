@@ -2,13 +2,12 @@
 import { Disposable } from "../../../../../base/common/lifecycle.js";
 import { IRenView } from "../views/renView.interface.js";
 import { CodeView } from "../views/codeView.js";
-import { MonitorXView } from "../views/monitorXView.js";
 import { GraphView } from "../views/graphView.js";
 import { IInstantiationService } from "../../../../../platform/instantiation/common/instantiation.js";
 import { ILogService } from "../../../../../platform/log/common/log.js";
 import { createDecorator } from "../../../../../platform/instantiation/common/instantiation.js";
 
-export type RenViewMode = "code" | "monitorx" | "graph";
+export type RenViewMode = "code" | "graph";
 
 export const IRenViewManager =
 	createDecorator<IRenViewManager>("IRenViewManager");
@@ -49,26 +48,6 @@ export class RenViewManager extends Disposable implements IRenViewManager {
 			} catch (error) {
 				this.logService.error(
 					"[RenViewManager] Failed to initialize CodeView:",
-					error
-				);
-			}
-
-			// Initialize MonitorXView (uses DI)
-			try {
-				const monitorXView = this._register(
-					this.instantiationService.createInstance(MonitorXView)
-				);
-				this._views.set("monitorx", monitorXView);
-				this.logService.info(
-					"[RenViewManager] MonitorXView initialized successfully"
-				);
-			} catch (error) {
-				this.logService.error(
-					"[RenViewManager] Failed to initialize MonitorXView:",
-					error
-				);
-				console.error(
-					"[RenViewManager] MonitorXView initialization error:",
 					error
 				);
 			}

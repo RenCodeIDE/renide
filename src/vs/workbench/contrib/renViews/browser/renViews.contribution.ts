@@ -40,7 +40,6 @@ import {
 	Extensions as ViewExtensions,
 	ViewContainer,
 } from "../../../common/views.js";
-import { MonitorXChangelogViewPane } from "./views/monitorXChangelogViewPane.js";
 import { DocsViewPane } from "./views/docsView/docsViewPane.js";
 import { CommandsRegistry } from "../../../../platform/commands/common/commands.js";
 import {
@@ -53,11 +52,6 @@ import {
 	Extensions as ConfigurationExtensions,
 	ConfigurationScope,
 } from "../../../../platform/configuration/common/configurationRegistry.js";
-import {
-	IRenWorkspaceStore,
-	IMonitorXChangelogEntryInput,
-	IMonitorXChangelogFileChange,
-} from "../common/renWorkspaceStore.js";
 import { IDocsService } from "./services/docsService.js";
 import { IDocsPreparationService } from "./services/docsPreparationService.js";
 import {
@@ -67,8 +61,6 @@ import {
 import { IEditorService } from "../../../services/editor/common/editorService.js";
 import "./renWorkspaceStore.js";
 import "./renChangelogBuffer.js";
-import { MonitorXChangelogToolContribution } from "./monitorXChangelogTool.js";
-import { MonitorXChangelogQueryToolContribution } from "./monitorXChangelogQueryTools.js";
 import {
 	IProgressService,
 	ProgressLocation,
@@ -240,160 +232,10 @@ workbenchRegistry.registerWorkbenchContribution(
 	LifecyclePhase.Restored
 );
 workbenchRegistry.registerWorkbenchContribution(
-	MonitorXChangelogToolContribution,
-	LifecyclePhase.Restored
-);
-workbenchRegistry.registerWorkbenchContribution(
-	MonitorXChangelogQueryToolContribution,
-	LifecyclePhase.Restored
-);
-workbenchRegistry.registerWorkbenchContribution(
 	GraphToolsContribution,
 	LifecyclePhase.Restored
 );
 
-const MONITORX_CHANGELOG_CONTAINER_ID = "workbench.view.monitorxChangelog";
-const MONITORX_CHANGELOG_VIEW_ID = "workbench.view.monitorxChangelog.entries";
-const monitorXChangelogIcon = registerIcon(
-	"monitorx-changelog-view-icon",
-	Codicon.history,
-	localize("monitorxChangelogIcon", "MonitorX changelog view icon.")
-);
-
-const monitorXChangelogContainer: ViewContainer =
-	Registry.as<IViewContainersRegistry>(
-		ViewExtensions.ViewContainersRegistry
-	).registerViewContainer(
-		{
-			id: MONITORX_CHANGELOG_CONTAINER_ID,
-			title: localize2("monitorxActivityTitle", "MonitorX"),
-			ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [
-				MONITORX_CHANGELOG_CONTAINER_ID,
-				{ mergeViewWithContainerWhenSingleView: true },
-			]),
-			icon: monitorXChangelogIcon,
-			hideIfEmpty: false,
-		},
-		ViewContainerLocation.Sidebar
-	);
-
-Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(
-	[
-		{
-			id: MONITORX_CHANGELOG_VIEW_ID,
-			name: localize2("monitorxChangelogViewTitle", "MonitorX Changelog"),
-			ctorDescriptor: new SyncDescriptor(MonitorXChangelogViewPane),
-			canToggleVisibility: true,
-			canMoveView: true,
-			collapsed: false,
-			order: 10,
-		},
-	],
-	monitorXChangelogContainer
-);
-
-const MONITORX_ADD_CHANGELOG_COMMAND = "ren.monitorx.addChangelogEntry";
-const MONITORX_GET_CHANGELOG_COMMAND = "ren.monitorx.getRecentChangelogEntries";
-
-if (!CommandsRegistry.getCommand(MONITORX_ADD_CHANGELOG_COMMAND)) {
-	CommandsRegistry.registerCommand({
-		id: MONITORX_ADD_CHANGELOG_COMMAND,
-		handler: async (
-			accessor,
-			args: Partial<IMonitorXChangelogEntryInput> | undefined
-		) => {
-			const workspaceStore = accessor.get(IRenWorkspaceStore);
-			if (!args) {
-				throw new Error(
-					"monitorx.addChangelogEntry requires an argument payload."
-				);
-			}
-
-			const subject =
-				typeof args.subject === "string" ? args.subject.trim() : "";
-			if (!subject) {
-				throw new Error(
-					"monitorx.addChangelogEntry requires a non-empty subject string."
-				);
-			}
-
-			const description =
-				typeof args.description === "string" ? args.description : "";
-			const filesInput = Array.isArray(args.files) ? args.files : [];
-			const files: IMonitorXChangelogFileChange[] = [];
-			for (const file of filesInput) {
-				if (!file || typeof file !== "object") {
-					continue;
-				}
-				const record = file as Record<string, unknown>;
-				const path = typeof record.path === "string" ? record.path : undefined;
-				const diff = typeof record.diff === "string" ? record.diff : undefined;
-				if (path && diff !== undefined) {
-					files.push({ path, diff });
-				}
-			}
-			if (!files.length) {
-				throw new Error(
-					"monitorx.addChangelogEntry requires at least one file change with path and diff."
-				);
-			}
-
-			const graphRecord =
-				args.graph &&
-				typeof args.graph === "object" &&
-				!Array.isArray(args.graph)
-					? (args.graph as Record<string, unknown>)
-					: undefined;
-			const graphInput = graphRecord
-				? {
-						uri:
-							typeof graphRecord.uri === "string" ? graphRecord.uri : undefined,
-						summary:
-							typeof graphRecord.summary === "string"
-								? graphRecord.summary
-								: undefined,
-				  }
-				: undefined;
-			const metadata =
-				args.metadata &&
-				typeof args.metadata === "object" &&
-				!Array.isArray(args.metadata)
-					? (args.metadata as Record<string, unknown>)
-					: undefined;
-
-			const entryInput: IMonitorXChangelogEntryInput = {
-				subject,
-				description,
-				files,
-				...(graphInput &&
-				(graphInput.uri || (graphInput.summary && graphInput.summary.trim()))
-					? { graph: graphInput }
-					: {}),
-				...(metadata ? { metadata } : {}),
-				timestamp:
-					typeof args.timestamp === "number" ? args.timestamp : undefined,
-			};
-
-			const entry = await workspaceStore.addChangelogEntry(entryInput);
-			return { ...entry };
-		},
-	});
-}
-
-if (!CommandsRegistry.getCommand(MONITORX_GET_CHANGELOG_COMMAND)) {
-	CommandsRegistry.registerCommand({
-		id: MONITORX_GET_CHANGELOG_COMMAND,
-		handler: async (accessor, args: { limit?: number } | undefined) => {
-			const workspaceStore = accessor.get(IRenWorkspaceStore);
-			const limit =
-				args && typeof args.limit === "number"
-					? Math.max(1, Math.floor(args.limit))
-					: 10;
-			const entries = await workspaceStore.getRecentChangelogEntries(limit);
-			return entries.map((entry) => ({ ...entry }));
-		},
-	});
-}
 
 // --- Docs Container & View Registration ---
 const DOCS_CONTAINER_ID = "workbench.view.renDocs";

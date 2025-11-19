@@ -17,6 +17,7 @@ import { CreateFileTool, CreateFileToolData } from './createFileTool.js';
 import { DeleteFileTool, DeleteFileToolData } from './deleteFileTool.js';
 import { SearchFilesTool, SearchFilesToolData } from './searchFilesTool.js';
 import { GetDocsTool, GetDocsToolData } from './getDocsTool.js';
+import { CheckLinterTool, CheckLinterToolData } from './checkLinterTool.js';
 
 export class BuiltinToolsContribution extends Disposable implements IWorkbenchContribution {
 
@@ -65,6 +66,10 @@ export class BuiltinToolsContribution extends Disposable implements IWorkbenchCo
 
 		const getDocsTool = instantiationService.createInstance(GetDocsTool);
 		this._register(toolsService.registerTool(GetDocsToolData, getDocsTool));
+
+		// Register the linter check tool
+		const checkLinterTool = instantiationService.createInstance(CheckLinterTool);
+		this._register(toolsService.registerTool(CheckLinterToolData, checkLinterTool));
 	}
 }
 
