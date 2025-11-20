@@ -12,7 +12,9 @@ import { Extensions, IJSONContributionRegistry } from '../../../../platform/json
 import { wrapInHotClass1 } from '../../../../platform/observable/common/wrapInHotClass.js';
 import { Registry } from '../../../../platform/registry/common/platform.js';
 import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
+import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { InlineCompletionLanguageStatusBarContribution } from './inlineCompletionLanguageStatusBarContribution.js';
+import { AIInlineCompletionsProvider } from './aiInlineCompletionsProvider.js';
 
 registerWorkbenchContribution2(InlineCompletionLanguageStatusBarContribution.Id, wrapInHotClass1(InlineCompletionLanguageStatusBarContribution.hot), WorkbenchPhase.Eventually);
 
@@ -40,3 +42,22 @@ export class InlineCompletionSchemaContribution extends Disposable implements IW
 }
 
 registerWorkbenchContribution2(InlineCompletionSchemaContribution.Id, InlineCompletionSchemaContribution, WorkbenchPhase.Eventually);
+
+export class AIInlineCompletionsContribution extends Disposable implements IWorkbenchContribution {
+	public static Id = 'ren.contrib.AIInlineCompletions';
+
+	constructor(
+		@ILanguageFeaturesService private readonly _languageFeaturesService: ILanguageFeaturesService,
+		@IInstantiationService private readonly _instantiationService: IInstantiationService,
+	) {
+		super();
+
+		// Register the AI inline completions provider for all languages
+		const provider = this._instantiationService.createInstance(AIInlineCompletionsProvider);
+		this._register(
+			this._languageFeaturesService.inlineCompletionsProvider.register('*', provider)
+		);
+	}
+}
+
+registerWorkbenchContribution2(AIInlineCompletionsContribution.Id, AIInlineCompletionsContribution, WorkbenchPhase.Eventually);

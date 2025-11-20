@@ -54,6 +54,8 @@ import type { IWorkspaceContextService } from "../../../../../../platform/worksp
 import { GraphCacheManager, generateCacheKey } from "./graphCache/index.js";
 import { FunctionCallAnalyzer } from "./functionCallAnalyzer.js";
 import { IModelService } from "../../../../../../editor/common/services/model.js";
+import { ITreeSitterLibraryService } from "../../../../../../editor/common/services/treeSitter/treeSitterLibraryService.js";
+import { TreeSitterAnalyzer } from "./treeSitterAnalyzer.js";
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 interface GitHeatmapBuildOptions {
@@ -112,15 +114,20 @@ export class GraphDataBuilder {
 		@IGitHeatmapService private readonly gitHeatmapService: IGitHeatmapService,
 		@IMerkleTreeService private readonly merkleTreeService: IMerkleTreeService,
 		@IModelService private readonly modelService: IModelService,
-		@IStorageService private readonly storageService?: IStorageService
+		@IStorageService private readonly storageService?: IStorageService,
+		@ITreeSitterLibraryService private readonly treeSitterLibraryService?: ITreeSitterLibraryService
 	) {
+		const treeSitterAnalyzer = this.treeSitterLibraryService
+			? new TreeSitterAnalyzer(this.treeSitterLibraryService, this.fileService, this.logService)
+			: undefined;
 		this.architectureAnalyzer = new ArchitectureAnalyzer(
 			this.logService,
 			this.fileService,
 			this.searchService,
 			this.commandService,
 			this.languageFeaturesService,
-			this.context
+			this.context,
+			treeSitterAnalyzer
 		);
 
 		// Initialize cache manager if storage service is available

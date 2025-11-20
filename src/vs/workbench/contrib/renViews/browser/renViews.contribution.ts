@@ -84,6 +84,8 @@ import {
 import { IRenViewManager, RenViewManager } from "./managers/renViewManager.js";
 import { IGraphService, GraphService } from "./services/graphService.js";
 import { GraphToolsContribution } from "./tools/graphToolsContribution.js";
+import { MonitorXChangelogToolsContribution } from "./monitorXChangelogToolsContribution.js";
+import { MonitorXViewPane } from "./views/monitorXView/monitorXViewPane.js";
 
 if (isWeb) {
 	registerSingleton(
@@ -234,6 +236,51 @@ workbenchRegistry.registerWorkbenchContribution(
 workbenchRegistry.registerWorkbenchContribution(
 	GraphToolsContribution,
 	LifecyclePhase.Restored
+);
+workbenchRegistry.registerWorkbenchContribution(
+	MonitorXChangelogToolsContribution,
+	LifecyclePhase.Restored
+);
+
+
+// --- MonitorX Container & View Registration ---
+const MONITORX_CONTAINER_ID = "workbench.view.monitorX";
+const MONITORX_VIEW_ID = "workbench.view.monitorX.changelog";
+const monitorXIcon = registerIcon(
+	"ren-monitorx-view-icon",
+	Codicon.history, // Using history icon for changelog
+	localize("monitorXViewIcon", "MonitorX view icon.")
+);
+
+const monitorXContainer: ViewContainer = Registry.as<IViewContainersRegistry>(
+	ViewExtensions.ViewContainersRegistry
+).registerViewContainer(
+	{
+		id: MONITORX_CONTAINER_ID,
+		title: localize2("monitorXActivityTitle", "MonitorX"),
+		ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [
+			MONITORX_CONTAINER_ID,
+			{ mergeViewWithContainerWhenSingleView: true },
+		]),
+		icon: monitorXIcon,
+		hideIfEmpty: false,
+	},
+	ViewContainerLocation.Sidebar
+);
+
+Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(
+	[
+		{
+			id: MONITORX_VIEW_ID,
+			name: localize2("monitorXViewTitle", "Changelog"),
+			ctorDescriptor: new SyncDescriptor(MonitorXViewPane),
+			canToggleVisibility: true,
+			canMoveView: true,
+			collapsed: false,
+			order: 1,
+		},
+	],
+	monitorXContainer
 );
 
 

@@ -68,6 +68,9 @@ import { InlineChatError } from './inlineChatSessionServiceImpl.js';
 import { HunkAction, IEditObserver, IInlineChatMetadata, LiveStrategy, ProgressingEditsOptions } from './inlineChatStrategies.js';
 import { EditorBasedInlineChatWidget } from './inlineChatWidget.js';
 import { InlineChatZoneWidget } from './inlineChatZoneWidget.js';
+import { IChunkSearchService, ChunkSearchResult } from '../../renViews/browser/services/chunkSearchService.js';
+import { toFileVariableEntry } from '../../chat/common/chatVariableEntries.js';
+import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 
 export const enum State {
 	CREATE_SESSION = 'CREATE_SESSION',
@@ -1273,6 +1276,9 @@ export class InlineChatController2 implements IEditorContribution {
 		@IInlineChatSessionService inlineChatService: IInlineChatSessionService,
 		@IConfigurationService configurationService: IConfigurationService,
 		@IChatService chatService: IChatService,
+		@IChunkSearchService private readonly _chunkSearchService: IChunkSearchService,
+		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
+		@ILogService private readonly _logService: ILogService,
 	) {
 
 		const ctxInlineChatVisible = CTX_INLINE_CHAT_VISIBLE.bindTo(contextKeyService);
@@ -1453,6 +1459,103 @@ export class InlineChatController2 implements IEditorContribution {
 				const requestCount = observableFromEvent(this, session.chatModel.onDidChange, () => session.chatModel.getRequests().length).read(r);
 				this._zone.value.widget.updateToolbar(requestCount > 0);
 			}
+		}));
+
+		// Integrate RAG: Search for relevant code chunks when user sends a request
+		this._store.add(autorunWithStore((r, store) => {
+			const session = visibleSessionObs.read(r);
+			if (!session) {
+				return;
+			}
+
+			const widget = this._zone.rawValue?.widget;
+			if (!widget) {
+				return;
+			}
+
+			const chatWidget = widget.chatWidget;
+			if (!chatWidget) {
+				return;
+			}
+
+			// Listen to when user accepts input (sends a request)
+			// We need to add RAG context before the request is sent, so we do it synchronously
+			// with a timeout to avoid blocking too long
+			store.add(chatWidget.onDidAcceptInput(() => {
+				const inputText = chatWidget.getInput();
+				if (!inputText || inputText.trim().length === 0) {
+					return;
+				}
+
+				// Search for relevant code chunks using RAG (fire and forget, but try to complete quickly)
+				// We use Promise.race with a timeout to ensure we don't block the request
+				const ragPromise = (async () => {
+					try {
+						this._logService.trace(`[InlineChatController] Searching RAG chunks for query: ${inputText.substring(0, 50)}...`);
+						const chunks = await Promise.race([
+							this._chunkSearchService.search(inputText, 10),
+							new Promise<ChunkSearchResult[]>(resolve => setTimeout(() => resolve([]), 500)) // 500ms timeout
+						]);
+
+						if (chunks.length === 0) {
+							this._logService.trace(`[InlineChatController] No RAG chunks found`);
+							return;
+						}
+
+						// Get workspace root to resolve relative file paths
+						const workspace = this._workspaceContextService.getWorkspace();
+						if (!workspace.folders || workspace.folders.length === 0) {
+							return;
+						}
+						const workspaceRoot = workspace.folders[0].uri;
+
+						// Add found chunks as file context entries
+						const contextEntries: IChatRequestVariableEntry[] = [];
+						for (const chunk of chunks) {
+							try {
+								// Convert relative file path to absolute URI
+								const fileUri = URI.joinPath(workspaceRoot, chunk.filePath);
+								
+								// Check if file exists (quick check, don't await if it takes too long)
+								const exists = await Promise.race([
+									this._fileService.exists(fileUri),
+									new Promise<boolean>(resolve => setTimeout(() => resolve(false), 100))
+								]);
+								
+								if (exists) {
+									// Create a range from the chunk's line numbers (convert from 0-based to 1-based)
+									const range = new Range(
+										chunk.startLine + 1,
+										1,
+										chunk.endLine + 1,
+										Number.MAX_SAFE_INTEGER
+									);
+									
+									const fileEntry = toFileVariableEntry(fileUri, range);
+									contextEntries.push(fileEntry);
+								}
+							} catch (e) {
+								// Skip invalid chunks
+								this._logService.debug(`[InlineChatController] Failed to add chunk ${chunk.filePath}: ${e}`);
+							}
+						}
+
+						if (contextEntries.length > 0) {
+							this._logService.trace(`[InlineChatController] Adding ${contextEntries.length} RAG chunks as context`);
+							chatWidget.attachmentModel.addContext(...contextEntries);
+						}
+					} catch (e) {
+						// Don't block the request if RAG search fails
+						this._logService.debug(`[InlineChatController] RAG search failed: ${e}`);
+					}
+				})();
+
+				// Don't await, but try to complete before the request is sent
+				// The ChatWidget's _acceptInput has some processing before sending, so this should work
+				ragPromise.catch(() => {
+					// Silently handle errors
+				});
+			}));
 		}));
 
 		this._store.add(autorun(r => {

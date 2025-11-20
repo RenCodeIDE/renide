@@ -58,20 +58,7 @@ interface SchemaSummary {
 	tables?: Array<{ name: string; columns: string[] }>;
 }
 
-interface HttpCallSummary {
-	method: string;
-	url: string;
-	resource: string;
-	file: string;
-	snippet?: string;
-}
-
-interface GraphQLOperationSummary {
-	type: string;
-	name?: string;
-	file: string;
-	snippet: string;
-}
+import type { HttpCallSummary, GraphQLOperationSummary } from './treeSitterAnalyzer.js';
 
 type PackageManifest = {
 	dependencies?: Record<string, string>;
@@ -267,6 +254,7 @@ export class ArchitectureAnalyzer {
 	private readonly frontendsByApplication = new Map<string, Set<string>>();
 	private readonly componentToApplication = new Map<string, string>();
 	private readonly componentLabels = new Map<string, string>();
+	private readonly projectRoots = new ResourceMap<string>(); // URI -> Application Key
 
 	readonly onProgress = this.onProgressEmitter.event;
 
@@ -276,7 +264,8 @@ export class ArchitectureAnalyzer {
 		private readonly searchService: ISearchService,
 		private readonly commandService: ICommandService,
 		private readonly languageFeaturesService: ILanguageFeaturesService,
-		private readonly context: GraphWorkspaceContext
+		private readonly context: GraphWorkspaceContext,
+		private readonly treeSitterAnalyzer?: import('./treeSitterAnalyzer.js').TreeSitterAnalyzer
 	) { }
 
 	async analyze(options: ArchitectureAnalyzeOptions = {}): Promise<ArchitectureAnalysisResult> {
@@ -293,17 +282,24 @@ export class ArchitectureAnalyzer {
 		this.frontendsByApplication.clear();
 		this.componentToApplication.clear();
 		this.componentLabels.clear();
+		this.projectRoots.clear();
 
+		this.onProgressEmitter.fire('Scanning for project roots…');
+		const roots = await this.findProjectRoots();
+		this.logService.info(`[ArchitectureAnalyzer] Found ${roots.length} project roots: ${roots.map(r => r.uri.path).join(', ')}`);
+		
 		this.onProgressEmitter.fire('Collecting workspace structure…');
-		await this.detectBaselineApplications(builder);
+		await this.detectBaselineApplications(builder, roots);
+		
 		this.onProgressEmitter.fire('Analyzing JavaScript / TypeScript dependencies…');
-		await this.detectNodeEcosystem(builder);
+		await this.detectNodeEcosystem(builder, roots);
 		this.onProgressEmitter.fire('Analyzing Python dependencies…');
-		await this.detectPythonEcosystem(builder);
+		await this.detectPythonEcosystem(builder, roots);
 		this.onProgressEmitter.fire('Analyzing Go modules…');
-		await this.detectGoEcosystem(builder);
+		await this.detectGoEcosystem(builder, roots);
 		this.onProgressEmitter.fire('Analyzing Rust crates…');
-		await this.detectRustEcosystem(builder);
+		await this.detectRustEcosystem(builder, roots);
+		
 		this.onProgressEmitter.fire('Inspecting container orchestration configs…');
 		await this.detectDockerCompose(builder);
 		this.onProgressEmitter.fire('Collecting database schema definitions…');
@@ -320,30 +316,101 @@ export class ArchitectureAnalyzer {
 		const result = builder.finalize();
 		const datasetCount = result.components.filter(component => component.kind === 'dataset').length;
 		const dataFlowCount = result.relationships.filter(relationship => relationship.kind === 'queries').length;
-		this.logService.info(`[ArchitectureAnalyzer] components=${result.components.length} datasets=${datasetCount} relationships=${result.relationships.length} dataFlows=${dataFlowCount} warnings=${result.warnings.length}`);
+		const callCount = result.relationships.filter(relationship => relationship.kind === 'calls').length;
+		
+		this.logService.info(`[ArchitectureAnalyzer] Analysis complete.
+			Components: ${result.components.length} (Datasets: ${datasetCount}, ${result.components.map(c => c.kind).join(', ')})
+			Relationships: ${result.relationships.length} (Calls: ${callCount}, Queries: ${dataFlowCount})
+			Warnings: ${result.warnings.length}`);
+			
 		this.cachedResult = result;
 		this.cacheTimestamp = Date.now();
 		return result;
 	}
 
-	private async detectBaselineApplications(builder: ArchitectureModelBuilder): Promise<void> {
+	private async findProjectRoots(): Promise<{ uri: URI, type: 'node' | 'python' | 'go' | 'rust' | 'unknown' }[]> {
+		const roots: { uri: URI, type: 'node' | 'python' | 'go' | 'rust' | 'unknown' }[] = [];
+		const folderQueries = this.context.getWorkspaceFolders().map(folder => ({ folder: folder.uri }));
+		
+		if (!folderQueries.length) {
+			return [];
+		}
+
+		// Search for package manifests
+		const searchResult = await this.searchService.fileSearch({
+			type: QueryType.File,
+			folderQueries,
+			filePattern: '{package.json,requirements.txt,pyproject.toml,go.mod,Cargo.toml}',
+			excludePattern: { ...GRAPH_DEFAULT_EXCLUDE_GLOBS, '**/node_modules/**': true, '**/venv/**': true },
+			maxResults: 50
+		});
+
+		for (const match of searchResult.results) {
+			const fileUri = (match as IFileMatch).resource;
+			if (!fileUri) continue;
+
+			const dirUri = this.context.extUri.dirname(fileUri);
+			const fileName = this.context.extUri.basename(fileUri).toLowerCase();
+			
+			let type: 'node' | 'python' | 'go' | 'rust' | 'unknown' = 'unknown';
+			if (fileName === 'package.json') type = 'node';
+			else if (fileName === 'requirements.txt' || fileName === 'pyproject.toml') type = 'python';
+			else if (fileName === 'go.mod') type = 'go';
+			else if (fileName === 'cargo.toml') type = 'rust';
+
+			// Avoid duplicates if multiple manifest files exist in same directory
+			if (!roots.some(r => this.context.extUri.isEqual(r.uri, dirUri))) {
+				roots.push({ uri: dirUri, type });
+			}
+		}
+
+		// Ensure workspace roots are included if they weren't detected via manifests (fallback)
 		for (const folder of this.context.getWorkspaceFolders()) {
-			const key = `application:${folder.uri.toString()}`;
+			if (!roots.some(r => this.context.extUri.isEqual(r.uri, folder.uri))) {
+				roots.push({ uri: folder.uri, type: 'unknown' });
+			}
+		}
+
+		return roots;
+	}
+
+	private async detectBaselineApplications(builder: ArchitectureModelBuilder, roots: { uri: URI, type: string }[]): Promise<void> {
+		for (const root of roots) {
+			const key = `application:${root.uri.toString()}`;
+			this.projectRoots.set(root.uri, key);
+			
+			const folderName = this.context.extUri.basename(root.uri);
+			// Try to read name from package.json if available
+			let label = folderName;
+			if (root.type === 'node') {
+				try {
+					const packageUri = this.context.extUri.joinPath(root.uri, 'package.json');
+					const buffer = await this.tryReadFile(packageUri);
+					if (buffer) {
+						const manifest = JSON.parse(buffer.toString()) as { name?: string };
+						if (manifest.name) {
+							label = manifest.name;
+						}
+					}
+				} catch { /* ignore */ }
+			}
+
 			builder.ensureComponent(key, () => ({
 				kind: 'application',
-				label: folder.name ?? this.context.extUri.basename(folder.uri),
+				label: label,
 				confidence: 0.3,
-				tags: ['workspace'],
-				metadata: { workspaceFolder: folder.uri.toString(true) },
+				tags: ['workspace', root.type],
+				metadata: { workspaceFolder: root.uri.toString(true), type: root.type },
 				evidence: []
 			}));
 		}
 	}
 
-	private async detectNodeEcosystem(builder: ArchitectureModelBuilder): Promise<void> {
-		const folders = this.context.getWorkspaceFolders();
-		for (const folder of folders) {
-			const packageUri = this.context.extUri.joinPath(folder.uri, 'package.json');
+	private async detectNodeEcosystem(builder: ArchitectureModelBuilder, roots: { uri: URI, type: string }[]): Promise<void> {
+		for (const root of roots) {
+			if (root.type !== 'node' && root.type !== 'unknown') continue;
+
+			const packageUri = this.context.extUri.joinPath(root.uri, 'package.json');
 			const packageBuffer = await this.tryReadFile(packageUri);
 			if (!packageBuffer) {
 				continue;
@@ -353,7 +420,7 @@ export class ArchitectureAnalyzer {
 				manifest = JSON.parse(packageBuffer.toString()) as PackageManifest;
 			} catch (error) {
 				this.logService.warn('[ArchitectureAnalyzer] failed to parse package.json', packageUri.toString(true), error);
-				builder.addWarning(`Failed to parse package.json in ${folder.name}`);
+				builder.addWarning(`Failed to parse package.json in ${root.uri.path}`);
 				continue;
 			}
 			if (!manifest) {
@@ -363,7 +430,7 @@ export class ArchitectureAnalyzer {
 			const scripts: Record<string, string> = manifest.scripts ?? {};
 			const hasTypeScript = this.hasDependency(dependencies, 'typescript') || this.hasDependency(dependencies, 'ts-node') || Object.values(scripts).some(script => /tsc|ts-node/.test(script));
 
-			const applicationKey = `application:${folder.uri.toString()}`;
+			const applicationKey = `application:${root.uri.toString()}`;
 			builder.augmentComponent(applicationKey, component => {
 				component.language = component.language ?? (hasTypeScript ? 'TypeScript' : 'JavaScript');
 				component.metadata.runtime = 'Node.js';
@@ -371,7 +438,7 @@ export class ArchitectureAnalyzer {
 
 			const frontendFrameworks = this.detectFrontendFrameworks(dependencies);
 			for (const framework of frontendFrameworks) {
-				const frontendKey = `frontend:${framework.id}:${folder.uri.toString()}`;
+				const frontendKey = `frontend:${framework.id}:${root.uri.toString()}`;
 				builder.ensureComponent(frontendKey, () => ({
 					kind: 'frontend',
 					label: `${framework.label} Frontend`,
@@ -379,7 +446,7 @@ export class ArchitectureAnalyzer {
 					language: hasTypeScript ? 'TypeScript' : 'JavaScript',
 					technology: framework.label,
 					tags: ['frontend', 'web'],
-					metadata: { workspaceFolder: folder.uri.toString(true), package: packageUri.toString(true) },
+					metadata: { workspaceFolder: root.uri.toString(true), package: packageUri.toString(true) },
 					evidence: [
 						{
 							description: `Dependency on ${framework.dependency}`,
@@ -395,16 +462,17 @@ export class ArchitectureAnalyzer {
 					target: frontendKey,
 					kind: 'hosts',
 					confidence: framework.confidence,
-					description: `${framework.label} frontend inside ${folder.name}`,
+					description: `${framework.label} frontend inside ${root.uri.path.split('/').pop()}`,
 					metadata: {},
 					evidence: []
 				}));
-				builder.addSummary(`Detected ${framework.label} frontend in ${folder.name}`);
+				builder.addSummary(`Detected ${framework.label} frontend in ${root.uri.path.split('/').pop()}`);
 			}
 
 			const backendFrameworks = this.detectBackendFrameworks(dependencies, scripts);
+			this.logService.info(`[ArchitectureAnalyzer] Detected ${backendFrameworks.length} backend frameworks in ${root.uri.path}: ${backendFrameworks.map(b => b.label).join(', ')}`);
 			for (const backend of backendFrameworks) {
-				const backendKey = `backend:${backend.id}:${folder.uri.toString()}`;
+				const backendKey = `backend:${backend.id}:${root.uri.toString()}`;
 				const dependencyVersion = backend.dependency ? dependencies[backend.dependency] : undefined;
 				const evidenceDescription = backend.dependency && dependencyVersion
 					? `Dependency on ${backend.dependency}`
@@ -424,7 +492,7 @@ export class ArchitectureAnalyzer {
 					language: hasTypeScript ? 'TypeScript' : 'JavaScript',
 					technology: backend.label,
 					tags: ['backend', 'server'],
-					metadata: { workspaceFolder: folder.uri.toString(true), package: packageUri.toString(true) },
+					metadata: { workspaceFolder: root.uri.toString(true), package: packageUri.toString(true) },
 					evidence: [evidence]
 				}));
 				this.registerBackend(applicationKey, backendKey, `${backend.label} Backend`);
@@ -433,11 +501,11 @@ export class ArchitectureAnalyzer {
 					target: backendKey,
 					kind: 'hosts',
 					confidence: backend.confidence,
-					description: `${backend.label} backend inside ${folder.name}`,
+					description: `${backend.label} backend inside ${root.uri.path.split('/').pop()}`,
 					metadata: {},
 					evidence: []
 				}));
-				builder.addSummary(`Detected ${backend.label} backend in ${folder.name}`);
+				builder.addSummary(`Detected ${backend.label} backend in ${root.uri.path.split('/').pop()}`);
 			}
 
 			const databaseConnectors = this.detectDatabaseConnectors(dependencies);
@@ -461,7 +529,7 @@ export class ArchitectureAnalyzer {
 					]
 				}));
 				for (const backend of backendFrameworks) {
-					const backendKey = `backend:${backend.id}:${folder.uri.toString()}`;
+					const backendKey = `backend:${backend.id}:${root.uri.toString()}`;
 					builder.ensureRelationship(`connects:${backendKey}->${databaseKey}`, () => ({
 						source: backendKey,
 						target: databaseKey,
@@ -496,7 +564,7 @@ export class ArchitectureAnalyzer {
 					]
 				}));
 				for (const backend of backendFrameworks) {
-					const backendKey = `backend:${backend.id}:${folder.uri.toString()}`;
+					const backendKey = `backend:${backend.id}:${root.uri.toString()}`;
 					builder.ensureRelationship(`connects:${backendKey}->${cacheKey}`, () => ({
 						source: backendKey,
 						target: cacheKey,
@@ -531,7 +599,7 @@ export class ArchitectureAnalyzer {
 					]
 				}));
 				for (const backend of backendFrameworks) {
-					const backendKey = `backend:${backend.id}:${folder.uri.toString()}`;
+					const backendKey = `backend:${backend.id}:${root.uri.toString()}`;
 					builder.ensureRelationship(`connects:${backendKey}->${queueKey}`, () => ({
 						source: backendKey,
 						target: queueKey,
@@ -660,9 +728,11 @@ export class ArchitectureAnalyzer {
 		};
 	}
 
-	private async detectPythonEcosystem(builder: ArchitectureModelBuilder): Promise<void> {
-		for (const folder of this.context.getWorkspaceFolders()) {
-			const requirementsUri = this.context.extUri.joinPath(folder.uri, 'requirements.txt');
+	private async detectPythonEcosystem(builder: ArchitectureModelBuilder, roots: { uri: URI, type: string }[]): Promise<void> {
+		for (const root of roots) {
+			if (root.type !== 'python' && root.type !== 'unknown') continue;
+
+			const requirementsUri = this.context.extUri.joinPath(root.uri, 'requirements.txt');
 			const requirementsBuffer = await this.tryReadFile(requirementsUri);
 			const packages = new Set<string>();
 			if (requirementsBuffer) {
@@ -677,7 +747,7 @@ export class ArchitectureAnalyzer {
 					}
 				}
 			}
-			const pyprojectUri = this.context.extUri.joinPath(folder.uri, 'pyproject.toml');
+			const pyprojectUri = this.context.extUri.joinPath(root.uri, 'pyproject.toml');
 			const pyprojectBuffer = await this.tryReadFile(pyprojectUri);
 			if (pyprojectBuffer) {
 				const text = pyprojectBuffer.toString().toLowerCase();
@@ -698,7 +768,7 @@ export class ArchitectureAnalyzer {
 			if (!packages.size) {
 				continue;
 			}
-			const applicationKey = `application:${folder.uri.toString()}`;
+			const applicationKey = `application:${root.uri.toString()}`;
 			builder.augmentComponent(applicationKey, component => {
 				component.language = component.language ?? 'Python';
 				component.metadata.runtime = component.metadata.runtime ?? 'Python';
@@ -717,7 +787,7 @@ export class ArchitectureAnalyzer {
 			addBackend('celery-worker', 'celery', 'Celery Worker', 0.6);
 
 			for (const backend of backendCandidates) {
-				const backendKey = `backend:${backend.id}:${folder.uri.toString()}`;
+				const backendKey = `backend:${backend.id}:${root.uri.toString()}`;
 				builder.ensureComponent(backendKey, () => ({
 					kind: backend.id === 'celery-worker' ? 'supportingService' : 'backend',
 					label: `${backend.label} Backend`,
@@ -725,7 +795,7 @@ export class ArchitectureAnalyzer {
 					language: 'Python',
 					technology: backend.label,
 					tags: ['python'],
-					metadata: { workspaceFolder: folder.uri.toString(true) },
+					metadata: { workspaceFolder: root.uri.toString(true) },
 					evidence: [
 						{
 							description: `Dependency on ${backend.evidencePkg}`,
@@ -740,11 +810,11 @@ export class ArchitectureAnalyzer {
 					target: backendKey,
 					kind: 'hosts',
 					confidence: backend.confidence,
-					description: `${backend.label} backend inside ${folder.name}`,
+					description: `${backend.label} backend inside ${root.uri.path.split('/').pop()}`,
 					metadata: {},
 					evidence: []
 				}));
-				builder.addSummary(`Detected Python backend (${backend.label}) in ${folder.name}`);
+				builder.addSummary(`Detected Python backend (${backend.label}) in ${root.uri.path.split('/').pop()}`);
 			}
 
 			const pythonDatabases = [
@@ -781,9 +851,11 @@ export class ArchitectureAnalyzer {
 		}
 	}
 
-	private async detectGoEcosystem(builder: ArchitectureModelBuilder): Promise<void> {
-		for (const folder of this.context.getWorkspaceFolders()) {
-			const gomodUri = this.context.extUri.joinPath(folder.uri, 'go.mod');
+	private async detectGoEcosystem(builder: ArchitectureModelBuilder, roots: { uri: URI, type: string }[]): Promise<void> {
+		for (const root of roots) {
+			if (root.type !== 'go' && root.type !== 'unknown') continue;
+
+			const gomodUri = this.context.extUri.joinPath(root.uri, 'go.mod');
 			const config = await this.tryReadFile(gomodUri);
 			if (!config) {
 				continue;
@@ -793,7 +865,7 @@ export class ArchitectureAnalyzer {
 			if (!deps.length) {
 				continue;
 			}
-			const applicationKey = `application:${folder.uri.toString()}`;
+			const applicationKey = `application:${root.uri.toString()}`;
 			builder.augmentComponent(applicationKey, component => {
 				component.language = 'Go';
 				component.metadata.runtime = 'Go';
@@ -811,7 +883,7 @@ export class ArchitectureAnalyzer {
 			addBackend('grpc', 'google.golang.org/grpc', 'gRPC Service', 0.65);
 
 			for (const backend of backendCandidates) {
-				const backendKey = `backend:${backend.id}:${folder.uri.toString()}`;
+				const backendKey = `backend:${backend.id}:${root.uri.toString()}`;
 				builder.ensureComponent(backendKey, () => ({
 					kind: 'backend',
 					label: `${backend.label} Backend`,
@@ -833,7 +905,7 @@ export class ArchitectureAnalyzer {
 					target: backendKey,
 					kind: 'hosts',
 					confidence: backend.confidence,
-					description: `${backend.label} backend inside ${folder.name}`,
+					description: `${backend.label} backend inside ${root.uri.path.split('/').pop()}`,
 					metadata: {},
 					evidence: []
 				}));
@@ -868,7 +940,7 @@ export class ArchitectureAnalyzer {
 					]
 				}));
 				for (const backend of backendCandidates) {
-					const backendKey = `backend:${backend.id}:${folder.uri.toString()}`;
+					const backendKey = `backend:${backend.id}:${root.uri.toString()}`;
 					builder.ensureRelationship(`connects:${backendKey}->${databaseKey}`, () => ({
 						source: backendKey,
 						target: databaseKey,
@@ -884,9 +956,11 @@ export class ArchitectureAnalyzer {
 		}
 	}
 
-	private async detectRustEcosystem(builder: ArchitectureModelBuilder): Promise<void> {
-		for (const folder of this.context.getWorkspaceFolders()) {
-			const cargoUri = this.context.extUri.joinPath(folder.uri, 'Cargo.toml');
+	private async detectRustEcosystem(builder: ArchitectureModelBuilder, roots: { uri: URI, type: string }[]): Promise<void> {
+		for (const root of roots) {
+			if (root.type !== 'rust' && root.type !== 'unknown') continue;
+
+			const cargoUri = this.context.extUri.joinPath(root.uri, 'Cargo.toml');
 			const buffer = await this.tryReadFile(cargoUri);
 			if (!buffer) {
 				continue;
@@ -895,14 +969,14 @@ export class ArchitectureAnalyzer {
 			if (!text.includes('[dependencies]')) {
 				continue;
 			}
-			builder.augmentComponent(`application:${folder.uri.toString()}`, component => {
+			builder.augmentComponent(`application:${root.uri.toString()}`, component => {
 				component.language = 'Rust';
 				component.metadata.runtime = 'Rust';
 			});
 
 			const detect = (needle: string) => text.includes(needle);
 			if (detect('actix-web')) {
-				builder.ensureComponent(`backend:actix:${folder.uri.toString()}`, () => ({
+				builder.ensureComponent(`backend:actix:${root.uri.toString()}`, () => ({
 					kind: 'backend',
 					label: 'Actix-Web Backend',
 					confidence: 0.75,
@@ -914,7 +988,7 @@ export class ArchitectureAnalyzer {
 				}));
 			}
 			if (detect('rocket =')) {
-				builder.ensureComponent(`backend:rocket:${folder.uri.toString()}`, () => ({
+				builder.ensureComponent(`backend:rocket:${root.uri.toString()}`, () => ({
 					kind: 'backend',
 					label: 'Rocket Backend',
 					confidence: 0.7,
@@ -1057,6 +1131,164 @@ export class ArchitectureAnalyzer {
 		if (!folderQueries.length) {
 			return;
 		}
+
+		// Use TreeSitterAnalyzer for TypeScript/JavaScript files if available
+		if (this.treeSitterAnalyzer) {
+			const httpExpressions = [
+				{ pattern: 'axios\\s*\\.\\s*(get|post|put|delete|patch|request)\\s*\\(', label: 'axios' },
+				{ pattern: 'fetch\\s*\\(', label: 'fetch' },
+				{ pattern: 'httpClient\\s*\\.', label: 'httpClient' }
+			];
+			const fileMatches = new Map<string, URI>();
+			let warnedForLimit = false;
+
+			// First, find all files that might contain HTTP calls
+			for (const expression of httpExpressions) {
+				const query: ITextQuery = {
+					type: QueryType.Text,
+					folderQueries,
+					contentPattern: {
+						pattern: expression.pattern,
+						isRegExp: true,
+						isCaseSensitive: false
+					},
+					excludePattern: GRAPH_DEFAULT_EXCLUDE_GLOBS,
+					maxResults: 200
+				};
+				const searchResult = await this.searchService.textSearch(query, CancellationToken.None, (progress: ISearchProgressItem) => {
+					if (!progress || !isFileMatch(progress) || !progress.results) {
+						return;
+					}
+					const key = progress.resource.toString();
+					if (!fileMatches.has(key)) {
+						fileMatches.set(key, progress.resource);
+					}
+				});
+				if (!warnedForLimit && searchResult?.limitHit) {
+					builder.addWarning('HTTP client detection reached the search result limit; some external API calls may be omitted.');
+					warnedForLimit = true;
+				}
+			}
+
+			// Process each file with TreeSitterAnalyzer for TS/JS files, regex for others
+			for (const uri of fileMatches.values()) {
+				const path = uri.path.toLowerCase();
+				const isTypeScriptOrJavaScript = path.endsWith('.ts') || path.endsWith('.tsx') || path.endsWith('.js') || path.endsWith('.jsx');
+
+				if (isTypeScriptOrJavaScript) {
+					// Use TreeSitterAnalyzer for TS/JS files
+					try {
+						const httpCalls = await this.treeSitterAnalyzer.extractHttpCalls(uri);
+						this.logService.trace(`[ArchitectureAnalyzer] TreeSitter found ${httpCalls.length} HTTP calls in ${uri.path}`);
+						for (const call of httpCalls) {
+							const applicationKey = this.findApplicationKeyForResource(uri);
+							const sourceKey = this.inferComponentForResource(uri) ?? applicationKey;
+							const host = this.extractHost(call.url);
+							const internalBackendKey = this.resolveInternalBackend(sourceKey, applicationKey, host, call.url);
+							
+							if (!internalBackendKey && !host) {
+								this.logService.trace(`[ArchitectureAnalyzer] Skipping relative/internal call ${call.method} ${call.url} - no internal backend resolved. Source: ${sourceKey}`);
+							}
+
+							let targetResource = host ?? 'unknown';
+							if (internalBackendKey && sourceKey) {
+								const backendLabel = this.componentLabels.get(internalBackendKey) ?? 'Backend Service';
+								targetResource = backendLabel;
+								const relationshipKey = `calls:${sourceKey}->${internalBackendKey}:${call.method}:${call.url}`;
+								builder.ensureRelationship(relationshipKey, () => ({
+									source: sourceKey,
+									target: internalBackendKey,
+									kind: 'calls',
+									confidence: 0.7, // Higher confidence for AST-based detection
+									description: `HTTP ${call.method} ${call.url}`,
+									metadata: {
+										http: {
+											method: call.method,
+											url: call.url,
+											resource: backendLabel,
+											file: call.file,
+											lineNumber: call.lineNumber,
+											columnNumber: call.columnNumber
+										}
+									},
+									evidence: [
+										{ description: `HTTP ${call.method} ${call.url}`, resource: uri, snippet: call.snippet || '', confidence: 0.7 }
+									]
+								}));
+							} else {
+								if (!host) {
+									continue;
+								}
+								const externalKey = `externalService:${host}`;
+								builder.ensureComponent(externalKey, () => ({
+									kind: 'externalService',
+									label: `External API (${host})`,
+									confidence: 0.7,
+									language: undefined,
+									technology: host,
+									tags: ['external'],
+									metadata: { host, endpoints: [{ url: call.url, methods: [call.method] }] },
+									evidence: []
+								}));
+								builder.augmentComponent(externalKey, component => {
+									const metadata = component.metadata as Record<string, unknown>;
+									const endpoints = Array.isArray(metadata.endpoints) ? metadata.endpoints as Array<{ url: string; methods: string[] }> : [];
+									if (!Array.isArray(metadata.endpoints)) {
+										metadata.endpoints = endpoints;
+									}
+									let endpoint = endpoints.find(entry => entry.url === call.url);
+									if (!endpoint) {
+										endpoint = { url: call.url, methods: [] };
+										endpoints.push(endpoint);
+									}
+									if (!endpoint.methods.includes(call.method)) {
+										endpoint.methods.push(call.method);
+									}
+								});
+								if (sourceKey) {
+									const relationshipKey = `calls:${call.method}:${call.url}:${sourceKey}->${externalKey}`;
+									builder.ensureRelationship(relationshipKey, () => ({
+										source: sourceKey,
+										target: externalKey,
+										kind: 'calls',
+										confidence: 0.7,
+										description: `HTTP ${call.method} ${call.url}`,
+										metadata: {
+											http: {
+												method: call.method,
+												url: call.url,
+												resource: host,
+												file: call.file,
+												lineNumber: call.lineNumber,
+												columnNumber: call.columnNumber
+											}
+										},
+										evidence: [
+											{ description: `HTTP ${call.method} ${call.url}`, resource: uri, snippet: call.snippet || '', confidence: 0.7 }
+										]
+									}));
+								}
+							}
+							if (sourceKey) {
+								const callSummary: HttpCallSummary = {
+									method: call.method,
+									url: call.url,
+									resource: targetResource,
+									file: call.file,
+									snippet: call.snippet
+								};
+								this.appendMetadataArray(builder, sourceKey, 'httpCalls', callSummary);
+							}
+						}
+					} catch (error) {
+						this.logService.debug(`[ArchitectureAnalyzer] TreeSitterAnalyzer failed for ${uri.toString()}, falling back to regex`, error);
+						// Fall through to regex-based detection
+					}
+				}
+			}
+		}
+
+		// Fallback to regex-based detection for non-TS/JS files or if TreeSitterAnalyzer is not available
 		const httpExpressions = [
 			{ pattern: 'axios\\s*\\.\\s*(get|post|put|delete|patch|request)\\s*\\(', label: 'axios' },
 			{ pattern: 'fetch\\s*\\(', label: 'fetch' },
@@ -1082,6 +1314,12 @@ export class ArchitectureAnalyzer {
 				}
 				for (const result of progress.results) {
 					if (!resultIsMatch(result)) {
+						continue;
+					}
+					// Skip TS/JS files if we already processed them with TreeSitterAnalyzer
+					const path = progress.resource.path.toLowerCase();
+					const isTypeScriptOrJavaScript = path.endsWith('.ts') || path.endsWith('.tsx') || path.endsWith('.js') || path.endsWith('.jsx');
+					if (this.treeSitterAnalyzer && isTypeScriptOrJavaScript) {
 						continue;
 					}
 					matches.push({ uri: progress.resource, text: result.previewText });
@@ -1341,26 +1579,44 @@ export class ArchitectureAnalyzer {
 		}
 
 		for (const uri of fileMatches.values()) {
-			const text = await this.getFileText(uri);
-			if (!text) {
-				continue;
-			}
-			const operations: GraphQLOperationSummary[] = [];
-			const regex = /gql`([\s\S]*?)`/g;
-			let match: RegExpExecArray | null;
-			while ((match = regex.exec(text)) !== null) {
-				const body = match[1];
-				const headerMatch = /(query|mutation|subscription)\s*(\w+)?/i.exec(body);
-				operations.push({
-					type: headerMatch ? headerMatch[1] : 'query',
-					name: headerMatch && headerMatch[2] ? headerMatch[2] : undefined,
-					file: uri.toString(true),
-					snippet: body.slice(0, 200)
-				});
-				if (operations.length >= 5) {
-					break;
+			const path = uri.path.toLowerCase();
+			const isTypeScriptOrJavaScript = path.endsWith('.ts') || path.endsWith('.tsx') || path.endsWith('.js') || path.endsWith('.jsx');
+
+			let operations: GraphQLOperationSummary[] = [];
+
+			// Use TreeSitterAnalyzer for TS/JS files if available
+			if (this.treeSitterAnalyzer && isTypeScriptOrJavaScript) {
+				try {
+					operations = await this.treeSitterAnalyzer.extractGraphQLOperations(uri);
+				} catch (error) {
+					this.logService.debug(`[ArchitectureAnalyzer] TreeSitterAnalyzer failed for GraphQL in ${uri.toString()}, falling back to regex`, error);
+					// Fall through to regex-based detection
 				}
 			}
+
+			// Fallback to regex-based detection if TreeSitterAnalyzer didn't find anything or isn't available
+			if (operations.length === 0) {
+				const text = await this.getFileText(uri);
+				if (!text) {
+					continue;
+				}
+				const regex = /gql`([\s\S]*?)`/g;
+				let match: RegExpExecArray | null;
+				while ((match = regex.exec(text)) !== null) {
+					const body = match[1];
+					const headerMatch = /(query|mutation|subscription)\s*(\w+)?/i.exec(body);
+					operations.push({
+						type: headerMatch ? headerMatch[1] : 'query',
+						name: headerMatch && headerMatch[2] ? headerMatch[2] : undefined,
+						file: uri.toString(true),
+						snippet: body.slice(0, 200)
+					});
+					if (operations.length >= 5) {
+						break;
+					}
+				}
+			}
+
 			if (!operations.length) {
 				continue;
 			}
@@ -1369,11 +1625,12 @@ export class ArchitectureAnalyzer {
 				continue;
 			}
 			for (const operation of operations) {
+				const confidence = operation.lineNumber !== undefined ? 0.65 : 0.45; // Higher confidence for AST-based detection
 				builder.addEvidence(componentKey, {
 					description: `GraphQL ${operation.type.toUpperCase()} ${operation.name ?? '<anonymous>'}`,
 					resource: uri,
 					snippet: operation.snippet,
-					confidence: 0.45
+					confidence
 				});
 				this.appendMetadataArray(builder, componentKey, 'graphqlOperations', operation);
 			}
@@ -1748,18 +2005,35 @@ export class ArchitectureAnalyzer {
 	}
 
 	private resolveInternalBackend(sourceKey: string | undefined, applicationKey: string | undefined, host: string | undefined, url: string): string | undefined {
-		const candidateApplication = applicationKey ?? this.getApplicationForComponent(sourceKey);
-		if (!candidateApplication) {
-			return undefined;
-		}
-		const backends = this.getBackendsForApplication(candidateApplication);
-		if (!backends.length) {
-			return undefined;
-		}
 		const isRelative = /^\.|^\//.test(url ?? '');
-		if (isRelative || this.isLocalHost(host)) {
-			return backends[0];
+		const isLocal = this.isLocalHost(host);
+
+		if (!isRelative && !isLocal) {
+			return undefined;
 		}
+
+		// 1. Try to find backend in the same application
+		const candidateApplication = applicationKey ?? this.getApplicationForComponent(sourceKey);
+		if (candidateApplication) {
+			const backends = this.getBackendsForApplication(candidateApplication);
+			if (backends.length > 0) {
+				return backends[0];
+			}
+		}
+
+		// 2. If not found, and it's a local call, look for ANY backend in the workspace
+		// This handles monorepos where frontend and backend are separate roots
+		const allBackends: string[] = [];
+		for (const backends of this.backendsByApplication.values()) {
+			allBackends.push(...backends);
+		}
+
+		if (allBackends.length > 0) {
+			// If we have exactly one backend, it's the likely target.
+			// If we have multiple, we default to the first one for now as we don't do port matching yet.
+			return allBackends[0];
+		}
+
 		return undefined;
 	}
 
