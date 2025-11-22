@@ -456,9 +456,6 @@ export function registerChatActions() {
 			},);
 		}
 	});
-	registerAction2(class extends ModeOpenChatGlobalAction {
-		constructor() { super(ChatMode.Edit); }
-	});
 
 	registerAction2(class ToggleChatAction extends Action2 {
 		constructor() {
@@ -2052,13 +2049,13 @@ registerAction2(class ToggleToolPermissionPreference extends Action2 {
 
 		const currentValue = configurationService.getValue<string>(ChatConfiguration.ToolPermissionPreference);
 		const newValue = currentValue === 'always' ? 'ask' : 'always';
-		
+
 		await configurationService.updateValue(ChatConfiguration.ToolPermissionPreference, newValue, ConfigurationTarget.USER);
-		
-		const message = newValue === 'always' 
+
+		const message = newValue === 'always'
 			? localize('chat.toggleToolPermissionPreference.enabled', "Always Allow Tools is now enabled. All tools will run automatically without asking for confirmation.")
 			: localize('chat.toggleToolPermissionPreference.disabled', "Always Allow Tools is now disabled. You will be asked for permission before each tool runs.");
-		
+
 		notificationService.info(message);
 	}
 });

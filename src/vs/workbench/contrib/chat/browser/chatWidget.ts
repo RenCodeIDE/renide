@@ -1409,6 +1409,17 @@ export class ChatWidget extends Disposable implements IChatWidget {
 				additionalMessage,
 				suggestedPrompts
 			};
+		} else if (this.input.currentModeKind === ChatModeKind.Plan) {
+			const planHelpMessage = localize('planHelp', "Plan mode helps you architect features and changes. Start by describing what you want to build.");
+			const message = expEmptyState ? disclaimerMessage : `${planHelpMessage}\n\n${disclaimerMessage}`;
+
+			return {
+				title: localize('planTitle', "Plan with Agent"),
+				message: new MarkdownString(message),
+				icon,
+				additionalMessage,
+				suggestedPrompts
+			};
 		} else if (this.input.currentModeKind === ChatModeKind.Edit) {
 			const editsHelpMessage = localize('editsHelp', "Start your editing session by defining a set of files that you want to work with. Then ask for the changes you want to make.");
 			const message = expEmptyState ? disclaimerMessage : `${editsHelpMessage}\n\n${disclaimerMessage}`;

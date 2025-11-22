@@ -123,6 +123,8 @@ import { IWebContentExtractorService } from '../../platform/webContentExtractor/
 import { NativeWebContentExtractorService } from '../../platform/webContentExtractor/electron-main/webContentExtractorService.js';
 import { IGitHeatmapService, REN_GIT_HEATMAP_CHANNEL } from '../../platform/gitHeatmap/common/gitHeatmapService.js';
 import { GitHeatmapService } from '../../platform/gitHeatmap/electron-main/gitHeatmapService.js';
+import { ProfilerMainService } from '../../platform/profiler/electron-main/profilerMainService.js';
+import { IProfilerService, ProfilerIpcChannels } from '../../platform/profiler/common/profiler.js';
 import ErrorTelemetry from '../../platform/telemetry/electron-main/errorTelemetry.js';
 
 /**
@@ -1125,6 +1127,9 @@ export class CodeApplication extends Disposable {
 		// Dev Only: CSS service (for ESM)
 		services.set(ICSSDevelopmentService, new SyncDescriptor(CSSDevelopmentService, undefined, true));
 
+		// Profiler Service
+		services.set(IProfilerService, new SyncDescriptor(ProfilerMainService, undefined, false /* proxied to other processes */));
+
 		// Init services that require it
 		await Promises.settled([
 			backupMainService.initialize(),
@@ -1202,6 +1207,10 @@ export class CodeApplication extends Disposable {
 		const gitHeatmapChannel = ProxyChannel.fromService(accessor.get(IGitHeatmapService), disposables);
 		mainProcessElectronServer.registerChannel('webContentExtractor', webContentExtractorChannel);
 		mainProcessElectronServer.registerChannel(REN_GIT_HEATMAP_CHANNEL, gitHeatmapChannel);
+
+		// Profiler
+		const profilerChannel = ProxyChannel.fromService(accessor.get(IProfilerService), disposables);
+		mainProcessElectronServer.registerChannel(ProfilerIpcChannels.Profiler, profilerChannel);
 
 		// Workspaces
 		const workspacesChannel = ProxyChannel.fromService(accessor.get(IWorkspacesService), disposables);

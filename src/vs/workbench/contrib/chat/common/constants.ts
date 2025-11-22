@@ -32,7 +32,8 @@ export enum ChatConfiguration {
 export enum ChatModeKind {
 	Ask = 'ask',
 	Edit = 'edit',
-	Agent = 'agent'
+	Agent = 'agent',
+	Plan = 'plan'
 }
 
 export function validateChatMode(mode: unknown): ChatModeKind | undefined {
@@ -40,6 +41,7 @@ export function validateChatMode(mode: unknown): ChatModeKind | undefined {
 		case ChatModeKind.Ask:
 		case ChatModeKind.Edit:
 		case ChatModeKind.Agent:
+		case ChatModeKind.Plan:
 			return mode as ChatModeKind;
 		default:
 			return undefined;

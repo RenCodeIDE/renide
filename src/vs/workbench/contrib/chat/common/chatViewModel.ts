@@ -14,7 +14,7 @@ import { IInstantiationService } from '../../../../platform/instantiation/common
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { annotateVulnerabilitiesInText } from './annotations.js';
 import { getFullyQualifiedId, IChatAgentCommand, IChatAgentData, IChatAgentNameService, IChatAgentResult } from './chatAgents.js';
-import { IChatModel, IChatProgressRenderableResponseContent, IChatRequestDisablement, IChatRequestModel, IChatResponseModel, IChatTextEditGroup, IResponse } from './chatModel.js';
+import { IChatModel, IChatProgressRenderableResponseContent, IChatRequestDisablement, IChatRequestModeInfo, IChatRequestModel, IChatResponseModel, IChatTextEditGroup, IResponse } from './chatModel.js';
 import { IChatRequestVariableEntry } from './chatVariableEntries.js';
 import { IParsedChatRequest } from './chatParserTypes.js';
 import { ChatAgentVoteDirection, ChatAgentVoteDownReason, IChatChangesSummary, IChatCodeCitation, IChatContentReference, IChatFollowup, IChatMcpServersStarting, IChatProgressMessage, IChatResponseErrorDetails, IChatTask, IChatUsedContext } from './chatService.js';
@@ -96,6 +96,7 @@ export interface IChatRequestViewModel {
 	readonly agentOrSlashCommandDetected: boolean;
 	readonly shouldBeBlocked?: boolean;
 	readonly modelId?: string;
+	readonly modeInfo?: IChatRequestModeInfo;
 }
 
 export interface IChatResponseMarkdownRenderData {
@@ -447,6 +448,10 @@ export class ChatRequestViewModel implements IChatRequestViewModel {
 
 	get modelId() {
 		return this._model.modelId;
+	}
+
+	get modeInfo() {
+		return this._model.modeInfo;
 	}
 
 	constructor(

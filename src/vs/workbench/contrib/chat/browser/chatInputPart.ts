@@ -327,9 +327,7 @@ export class ChatInputPart extends Disposable implements IHistoryNavigationWidge
 	private readonly _currentModeLabelObservable: ISettableObservable<ICustomMode>;
 	public get currentModeKind(): ChatModeKind {
 		const mode = this._currentModeObservable.get();
-		return mode.kind === ChatModeKind.Agent && !this.agentService.hasToolsAgent ?
-			ChatModeKind.Edit :
-			mode.kind;
+		return mode.kind;
 	}
 
 	public get currentModeLabel(): IObservable<ICustomMode> {
@@ -342,11 +340,12 @@ export class ChatInputPart extends Disposable implements IHistoryNavigationWidge
 
 	public get currentModeInfo(): IChatRequestModeInfo {
 		const mode = this._currentModeObservable.get();
-		const modeId: 'ask' | 'agent' | 'edit' | 'custom' | undefined = mode.isBuiltin ? this.currentModeKind : 'custom';
+		const modeId: 'ask' | 'agent' | 'edit' | 'plan' | 'custom' | undefined = mode.isBuiltin ? this.currentModeKind : 'custom';
+		const effectiveKind = this.currentModeKind === ChatModeKind.Plan ? ChatModeKind.Agent : this.currentModeKind;
 
 		const modeInstructions = mode.modeInstructions?.get();
 		return {
-			kind: this.currentModeKind,
+			kind: effectiveKind,
 			isBuiltin: mode.isBuiltin,
 			modeInstructions: modeInstructions ? {
 				name: mode.name,

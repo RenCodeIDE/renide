@@ -187,9 +187,9 @@ export class ChatModeService extends Disposable implements IChatModeService {
 		];
 
 		if (this.chatAgentService.hasToolsAgent) {
-			builtinModes.unshift(ChatMode.Agent);
+			builtinModes.push(ChatMode.Agent);
 		}
-		builtinModes.push(ChatMode.Edit);
+		builtinModes.push(ChatMode.Plan);
 		return builtinModes;
 	}
 
@@ -411,13 +411,18 @@ function reviveChatModeSource(data: IChatModeSourceData | undefined): IAgentSour
 
 export class BuiltinChatMode implements IChatMode {
 	public readonly description: IObservable<string>;
+	public readonly modeInstructions?: IObservable<IChatModeInstructions>;
 
 	constructor(
 		public readonly kind: ChatModeKind,
 		public readonly label: string,
-		description: string
+		description: string,
+		instructions?: IChatModeInstructions
 	) {
 		this.description = observableValue('description', description);
+		if (instructions) {
+			this.modeInstructions = observableValue('modeInstructions', instructions);
+		}
 	}
 
 	public get isBuiltin(): boolean {
@@ -450,14 +455,35 @@ export class BuiltinChatMode implements IChatMode {
 	}
 }
 
+const ZERO_RANGE: IOffsetRange = { start: 0, endExclusive: 0 };
+
+const PLAN_MODE_INSTRUCTIONS: IChatModeInstructions = {
+	content: [
+		'You are the Planning Agent. Gather requirements, document assumptions, and design the approach before any code is written.',
+		'Workflow:',
+		'1. Immediately call the `writePlan` tool to create or update the markdown source of truth (use a descriptive kebab-case filename such as `feature-plan.md`).',
+		'2. Keep the plan file synchronized with every response. Summaries in chat must reference the file path instead of duplicating the text.',
+		'3. Encourage the user to open and edit the plan document with you; treat inline chat text as status updates, not the artifact.',
+		'4. When the change touches multiple subsystems or introduces new architectural relationships, call the `visualize` tool with the relevant nodes and edges to summarize the impact.',
+		'5. Never apply code changes, run commands, or edit files other than the plan document. Output clear next actions for the user.'
+	].join('\n'),
+	toolReferences: [
+		{ name: 'writePlan', range: ZERO_RANGE },
+		{ name: 'visualize', range: ZERO_RANGE }
+	],
+	metadata: { requiresPlanFile: true }
+};
+
 export namespace ChatMode {
 	export const Ask = new BuiltinChatMode(ChatModeKind.Ask, 'Ask', localize('chatDescription', "Explore and understand your code"));
 	export const Edit = new BuiltinChatMode(ChatModeKind.Edit, 'Edit', localize('editsDescription', "Edit or refactor selected code"));
 	export const Agent = new BuiltinChatMode(ChatModeKind.Agent, 'Agent', localize('agentDescription', "Describe what to build next"));
+	export const Plan = new BuiltinChatMode(ChatModeKind.Plan, 'Plan', localize('planDescription', "Plan and visualize changes"), PLAN_MODE_INSTRUCTIONS);
 }
 
 export function isBuiltinChatMode(mode: IChatMode): boolean {
 	return mode.id === ChatMode.Ask.id ||
 		mode.id === ChatMode.Edit.id ||
-		mode.id === ChatMode.Agent.id;
+		mode.id === ChatMode.Agent.id ||
+		mode.id === ChatMode.Plan.id;
 }

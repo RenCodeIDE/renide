@@ -91,6 +91,7 @@ import './services/auxiliaryWindow/electron-browser/auxiliaryWindowService.js';
 import '../platform/extensionManagement/electron-browser/extensionsProfileScannerService.js';
 import '../platform/webContentExtractor/electron-browser/webContentExtractorService.js';
 import './services/process/electron-browser/processService.js';
+import './services/profiler/electron-sandbox/profilerService.js';
 
 import { registerSingleton } from '../platform/instantiation/common/extensions.js';
 import { IUserDataInitializationService, UserDataInitializationService } from './services/userData/browser/userDataInit.js';
@@ -106,6 +107,9 @@ registerSingleton(IUserDataInitializationService, new SyncDescriptor(UserDataIni
 
 // Logs
 import './contrib/logs/electron-browser/logs.contribution.js';
+
+// Profiler
+import './contrib/profiler/browser/profiler.contribution.js';
 
 // Localizations
 import './contrib/localization/electron-browser/localization.contribution.js';
