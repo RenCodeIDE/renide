@@ -42,14 +42,15 @@ import type {
 	OpenAIFunction,
 	ServerToolResult,
 	ChatGPTStreamingResponse,
-	IContextBlockMetadata,
 } from "./types.js";
+import type { IContextBlockMetadata } from "../../common/contextBuilder.js";
 import { convertOpenAIMessagesToIDE } from "./conversion.js";
 import { validateIDEFormat } from "./validation.js";
 import { sendChatGPTRequest } from "./request.js";
 import { extractTextFromParts } from "./utils.js";
-import { ContextBuilder } from "./context.js";
+import { ContextBuilder } from "../../common/contextBuilder.js";
 import { IConfigurationService } from "../../../../../platform/configuration/common/configuration.js";
+import { ILanguageFeaturesService } from "../../../../../editor/common/services/languageFeatures.js";
 import { IAgentPlanner, PlanContext, ToolMetadata } from "../../common/agentPlanner.js";
 import { IDependencyGraphService } from "../../common/dependencyGraphService.js";
 import { IWorkspaceContextService } from "../../../../../platform/workspace/common/workspace.js";
@@ -77,9 +78,10 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		private readonly agentPlanner?: IAgentPlanner,
 		private readonly dependencyGraphService?: IDependencyGraphService,
 		private readonly workspaceService?: IWorkspaceContextService,
-		private readonly fileService?: IFileService
+		private readonly fileService?: IFileService,
+		languageFeaturesService?: ILanguageFeaturesService,
 	) {
-		this.contextBuilder = new ContextBuilder(textModelService, logService);
+		this.contextBuilder = new ContextBuilder(textModelService, logService, languageFeaturesService);
 	}
 
 	private async getAccessToken(): Promise<string | undefined> {

@@ -6195,7 +6195,7 @@ export const EditorOptions = {
 	stickyScroll: register(new EditorStickyScroll()),
 	experimentalGpuAcceleration: register(new EditorStringEnumOption(
 		EditorOption.experimentalGpuAcceleration, 'experimentalGpuAcceleration',
-		'off' as 'off' | 'on',
+		platform.isMacintosh ? 'on' as 'off' | 'on' : 'off' as 'off' | 'on',
 		['off', 'on'] as const,
 		{
 			tags: ['experimental'],

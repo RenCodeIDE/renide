@@ -257,7 +257,7 @@ const monitorXContainer: ViewContainer = Registry.as<IViewContainersRegistry>(
 ).registerViewContainer(
 	{
 		id: MONITORX_CONTAINER_ID,
-		title: localize2("monitorXActivityTitle", "MonitorX"),
+		title: localize2("monitorXActivityTitle", "Changelog"),
 		ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [
 			MONITORX_CONTAINER_ID,
 			{ mergeViewWithContainerWhenSingleView: true },
@@ -327,6 +327,8 @@ Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews(
 // --- Docs Commands ---
 const DOCS_INITIALIZE_COMMAND = "ren.docs.initialize";
 const DOCS_REGENERATE_FILE_COMMAND = "ren.docs.regenerateFile";
+const DOCS_GENERATE_DIRECTORY_COMMAND = "ren.docs.generateDirectory";
+const DOCS_REGENERATE_DIRECTORY_COMMAND = "ren.docs.regenerateDirectory";
 const REN_SYMBOL_OPEN_COMMAND = "ren.symbol.open";
 
 if (!CommandsRegistry.getCommand(DOCS_INITIALIZE_COMMAND)) {
@@ -365,6 +367,44 @@ if (!CommandsRegistry.getCommand(DOCS_REGENERATE_FILE_COMMAND)) {
 			}
 
 			await docsService.generateDocsForFile(uri, "regenerate");
+		},
+	});
+}
+
+if (!CommandsRegistry.getCommand(DOCS_GENERATE_DIRECTORY_COMMAND)) {
+	CommandsRegistry.registerCommand({
+		id: DOCS_GENERATE_DIRECTORY_COMMAND,
+		handler: async (accessor) => {
+			const docsService = accessor.get(IDocsService);
+			const workspaceContextService = accessor.get(IWorkspaceContextService);
+			const workspace = workspaceContextService.getWorkspace();
+			
+			if (!workspace.folders || workspace.folders.length === 0) {
+				throw new Error("No workspace folder found. Please open a workspace.");
+			}
+
+			// Use first workspace folder as default, or allow selection
+			const uri = workspace.folders[0].uri;
+			await docsService.generateDocsForDirectory(uri, "initialize");
+		},
+	});
+}
+
+if (!CommandsRegistry.getCommand(DOCS_REGENERATE_DIRECTORY_COMMAND)) {
+	CommandsRegistry.registerCommand({
+		id: DOCS_REGENERATE_DIRECTORY_COMMAND,
+		handler: async (accessor) => {
+			const docsService = accessor.get(IDocsService);
+			const workspaceContextService = accessor.get(IWorkspaceContextService);
+			const workspace = workspaceContextService.getWorkspace();
+			
+			if (!workspace.folders || workspace.folders.length === 0) {
+				throw new Error("No workspace folder found. Please open a workspace.");
+			}
+
+			// Use first workspace folder as default, or allow selection
+			const uri = workspace.folders[0].uri;
+			await docsService.generateDocsForDirectory(uri, "regenerate");
 		},
 	});
 }

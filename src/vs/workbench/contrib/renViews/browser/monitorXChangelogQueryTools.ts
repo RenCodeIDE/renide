@@ -18,6 +18,8 @@ export class MonitorXSearchChangelogTool implements IToolImpl {
 		displayName: 'MonitorX Search Changelog',
 		modelDescription: 'Search and filter changelog entries (confirmed and/or pending). Returns summaries without diffs. Use monitorx.getChangelogDetails to get full details with diffs.',
 		source: ToolDataSource.Internal,
+		canBeReferencedInPrompt: true,
+		tags: ['monitorx'],
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -103,6 +105,8 @@ export class MonitorXGetChangelogDetailsTool implements IToolImpl {
 		displayName: 'MonitorX Get Changelog Details',
 		modelDescription: 'Get full details including diffs for specific changelog entry IDs. Use monitorx.searchChangelog first to find entry IDs.',
 		source: ToolDataSource.Internal,
+		canBeReferencedInPrompt: true,
+		tags: ['monitorx'],
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -169,6 +173,8 @@ export class MonitorXGetRecentChangelogTool implements IToolImpl {
 		displayName: 'MonitorX Get Recent Changelog',
 		modelDescription: 'Get the most recent confirmed changelog entries. Returns summaries without diffs.',
 		source: ToolDataSource.Internal,
+		canBeReferencedInPrompt: true,
+		tags: ['monitorx'],
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -208,6 +214,8 @@ export class MonitorXGetChangelogStatsTool implements IToolImpl {
 		displayName: 'MonitorX Get Changelog Stats',
 		modelDescription: 'Get aggregated statistics about changelog entries including file frequency, activity patterns, and metadata breakdowns.',
 		source: ToolDataSource.Internal,
+		canBeReferencedInPrompt: true,
+		tags: ['monitorx'],
 		inputSchema: {
 			type: 'object',
 			properties: {

@@ -23,6 +23,22 @@
 	overflow: auto;
 }
 
+/* Docs View styles */
+.ren-docs-view {
+	height: 100%;
+	width: 100%;
+	overflow: hidden;
+	background-color: var(--vscode-sideBar-background);
+}
+
+.ren-docs-view__content {
+	outline: none;
+}
+
+.ren-docs-view__content-markdown {
+	padding-bottom: 20px;
+}
+
 /* Toolbar styles */
 .ren-toolbar-integrated {
 	display: flex;
@@ -381,4 +397,3 @@
 	border-radius: 4px;
 	padding: 6px 8px;
 }
-

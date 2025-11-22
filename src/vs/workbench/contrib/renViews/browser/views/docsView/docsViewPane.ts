@@ -37,11 +37,19 @@ import { CancellationToken } from "../../../../../../base/common/cancellation.js
 import { Range, IRange } from "../../../../../../editor/common/core/range.js";
 import { Position } from "../../../../../../editor/common/core/position.js";
 import { TextEditorSelectionRevealType } from "../../../../../../platform/editor/common/editor.js";
+import { IWorkspaceContextService } from "../../../../../../platform/workspace/common/workspace.js";
+import { IFileDialogService } from "../../../../../../platform/dialogs/common/dialogs.js";
+import { basename } from "../../../../../../base/common/resources.js";
+
+type DocsMode = "file" | "directory";
 
 export class DocsViewPane extends ViewPane {
 	private contentContainer: HTMLElement | undefined;
 	private renderedMarkdownDisposable: IDisposable | undefined;
 	private currentFileUri: URI | undefined;
+	private selectedDirectory: URI | undefined;
+	private mode: DocsMode = "file";
+	private toolbarContainer: HTMLElement | undefined;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -61,7 +69,9 @@ export class DocsViewPane extends ViewPane {
 		private readonly markdownRendererService: IMarkdownRendererService,
 		@ITextModelService private readonly textModelService: ITextModelService,
 		@ILanguageFeaturesService
-		private readonly languageFeaturesService: ILanguageFeaturesService
+		private readonly languageFeaturesService: ILanguageFeaturesService,
+		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
+		@IFileDialogService private readonly fileDialogService: IFileDialogService
 	) {
 		super(
 			options,
@@ -86,10 +96,19 @@ export class DocsViewPane extends ViewPane {
 		// Listen to file docs updates
 		this._register(
 			this.docsService.onDidUpdateFileDocs((fileDoc) => {
-				console.log("[DocsViewPane] File docs updated:", fileDoc.uri.fsPath);
 				// If this is the current file, update view immediately
-				if (this.currentFileUri?.toString() === fileDoc.uri.toString()) {
+				if (this.mode === "file" && this.currentFileUri?.toString() === fileDoc.uri.toString()) {
 					this.updateForActiveFile();
+				}
+			})
+		);
+
+		// Listen to directory docs updates
+		this._register(
+			this.docsService.onDidUpdateDirectoryDocs((directoryDoc) => {
+				// If this is the current directory, update view immediately
+				if (this.mode === "directory" && this.selectedDirectory?.toString() === directoryDoc.uri.toString()) {
+					this.updateForSelectedDirectory();
 				}
 			})
 		);
@@ -98,12 +117,43 @@ export class DocsViewPane extends ViewPane {
 	protected override renderBody(container: HTMLElement): void {
 		super.renderBody(container);
 
+		// Ensure container is visible and sized
 		container.classList.add("ren-docs-view");
+		container.style.display = "flex";
+		container.style.flexDirection = "column";
+		container.style.height = "100%";
+		container.style.width = "100%";
+		container.style.overflow = "hidden";
+
+		// Create wrapper div for our layout
+		const wrapper = document.createElement("div");
+		wrapper.style.display = "flex";
+		wrapper.style.flexDirection = "column";
+		wrapper.style.height = "100%";
+		wrapper.style.width = "100%";
+		wrapper.style.flex = "1";
+		wrapper.style.overflow = "hidden";
+		wrapper.style.background = "var(--vscode-editor-background)"; // Ensure background matches editor
+		
+		container.appendChild(wrapper);
+
+		// Create toolbar container
+		this.toolbarContainer = document.createElement("div");
+		this.toolbarContainer.style.padding = "8px 12px";
+		this.toolbarContainer.style.borderBottom = "1px solid var(--vscode-panel-border)";
+		this.toolbarContainer.style.display = "flex";
+		this.toolbarContainer.style.gap = "8px";
+		this.toolbarContainer.style.alignItems = "center";
+		this.toolbarContainer.style.flexShrink = "0";
+		this.toolbarContainer.style.minHeight = "35px";
+		this.toolbarContainer.style.background = "var(--vscode-sideBar-background)"; // Ensure toolbar background
+		wrapper.appendChild(this.toolbarContainer);
 
 		// Create single content container with improved styling
 		this.contentContainer = document.createElement("div");
 		this.contentContainer.className = "ren-docs-view__content";
-		this.contentContainer.style.height = "100%";
+		this.contentContainer.style.flex = "1";
+		this.contentContainer.style.minHeight = "0";
 		this.contentContainer.style.overflowY = "auto";
 		this.contentContainer.style.overflowX = "hidden";
 		this.contentContainer.style.padding = "20px";
@@ -111,12 +161,94 @@ export class DocsViewPane extends ViewPane {
 		this.contentContainer.style.fontFamily = "var(--vscode-font-family)";
 		this.contentContainer.style.fontSize = "13px";
 		this.contentContainer.style.lineHeight = "1.6";
-		container.appendChild(this.contentContainer);
+		this.contentContainer.style.position = "relative";
+		wrapper.appendChild(this.contentContainer);
 
-		this.updateForActiveFile();
+		// Initialize toolbar and content
+		this.updateToolbar();
+		if (this.mode === "file") {
+			this.updateForActiveFile();
+		} else {
+			this.updateForSelectedDirectory();
+		}
+	}
+
+	public override shouldShowWelcome(): boolean {
+		// Always manage our own empty state UI
+		return false;
+	}
+
+	private updateToolbar(): void {
+		if (!this.toolbarContainer) {
+			return;
+		}
+
+		// Get mode select before clearing
+		const modeSelect = this.toolbarContainer.querySelector("select") as HTMLSelectElement | null;
+		const modeValue = modeSelect?.value || this.mode;
+
+		// Clear all children
+		this.toolbarContainer.replaceChildren();
+
+		// Recreate mode select
+		const newModeSelect = document.createElement("select");
+		newModeSelect.style.padding = "4px 8px";
+		newModeSelect.style.border = "1px solid var(--vscode-dropdown-border)";
+		newModeSelect.style.background = "var(--vscode-dropdown-background)";
+		newModeSelect.style.color = "var(--vscode-dropdown-foreground)";
+		newModeSelect.style.borderRadius = "2px";
+		newModeSelect.style.fontSize = "12px";
+		newModeSelect.style.cursor = "pointer";
+		
+		const fileOption = document.createElement("option");
+		fileOption.value = "file";
+		fileOption.textContent = "File";
+		newModeSelect.appendChild(fileOption);
+		
+		const directoryOption = document.createElement("option");
+		directoryOption.value = "directory";
+		directoryOption.textContent = "Directory";
+		newModeSelect.appendChild(directoryOption);
+		
+		newModeSelect.value = modeValue;
+		newModeSelect.addEventListener("change", () => {
+			this.mode = newModeSelect.value as DocsMode;
+			this.updateToolbar();
+			if (this.mode === "file") {
+				this.updateForActiveFile();
+			} else {
+				this.updateForSelectedDirectory();
+			}
+		});
+		this.toolbarContainer.appendChild(newModeSelect);
+
+		if (this.mode === "directory") {
+			// Add "Select Folder" button
+			const selectFolderBtn = document.createElement("button");
+			selectFolderBtn.textContent = "Select Folder";
+			selectFolderBtn.style.padding = "4px 8px";
+			selectFolderBtn.style.cursor = "pointer";
+			selectFolderBtn.style.border = "1px solid var(--vscode-button-border)";
+			selectFolderBtn.style.background = "var(--vscode-button-background)";
+			selectFolderBtn.style.color = "var(--vscode-button-foreground)";
+			selectFolderBtn.style.borderRadius = "2px";
+			selectFolderBtn.style.fontSize = "12px";
+			selectFolderBtn.addEventListener("click", async () => {
+				const folder = await this.pickFolder(this.selectedDirectory);
+				if (folder) {
+					this.selectedDirectory = folder;
+					this.updateForSelectedDirectory();
+				}
+			});
+			this.toolbarContainer.appendChild(selectFolderBtn);
+		}
 	}
 
 	private async updateForActiveFile(): Promise<void> {
+		if (this.mode !== "file") {
+			return;
+		}
+
 		const activeEditor = this.editorService.activeEditor;
 		const uri = EditorResourceAccessor.getOriginalUri(activeEditor, {
 			supportSideBySide: SideBySideEditor.PRIMARY,
@@ -124,7 +256,7 @@ export class DocsViewPane extends ViewPane {
 
 		if (!uri || uri.scheme !== "file") {
 			this.currentFileUri = undefined;
-			this.renderEmptyState();
+			this.renderEmptyState("No file selected. Open a file to see its documentation.");
 			return;
 		}
 
@@ -132,8 +264,23 @@ export class DocsViewPane extends ViewPane {
 		await this.renderFileDocs(uri);
 	}
 
+	private async updateForSelectedDirectory(): Promise<void> {
+		if (this.mode !== "directory") {
+			return;
+		}
+
+		if (!this.selectedDirectory) {
+			this.renderEmptyState("No directory selected. Click 'Select Folder' to choose a directory.");
+			return;
+		}
+
+		await this.renderDirectoryDocs(this.selectedDirectory);
+	}
+
 	private async renderFileDocs(uri: URI): Promise<void> {
+		console.log("[DocsViewPane] renderFileDocs - start", uri.fsPath);
 		if (!this.contentContainer) {
+			console.log("[DocsViewPane] renderFileDocs - missing container");
 			return;
 		}
 
@@ -174,11 +321,7 @@ export class DocsViewPane extends ViewPane {
 			return;
 		}
 
-		console.log(
-			"[DocsViewPane] File doc found, content length:",
-			fileDoc.content.length,
-			"chars"
-		);
+		console.log("[DocsViewPane] renderFileDocs - doc length:", fileDoc.content.length);
 
 		// Create header with file info and regenerate button
 		const header = document.createElement("div");
@@ -248,69 +391,66 @@ export class DocsViewPane extends ViewPane {
 		this.contentContainer.appendChild(header);
 
 		// Render markdown content using markdown renderer service
-		const markdown = new MarkdownString(fileDoc.content, { isTrusted: true });
-		const renderedMarkdown = this.markdownRendererService.render(markdown, {
-			sanitizerConfig: {
-				allowedTags: {
-					override: [
-						"p",
-						"h1",
-						"h2",
-						"h3",
-						"h4",
-						"h5",
-						"h6",
-						"ul",
-						"ol",
-						"li",
-						"code",
-						"pre",
-						"blockquote",
-						"strong",
-						"em",
-						"a",
-						"img",
-						"table",
-						"thead",
-						"tbody",
-						"tr",
-						"th",
-						"td",
-					],
-				},
-				allowedAttributes: {
-					// Attribute allow-list across all tags
-					override: [
-						"href",
-						"title",
-						"src",
-						"alt",
-						"class",
-						"id",
-						"name",
-						"role",
-						"tabindex",
-					],
-				},
-			},
-		});
-
-		// Store disposable for cleanup
-		this.renderedMarkdownDisposable = renderedMarkdown;
-
-		// Add styling class and append to container
-		renderedMarkdown.element.classList.add("ren-docs-view__content-markdown");
+		const markdown = new MarkdownString(fileDoc.content, { isTrusted: true, supportHtml: true });
 		
-		// Apply enhanced styling to markdown content
-		this.applyMarkdownStyles(renderedMarkdown.element);
-		
-		// Enhance markdown with clickable symbols
-		if (uri) {
-			this.enhanceMarkdownWithClickableSymbols(renderedMarkdown.element, uri);
+		let renderedMarkdown: any;
+		try {
+			renderedMarkdown = this.markdownRendererService.render(markdown, {
+				sanitizerConfig: {
+					allowedTags: {
+						override: ['html', 'body', 'div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'pre', 'code', 'a', 'br', 'strong', 'em', 'b', 'i', 'blockquote', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'img', 'del', 'sup', 'sub']
+					},
+					allowedAttributes: {
+						override: [
+							'class', 'style', 'title', 'id', 'name', 'role', 'aria-label', 'aria-hidden',
+							'href', 'target', 'rel',
+							'src', 'alt', 'width', 'height'
+						]
+					}
+				}
+			});
+		} catch (error) {
+			console.error("[DocsViewPane] Markdown render failed (TrustedHTML issue?):", error);
 		}
-		
-		this.contentContainer.appendChild(renderedMarkdown.element);
-		console.log("[DocsViewPane] File docs rendered successfully");
+
+		if (renderedMarkdown) {
+			// Store disposable for cleanup
+			this.renderedMarkdownDisposable = renderedMarkdown;
+
+			// Add styling class and append to container
+			renderedMarkdown.element.classList.add("ren-docs-view__content-markdown");
+			
+			// Debug check: if empty, show raw
+			if (!renderedMarkdown.element.innerHTML && fileDoc.content) {
+				console.warn("[DocsViewPane] Markdown renderer produced empty output. Falling back to raw text.");
+				const rawPre = document.createElement("pre");
+				rawPre.style.whiteSpace = "pre-wrap";
+				rawPre.style.wordBreak = "break-word";
+				rawPre.textContent = fileDoc.content;
+				renderedMarkdown.element.appendChild(rawPre);
+			}
+			
+			// Apply enhanced styling to markdown content
+			this.applyMarkdownStyles(renderedMarkdown.element);
+			
+			// Enhance markdown with clickable symbols
+			if (uri) {
+				this.enhanceMarkdownWithClickableSymbols(renderedMarkdown.element, uri);
+			}
+			
+			this.contentContainer.appendChild(renderedMarkdown.element);
+		} else {
+			// Hard fallback if render threw exception
+			console.warn("[DocsViewPane] Render failed completely. Showing raw text fallback.");
+			const rawPre = document.createElement("pre");
+			rawPre.style.whiteSpace = "pre-wrap";
+			rawPre.style.wordBreak = "break-word";
+			rawPre.style.fontFamily = "var(--vscode-editor-font-family)";
+			rawPre.textContent = fileDoc.content;
+			this.contentContainer.appendChild(rawPre);
+		}
+
+		console.log("[DocsViewPane] renderFileDocs - completed");
 	}
 
 	private async enhanceMarkdownWithClickableSymbols(
@@ -652,7 +792,7 @@ export class DocsViewPane extends ViewPane {
 		}
 	}
 
-	private renderEmptyState(): void {
+	private renderEmptyState(message?: string): void {
 		if (!this.contentContainer) {
 			return;
 		}
@@ -663,15 +803,238 @@ export class DocsViewPane extends ViewPane {
 		empty.style.padding = "16px";
 		empty.style.textAlign = "center";
 		empty.style.color = "var(--vscode-descriptionForeground)";
-		empty.textContent = localize(
+		empty.textContent = message || localize(
 			"renDocs.empty",
 			"No file selected. Open a file to see its documentation."
 		);
 		this.contentContainer.appendChild(empty);
 	}
 
+	private async pickFolder(initialFolder?: URI): Promise<URI | undefined> {
+		const defaultUri =
+			initialFolder ||
+			(this.workspaceContextService.getWorkspace().folders.length > 0
+				? this.workspaceContextService.getWorkspace().folders[0].uri
+				: undefined);
+
+		const result = await this.fileDialogService.showOpenDialog({
+			canSelectFiles: false,
+			canSelectFolders: true,
+			canSelectMany: false,
+			defaultUri: defaultUri,
+			title: "Select Folder for Documentation",
+			openLabel: "Select Folder",
+		});
+
+		if (result && result.length > 0) {
+			return result[0];
+		}
+
+		return undefined;
+	}
+
+	private async renderDirectoryDocs(uri: URI): Promise<void> {
+		console.log("[DocsViewPane] renderDirectoryDocs - start", uri.fsPath);
+		if (!this.contentContainer) {
+			console.log("[DocsViewPane] renderDirectoryDocs - missing container");
+			return;
+		}
+
+		// Clear existing content
+		this.contentContainer.textContent = "";
+
+		// Dispose previous markdown render
+		if (this.renderedMarkdownDisposable) {
+			this.renderedMarkdownDisposable.dispose();
+			this.renderedMarkdownDisposable = undefined;
+		}
+
+		// Get directory docs
+		const directoryDoc = this.docsService.getDirectoryDocs(uri);
+		if (!directoryDoc) {
+			console.log(
+				"[DocsViewPane] No directory doc found for:",
+				uri.fsPath,
+				"- showing loading state"
+			);
+			const loadingContainer = document.createElement("div");
+			loadingContainer.style.padding = "16px";
+			loadingContainer.style.textAlign = "center";
+
+			const loading = document.createElement("div");
+			loading.textContent = "Loading...";
+			loadingContainer.appendChild(loading);
+
+			const generateBtn = document.createElement("button");
+			generateBtn.textContent = "Generate Docs";
+			generateBtn.style.marginTop = "8px";
+			generateBtn.style.padding = "6px 12px";
+			generateBtn.style.cursor = "pointer";
+			generateBtn.style.border = "1px solid var(--vscode-button-border)";
+			generateBtn.style.background = "var(--vscode-button-background)";
+			generateBtn.style.color = "var(--vscode-button-foreground)";
+			generateBtn.style.borderRadius = "2px";
+			generateBtn.addEventListener("click", async () => {
+				generateBtn.disabled = true;
+				generateBtn.textContent = "Generating...";
+				try {
+					await this.docsService.generateDocsForDirectory(uri, "initialize");
+					await this.updateForSelectedDirectory();
+				} finally {
+					generateBtn.disabled = false;
+					generateBtn.textContent = "Generate Docs";
+				}
+			});
+			loadingContainer.appendChild(generateBtn);
+
+			this.contentContainer.appendChild(loadingContainer);
+			return;
+		}
+
+		console.log(
+			"[DocsViewPane] renderDirectoryDocs - doc length:",
+			directoryDoc.content.length,
+			"files:",
+			directoryDoc.fileCount || 0
+		);
+
+		// Create header with directory info and regenerate button
+		const header = document.createElement("div");
+		header.style.marginBottom = "20px";
+		header.style.paddingBottom = "12px";
+		header.style.borderBottom = "2px solid var(--vscode-panel-border)";
+		header.style.display = "flex";
+		header.style.justifyContent = "space-between";
+		header.style.alignItems = "flex-start";
+		header.style.gap = "12px";
+
+		const directoryInfo = document.createElement("div");
+		directoryInfo.style.flex = "1";
+		directoryInfo.style.minWidth = "0";
+		
+		const directoryName = document.createElement("div");
+		directoryName.textContent = basename(uri) || uri.fsPath;
+		directoryName.style.fontWeight = "600";
+		directoryName.style.fontSize = "14px";
+		directoryName.style.marginBottom = "4px";
+		directoryName.style.color = "var(--vscode-foreground)";
+		directoryInfo.appendChild(directoryName);
+		
+		const directoryPath = document.createElement("div");
+		directoryPath.textContent = uri.fsPath;
+		directoryPath.style.fontSize = "11px";
+		directoryPath.style.color = "var(--vscode-descriptionForeground)";
+		directoryPath.style.marginBottom = "6px";
+		directoryPath.style.wordBreak = "break-all";
+		directoryInfo.appendChild(directoryPath);
+
+		const fileCount = document.createElement("div");
+		fileCount.textContent = `Files: ${directoryDoc.fileCount || 0}`;
+		fileCount.style.fontSize = "11px";
+		fileCount.style.color = "var(--vscode-descriptionForeground)";
+		fileCount.style.marginBottom = "6px";
+		directoryInfo.appendChild(fileCount);
+		
+		const generatedAt = document.createElement("div");
+		generatedAt.textContent = `Last updated: ${new Date(directoryDoc.generatedAt).toLocaleString()}`;
+		generatedAt.style.fontSize = "11px";
+		generatedAt.style.color = "var(--vscode-descriptionForeground)";
+		directoryInfo.appendChild(generatedAt);
+		header.appendChild(directoryInfo);
+
+		const regenBtn = document.createElement("button");
+		regenBtn.textContent = "Regenerate";
+		regenBtn.style.padding = "6px 12px";
+		regenBtn.style.cursor = "pointer";
+		regenBtn.style.border = "1px solid var(--vscode-button-border)";
+		regenBtn.style.background = "var(--vscode-button-background)";
+		regenBtn.style.color = "var(--vscode-button-foreground)";
+		regenBtn.style.borderRadius = "2px";
+		regenBtn.addEventListener("mouseenter", () => {
+			regenBtn.style.background = "var(--vscode-button-hoverBackground)";
+		});
+		regenBtn.addEventListener("mouseleave", () => {
+			regenBtn.style.background = "var(--vscode-button-background)";
+		});
+		regenBtn.addEventListener("click", async () => {
+			regenBtn.disabled = true;
+			regenBtn.textContent = "Regenerating...";
+			try {
+				await this.docsService.generateDocsForDirectory(uri, "regenerate");
+				await this.updateForSelectedDirectory();
+			} finally {
+				regenBtn.disabled = false;
+				regenBtn.textContent = "Regenerate";
+			}
+		});
+		header.appendChild(regenBtn);
+
+		this.contentContainer.appendChild(header);
+
+		// Render markdown content using markdown renderer service
+		const markdown = new MarkdownString(directoryDoc.content, { isTrusted: true, supportHtml: true });
+		
+		let renderedMarkdown: any;
+		try {
+			renderedMarkdown = this.markdownRendererService.render(markdown, {
+				sanitizerConfig: {
+					allowedTags: {
+						override: ['html', 'body', 'div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'pre', 'code', 'a', 'br', 'strong', 'em', 'b', 'i', 'blockquote', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'img', 'del', 'sup', 'sub']
+					},
+					allowedAttributes: {
+						override: [
+							'class', 'style', 'title', 'id', 'name', 'role', 'aria-label', 'aria-hidden',
+							'href', 'target', 'rel',
+							'src', 'alt', 'width', 'height'
+						]
+					}
+				}
+			});
+		} catch (error) {
+			console.error("[DocsViewPane] Directory markdown render failed:", error);
+		}
+
+		if (renderedMarkdown) {
+			// Store disposable for cleanup
+			this.renderedMarkdownDisposable = renderedMarkdown;
+
+			// Add styling class and append to container
+			renderedMarkdown.element.classList.add("ren-docs-view__content-markdown");
+			
+			// Debug check: if empty, show raw
+			if (!renderedMarkdown.element.innerHTML && directoryDoc.content) {
+				console.warn("[DocsViewPane] Markdown renderer produced empty output. Falling back to raw text.");
+				const rawPre = document.createElement("pre");
+				rawPre.style.whiteSpace = "pre-wrap";
+				rawPre.style.wordBreak = "break-word";
+				rawPre.textContent = directoryDoc.content;
+				renderedMarkdown.element.appendChild(rawPre);
+			}
+			
+			// Apply enhanced styling to markdown content
+			this.applyMarkdownStyles(renderedMarkdown.element);
+			
+			this.contentContainer.appendChild(renderedMarkdown.element);
+		} else {
+			// Fallback
+			const rawPre = document.createElement("pre");
+			rawPre.style.whiteSpace = "pre-wrap";
+			rawPre.style.wordBreak = "break-word";
+			rawPre.textContent = directoryDoc.content;
+			this.contentContainer.appendChild(rawPre);
+		}
+
+		console.log("[DocsViewPane] renderDirectoryDocs - completed");
+	}
+
 	protected override layoutBody(height: number, width: number): void {
-		// No-op, flex layout handles it
+		super.layoutBody(height, width);
+		console.log(`[DocsViewPane] layoutBody - ${width}x${height}`);
+		if (this.contentContainer?.parentElement) {
+			const wrapper = this.contentContainer.parentElement as HTMLElement;
+			wrapper.style.height = `${height}px`;
+			wrapper.style.width = `${width}px`;
+		}
 	}
 
 	override dispose(): void {

@@ -186,6 +186,12 @@ export function defaultBrowserWindowOptions(accessor: ServicesAccessor, windowSt
 		if (windowSettings?.clickThroughInactive === false) {
 			options.acceptFirstMouse = false;
 		}
+
+		// macOS-specific performance optimizations
+		options.webPreferences = {
+			...options.webPreferences,
+			backgroundThrottling: false, // Keep rendering active when in background
+		};
 	}
 
 	if (overrides?.disableFullscreen) {

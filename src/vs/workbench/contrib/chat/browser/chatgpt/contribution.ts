@@ -42,6 +42,7 @@ import { IDependencyGraphService } from '../../common/dependencyGraphService.js'
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
+import { ILanguageFeaturesService } from '../../../../../editor/common/services/languageFeatures.js';
 import '../../common/agentIntelligence.contribution.js';
 
 class ChatGPTAgentContribution
@@ -156,6 +157,13 @@ class ChatGPTAgentContribution
 			// Service not available
 		}
 
+		let languageFeaturesService: ILanguageFeaturesService | undefined;
+		try {
+			languageFeaturesService = this.instantiationService.invokeFunction(accessor => accessor.get(ILanguageFeaturesService));
+		} catch {
+			// Service not available
+		}
+
 		const implementation = new ChatGPTAgentImplementation(
 			this.requestService,
 			normalizedServerAddress,
@@ -169,6 +177,7 @@ class ChatGPTAgentContribution
 			dependencyGraphService,
 			workspaceService,
 			fileService,
+			languageFeaturesService,
 		);
 		this._register(this.chatAgentService.registerAgentImplementation(agentId, implementation));
 

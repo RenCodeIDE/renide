@@ -353,6 +353,16 @@ function configureCommandlineSwitchesSync(cliArgs: NativeParsedArgs) {
 	// Runtime sets the default version to 3, refs https://github.com/electron/electron/pull/44426
 	app.commandLine.appendSwitch('xdg-portal-required-version', '4');
 
+	// macOS-specific performance optimizations
+	if (process.platform === 'darwin') {
+		// Enable GPU rasterization for better GPU utilization
+		app.commandLine.appendSwitch('enable-gpu-rasterization');
+		// Prevent background timer throttling for better responsiveness
+		app.commandLine.appendSwitch('disable-background-timer-throttling');
+		// Prevent window backgrounding when occluded
+		app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+	}
+
 	return argvConfig;
 }
 
@@ -551,6 +561,14 @@ function getJSFlags(cliArgs: NativeParsedArgs): string | null {
 		// TODO(deepak1556): Remove this once we update to
 		// Chromium >= 134.
 		jsFlags.push('--nodecommit_pooled_pages');
+	}
+
+	// macOS-specific V8 optimizations
+	if (process.platform === 'darwin') {
+		// Enable incremental garbage collection for smoother performance
+		if (!jsFlags.some(flag => flag.includes('incremental-marking'))) {
+			jsFlags.push('--incremental-marking');
+		}
 	}
 
 	return jsFlags.length > 0 ? jsFlags.join(' ') : null;

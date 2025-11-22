@@ -17,6 +17,8 @@ export class MonitorXLogDraftTool implements IToolImpl {
 		displayName: 'MonitorX Log Draft',
 		modelDescription: 'Stages or updates a MonitorX changelog draft for the current editing session. Provide the subject, description, and file diffs that summarize the proposed changes.',
 		source: ToolDataSource.Internal,
+		canBeReferencedInPrompt: true,
+		tags: ['monitorx'],
 		inputSchema: {
 			type: 'object',
 			properties: {

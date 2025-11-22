@@ -138,7 +138,7 @@ function compileTask(src, out, build, options = {}) {
             throw new Error('compilation requires 4GB of RAM');
         }
         const compile = createCompile(src, { build, emitError: true, transpileOnly: false, preserveEnglish: !!options.preserveEnglish });
-        const srcPipe = gulp_1.default.src(`${src}/**`, { base: `${src}` });
+        const srcPipe = gulp_1.default.src([`${src}/**`, `!${src}/**/__snapshots__/**`], { base: `${src}` });
         const generator = new MonacoGenerator(false);
         if (src === 'src') {
             generator.execute();

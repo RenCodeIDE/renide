@@ -4,7 +4,7 @@ import {
 	registerSingleton,
 	InstantiationType,
 } from "../../../../../platform/instantiation/common/extensions.js";
-import { IDocsService, FileDocs } from "./docsService.js";
+import { IDocsService, FileDocs, DirectoryDocs } from "./docsService.js";
 import {
 	IStorageService,
 	StorageScope,
@@ -29,15 +29,21 @@ import { SymbolKind } from "../../../../../editor/common/languages.js";
 import { IRange } from "../../../../../editor/common/core/range.js";
 import { IReference } from "../../../../../base/common/lifecycle.js";
 import { ITextModel } from "../../../../../editor/common/model.js";
+import { basename, extname } from "../../../../../base/common/resources.js";
 
 const STORAGE_KEY = "ren.docs.latest";
 const STORAGE_KEY_PREFIX_FILE = "ren.docs.file.";
+const STORAGE_KEY_PREFIX_DIRECTORY = "ren.docs.directory.";
 const REN_AUTH_STORAGE_KEYS = {
 	ACCESS_TOKEN: "ren.auth.accessToken",
 };
 
 function getFileStorageKey(uri: URI): string {
 	return `${STORAGE_KEY_PREFIX_FILE}${uri.toString()}`;
+}
+
+function getDirectoryStorageKey(uri: URI): string {
+	return `${STORAGE_KEY_PREFIX_DIRECTORY}${uri.toString()}`;
 }
 
 export class DocsService extends Disposable implements IDocsService {
@@ -51,8 +57,14 @@ export class DocsService extends Disposable implements IDocsService {
 	);
 	readonly onDidUpdateFileDocs = this._onDidUpdateFileDocs.event;
 
+	private readonly _onDidUpdateDirectoryDocs = this._register(
+		new Emitter<DirectoryDocs>()
+	);
+	readonly onDidUpdateDirectoryDocs = this._onDidUpdateDirectoryDocs.event;
+
 	private latest: string | undefined;
 	private fileDocsCache: Map<string, FileDocs> = new Map();
+	private directoryDocsCache: Map<string, DirectoryDocs> = new Map();
 
 	constructor(
 		@IStorageService private readonly storageService: IStorageService,
@@ -639,6 +651,369 @@ export class DocsService extends Disposable implements IDocsService {
 
 		this.logService.info(
 			`[DocsService] Removed file docs for ${uri.fsPath}`
+		);
+	}
+
+	// Directory-level methods
+
+	private async collectFilesFromDirectory(
+		directoryUri: URI,
+		maxFiles: number = 50
+	): Promise<URI[]> {
+		const files: URI[] = [];
+		const excludedDirs = new Set([
+			"node_modules",
+			".git",
+			"dist",
+			"build",
+			"out",
+			".next",
+			".cache",
+			"coverage",
+			".nyc_output",
+		]);
+		const codeExtensions = new Set([
+			".ts",
+			".tsx",
+			".js",
+			".jsx",
+			".py",
+			".java",
+			".go",
+			".rs",
+			".cpp",
+			".c",
+			".cs",
+			".php",
+			".rb",
+			".swift",
+			".kt",
+		]);
+
+		const collectRecursive = async (dirUri: URI): Promise<void> => {
+			if (files.length >= maxFiles) {
+				return;
+			}
+
+			try {
+				const stat = await this.fileService.resolve(dirUri);
+				if (!stat.isDirectory) {
+					return;
+				}
+
+				const children = stat.children || [];
+				for (const child of children) {
+					if (files.length >= maxFiles) {
+						break;
+					}
+
+					if (child.isDirectory) {
+						const dirName = basename(child.resource);
+						if (!excludedDirs.has(dirName.toLowerCase())) {
+							await collectRecursive(child.resource);
+						}
+					} else if (child.isFile) {
+						const ext = extname(child.resource).toLowerCase();
+						if (codeExtensions.has(ext)) {
+							files.push(child.resource);
+						}
+					}
+				}
+			} catch (error) {
+				this.logService.warn(
+					`[DocsService] Failed to read directory ${dirUri.fsPath}:`,
+					error
+				);
+			}
+		};
+
+		await collectRecursive(directoryUri);
+		return files.slice(0, maxFiles);
+	}
+
+	private async generateDirectoryDocContent(
+		directoryUri: URI
+	): Promise<{ content: string; includedFiles: URI[] }> {
+		try {
+			// Get access token
+			const accessToken = await this.secretStorageService.get(
+				REN_AUTH_STORAGE_KEYS.ACCESS_TOKEN
+			);
+			if (!accessToken) {
+				this.logService.warn(
+					"[DocsService] No access token available for directory docs, using placeholder content"
+				);
+				return {
+					content: this.generateDirectoryPlaceholderContent(directoryUri),
+					includedFiles: [],
+				};
+			}
+
+			// Collect files from directory
+			const files = await this.collectFilesFromDirectory(directoryUri, 50);
+			if (files.length === 0) {
+				this.logService.warn(
+					`[DocsService] No code files found in directory ${directoryUri.fsPath}`
+				);
+				return {
+					content: this.generateDirectoryPlaceholderContent(directoryUri),
+					includedFiles: [],
+				};
+			}
+
+			// Get server address
+			const serverAddress = await this.getServerAddress();
+			const endpoint = "/api/bg-agent/generate-directory-docs";
+			const url = `${serverAddress}${endpoint}`;
+
+			// Prepare chunks for all files
+			const chunks: Array<{
+				text: string;
+				metadata: {
+					filePath: string;
+					language: string;
+					symbolSummary?: string;
+				};
+			}> = [];
+
+			for (const fileUri of files) {
+				try {
+					const fileContent = await this.getFileContent(fileUri);
+					if (!fileContent.trim()) {
+						continue;
+					}
+
+					const fileExtension = fileUri.path.split(".").pop() || "";
+					const language = this.detectLanguage(fileExtension);
+					const symbolSummary = await this.collectSymbolSummary(fileUri);
+
+					chunks.push({
+						text: fileContent,
+						metadata: {
+							filePath: fileUri.fsPath,
+							language: language,
+							symbolSummary: symbolSummary,
+						},
+					});
+				} catch (error) {
+					this.logService.warn(
+						`[DocsService] Failed to process file ${fileUri.fsPath} for directory docs:`,
+						error
+					);
+				}
+			}
+
+			if (chunks.length === 0) {
+				this.logService.warn(
+					`[DocsService] No valid files to document in directory ${directoryUri.fsPath}`
+				);
+				return {
+					content: this.generateDirectoryPlaceholderContent(directoryUri),
+					includedFiles: [],
+				};
+			}
+
+			const payload = {
+				chunks: chunks,
+				options: {
+					documentationStyle: "markdown" as const,
+					includeExamples: false,
+					includeParameters: false,
+					directoryMode: true,
+					includeArchitecture: true,
+					includeMermaid: true,
+				},
+			};
+
+			// Make API call
+			this.logService.info(
+				`[DocsService] Generating directory docs for ${directoryUri.fsPath} (${chunks.length} files)...`
+			);
+			const response = await this.requestService.request(
+				{
+					type: "POST",
+					url,
+					data: JSON.stringify(payload),
+					headers: {
+						"Content-Type": "application/json",
+						Authorization: `Bearer ${accessToken}`,
+						Accept: "application/json",
+					},
+					timeout: 120000, // 2 minutes timeout for large directory docs
+				},
+				CancellationToken.None
+			);
+
+			if (!isSuccess(response)) {
+				const errorBuffer = await streamToBuffer(response.stream);
+				const errorText = errorBuffer.toString();
+				let errorMessage = `Server error: ${response.res.statusCode}`;
+				try {
+					const errorJson = JSON.parse(errorText);
+					errorMessage = errorJson.message || errorJson.error || errorMessage;
+				} catch {
+					if (errorText) {
+						errorMessage += ` - ${errorText}`;
+					}
+				}
+				this.logService.error(`[DocsService] API call failed: ${errorMessage}`);
+				return {
+					content: this.generateDirectoryPlaceholderContent(directoryUri),
+					includedFiles: files,
+				};
+			}
+
+			// Parse response
+			const result = await asJson<{
+				documentation: string;
+				model: string;
+				usage?: {
+					prompt_tokens: number;
+					completion_tokens: number;
+					total_tokens: number;
+				};
+			}>(response);
+
+			if (!result || !result.documentation) {
+				this.logService.warn(`[DocsService] API returned empty response`);
+				return {
+					content: this.generateDirectoryPlaceholderContent(directoryUri),
+					includedFiles: files,
+				};
+			}
+
+			this.logService.info(
+				`[DocsService] Successfully generated directory docs for ${directoryUri.fsPath} (${chunks.length} files, model: ${result.model})`
+			);
+			return {
+				content: result.documentation,
+				includedFiles: files,
+			};
+		} catch (error) {
+			this.logService.error(`[DocsService] Error generating directory docs:`, error);
+			return {
+				content: this.generateDirectoryPlaceholderContent(directoryUri),
+				includedFiles: [],
+			};
+		}
+	}
+
+	private generateDirectoryPlaceholderContent(uri: URI): string {
+		const lines: string[] = [];
+		lines.push(`# Directory Documentation`);
+		lines.push("");
+		lines.push(`**Directory:** \`${uri.fsPath}\``);
+		lines.push("");
+		lines.push(`*Placeholder content - API call failed or not available*`);
+		return lines.join("\n");
+	}
+
+	async generateDocsForDirectory(
+		uri: URI,
+		mode: "initialize" | "regenerate" = "regenerate"
+	): Promise<DirectoryDocs | undefined> {
+		this.logService.info(
+			`[DocsService] generateDocsForDirectory called for ${uri.fsPath}, mode: ${mode}`
+		);
+
+		// Generate directory-level documentation
+		const { content, includedFiles } = await this.generateDirectoryDocContent(uri);
+		const directoryDoc: DirectoryDocs = {
+			uri,
+			content,
+			format: "markdown",
+			generatedAt: Date.now(),
+			fileCount: includedFiles.length,
+			includedFiles: includedFiles,
+		};
+
+		// Store in cache and storage
+		const directoryUri = uri.toString();
+		this.directoryDocsCache.set(directoryUri, directoryDoc);
+		this.logService.info(
+			`[DocsService] Stored directory doc in cache: ${directoryUri}, content length: ${content.length} chars, ${includedFiles.length} files`
+		);
+		const storageKey = getDirectoryStorageKey(uri);
+		this.storageService.store(
+			storageKey,
+			JSON.stringify(directoryDoc),
+			StorageScope.WORKSPACE,
+			StorageTarget.MACHINE
+		);
+		this.logService.info(
+			`[DocsService] Stored directory doc in storage: ${storageKey}`
+		);
+
+		// Emit update event
+		this._onDidUpdateDirectoryDocs.fire(directoryDoc);
+		this.logService.info(
+			`[DocsService] Firing onDidUpdateDirectoryDocs event for directory: ${directoryUri}`
+		);
+
+		this.logService.info(
+			`[DocsService] generateDocsForDirectory completed for ${uri.fsPath}`
+		);
+		return directoryDoc;
+	}
+
+	getDirectoryDocs(uri: URI): DirectoryDocs | undefined {
+		const directoryUri = uri.toString();
+		// Check cache first
+		if (this.directoryDocsCache.has(directoryUri)) {
+			const doc = this.directoryDocsCache.get(directoryUri);
+			this.logService.debug(
+				`[DocsService] getDirectoryDocs: Found in cache for ${directoryUri}, content length: ${
+					doc?.content.length || 0
+				}, files: ${doc?.fileCount || 0}`
+			);
+			return doc;
+		}
+
+		this.logService.debug(
+			`[DocsService] getDirectoryDocs: Not in cache, checking storage for ${directoryUri}`
+		);
+		// Load from storage
+		const storageKey = getDirectoryStorageKey(uri);
+		const stored = this.storageService.get(
+			storageKey,
+			StorageScope.WORKSPACE,
+			undefined
+		);
+		if (stored) {
+			try {
+				const directoryDoc = JSON.parse(stored) as DirectoryDocs;
+				this.directoryDocsCache.set(directoryUri, directoryDoc);
+				this.logService.debug(
+					`[DocsService] getDirectoryDocs: Loaded from storage for ${directoryUri}, content length: ${directoryDoc.content.length}, files: ${directoryDoc.fileCount || 0}`
+				);
+				return directoryDoc;
+			} catch (e) {
+				this.logService.error(
+					"[DocsService] Failed to parse stored directory docs:",
+					e
+				);
+			}
+		} else {
+			this.logService.debug(
+				`[DocsService] getDirectoryDocs: No stored doc found for ${directoryUri}`
+			);
+		}
+
+		return undefined;
+	}
+
+	async removeDocsForDirectory(uri: URI): Promise<void> {
+		const directoryUri = uri.toString();
+
+		// Remove from cache
+		this.directoryDocsCache.delete(directoryUri);
+
+		// Remove from storage
+		const storageKey = getDirectoryStorageKey(uri);
+		this.storageService.remove(storageKey, StorageScope.WORKSPACE);
+
+		this.logService.info(
+			`[DocsService] Removed directory docs for ${uri.fsPath}`
 		);
 	}
 }

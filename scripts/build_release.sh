@@ -16,10 +16,19 @@ rm -rf release
 echo "📦 Installing dependencies..."
 npm install
 
+echo "🔧 Rebuilding native dependencies for Electron..."
+npx electron-builder install-app-deps
+
 echo "🔨 Compiling source code..."
 # We use max-old-space-size to prevent memory crashes during the heavy compilation
 export NODE_OPTIONS="--max-old-space-size=8192"
 npm run compile
+
+# Verify compilation success
+if [ ! -f "out/main.js" ]; then
+    echo "❌ Error: Compilation failed. out/main.js not found!"
+    exit 1
+fi
 
 echo "🍎 Packaging for macOS..."
 npm run dist:mac

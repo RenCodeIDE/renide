@@ -36,6 +36,8 @@ import {
 import { IRequestService } from '../../../../../platform/request/common/request.js';
 import { ISecretStorageService } from '../../../../../platform/secrets/common/secrets.js';
 import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
+import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
+import { ILanguageFeaturesService } from '../../../../../editor/common/services/languageFeatures.js';
 import { GEMINI_MODELS } from './models.js';
 import { GeminiAgentImplementation } from './agent.js';
 import { reduceMessageParts } from './conversion.js';
@@ -59,6 +61,7 @@ class GeminiAgentContribution
 		@ILanguageModelToolsService languageModelToolsService: ILanguageModelToolsService,
 		@ISecretStorageService private readonly secretStorageService: ISecretStorageService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@IInstantiationService private readonly instantiationService: IInstantiationService,
 	) {
 		super();
 
@@ -101,6 +104,13 @@ class GeminiAgentContribution
 		});
 		this._register(registration);
 
+		let languageFeaturesService: ILanguageFeaturesService | undefined;
+		try {
+			languageFeaturesService = this.instantiationService.invokeFunction(accessor => accessor.get(ILanguageFeaturesService));
+		} catch {
+			// Service not available
+		}
+
 		const implementation = new GeminiAgentImplementation(
 			this.requestService,
 			serverAddress,
@@ -111,6 +121,7 @@ class GeminiAgentContribution
 			languageModelsService,
 			this.chatAgentService,
 			this.configurationService,
+			languageFeaturesService,
 		);
 		this._register(this.chatAgentService.registerAgentImplementation(agentId, implementation));
 

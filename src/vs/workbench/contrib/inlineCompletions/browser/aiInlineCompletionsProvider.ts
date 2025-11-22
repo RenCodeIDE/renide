@@ -23,13 +23,14 @@ import { IProductService } from "../../../../platform/product/common/productServ
 import { ILogService } from "../../../../platform/log/common/log.js";
 import { SSEParser } from "../../../../base/common/sseParser.js";
 import { streamToBuffer, VSBuffer } from "../../../../base/common/buffer.js";
+import { ILabelService } from "../../../../platform/label/common/label.js";
 
 export class AIInlineCompletionsProvider
 	extends Disposable
 	implements InlineCompletionsProvider
 {
 	displayName = "Ren AI Autocomplete";
-	debounceDelayMs = 150;
+	debounceDelayMs = 100;
 
 	private cachedServerAddress: string | undefined;
 
@@ -38,7 +39,8 @@ export class AIInlineCompletionsProvider
 		@ISecretStorageService
 		private readonly _secretStorageService: ISecretStorageService,
 		@IProductService private readonly _productService: IProductService,
-		@ILogService private readonly _logService: ILogService
+		@ILogService private readonly _logService: ILogService,
+		@ILabelService private readonly _labelService: ILabelService
 	) {
 		super();
 	}
@@ -54,21 +56,66 @@ export class AIInlineCompletionsProvider
 			return undefined;
 		}
 
-		// Get context window: prefix (last 50-100 lines) and suffix (next 20-50 lines)
-		const prefixLines = 75;
-		const suffixLines = 25;
+		// Get file path context (relative to workspace)
+		const filePath = this._labelService.getUriLabel(model.uri, {
+			relative: true,
+			noPrefix: true,
+		});
 
-		const startLine = Math.max(1, position.lineNumber - prefixLines);
-		const endLine = Math.min(
-			model.getLineCount(),
-			position.lineNumber + suffixLines
-		);
+		// Expanded context window: dynamic sizing based on content
+		// Target: up to 100 lines or ~3k characters for prefix, 50 lines or ~1.5k for suffix
+		// Smaller context reduces latency for real-time completions
+		const maxPrefixChars = 3000;
+		const maxSuffixChars = 1500;
+		const maxPrefixLines = 100;
+		const maxSuffixLines = 50;
 
+		// Calculate prefix: start from beginning of file or within max lines/chars
+		let prefixStartLine = Math.max(1, position.lineNumber - maxPrefixLines);
 		const prefixRange = new Range(
-			startLine,
+			prefixStartLine,
 			1,
 			position.lineNumber,
 			position.column
+		);
+		let prefix = model.getValueInRange(prefixRange);
+
+		// Trim prefix if it exceeds character limit, prioritizing more recent lines
+		if (prefix.length > maxPrefixChars) {
+			// Start from current line and go backwards, building prefix from most recent lines
+			let adjustedStartLine = position.lineNumber;
+			let adjustedPrefix = "";
+			
+			// First, add the current line up to cursor position
+			const currentLinePrefix = model.getValueInRange(
+				new Range(position.lineNumber, 1, position.lineNumber, position.column)
+			);
+			if (currentLinePrefix.length <= maxPrefixChars) {
+				adjustedPrefix = currentLinePrefix;
+				adjustedStartLine = position.lineNumber;
+				
+				// Then add previous lines going backwards
+				while (adjustedStartLine > prefixStartLine) {
+					const prevLine = model.getLineContent(adjustedStartLine - 1);
+					const candidatePrefix = prevLine + "\n" + adjustedPrefix;
+					if (candidatePrefix.length > maxPrefixChars) {
+						break;
+					}
+					adjustedPrefix = candidatePrefix;
+					adjustedStartLine--;
+				}
+				
+				if (adjustedPrefix) {
+					prefix = adjustedPrefix;
+					prefixStartLine = adjustedStartLine;
+				}
+			}
+		}
+
+		// Calculate suffix: up to max lines/chars after cursor
+		let endLine = Math.min(
+			model.getLineCount(),
+			position.lineNumber + maxSuffixLines
 		);
 		const suffixRange = new Range(
 			position.lineNumber,
@@ -76,9 +123,44 @@ export class AIInlineCompletionsProvider
 			endLine,
 			model.getLineMaxColumn(endLine)
 		);
+		let suffix = model.getValueInRange(suffixRange);
 
-		const prefix = model.getValueInRange(prefixRange);
-		const suffix = model.getValueInRange(suffixRange);
+		// Trim suffix if it exceeds character limit
+		if (suffix.length > maxSuffixChars) {
+			// Start from cursor position on current line and go forwards
+			let adjustedEndLine = position.lineNumber;
+			let adjustedSuffix = "";
+			
+			// First, add the rest of the current line after cursor
+			const currentLineSuffix = model.getValueInRange(
+				new Range(
+					position.lineNumber,
+					position.column,
+					position.lineNumber,
+					model.getLineMaxColumn(position.lineNumber)
+				)
+			);
+			if (currentLineSuffix.length <= maxSuffixChars) {
+				adjustedSuffix = currentLineSuffix;
+				adjustedEndLine = position.lineNumber;
+				
+				// Then add following lines going forwards
+				while (adjustedEndLine < endLine) {
+					const nextLine = model.getLineContent(adjustedEndLine + 1);
+					const candidateSuffix = adjustedSuffix + "\n" + nextLine;
+					if (candidateSuffix.length > maxSuffixChars) {
+						break;
+					}
+					adjustedSuffix = candidateSuffix;
+					adjustedEndLine++;
+				}
+				
+				if (adjustedSuffix) {
+					suffix = adjustedSuffix;
+					endLine = adjustedEndLine;
+				}
+			}
+		}
 
 		// Get server address and access token
 		const serverAddress = await this.resolveServerAddress();
@@ -99,24 +181,26 @@ export class AIInlineCompletionsProvider
 			return undefined;
 		}
 
-		// Construct FIM (Fill-In-Middle) prompt
+		// Construct structured FIM (Fill-In-Middle) prompt with context
 		const languageId = model.getLanguageId();
-		const prompt = `You are a code completion assistant. Complete the code at the cursor position.
-Do not repeat the prefix or suffix. Only output the missing code that should be inserted.
+		const prompt = `You are a fast code completion assistant.
+Task: Complete the code at <CURSOR>.
+Style: Concise, matching existing indentation and conventions.
+Output: ONLY the code to insert. No markdown, no explanations.
 
-Language: ${languageId}
+Context: ${filePath} (${languageId})
 
-Prefix code:
+Prefix:
 \`\`\`${languageId}
-${prefix}
+${prefix}<CURSOR>
 \`\`\`
 
-Suffix code:
+Suffix:
 \`\`\`${languageId}
 ${suffix}
 \`\`\`
 
-Complete the code between the prefix and suffix. Output only the code to insert, nothing else:`;
+Code to insert at <CURSOR>:`;
 
 		// Declare completionText outside try block so it's accessible in catch block
 		let completionText = "";
@@ -127,9 +211,9 @@ Complete the code between the prefix and suffix. Output only the code to insert,
 				"/api/agent/completion"
 			);
 			const body = JSON.stringify({
-				model: "openai",
+				model: "gemini",
 				prompt: prompt,
-				modelName: "gpt-4o-mini",
+				modelName: "gemini-2.5-flash",
 				stream: true,
 			});
 
@@ -359,6 +443,7 @@ Complete the code between the prefix and suffix. Output only the code to insert,
 	/**
 	 * Clean completion text by removing markdown code blocks if present.
 	 * Handles various edge cases like whitespace, different newline formats, and partial blocks.
+	 * Also removes any explanatory text that might appear before/after code blocks.
 	 */
 	private cleanCompletionText(text: string): string {
 		if (!text) {
@@ -370,26 +455,64 @@ Complete the code between the prefix and suffix. Output only the code to insert,
 			return "";
 		}
 
+		// Remove common explanatory prefixes/suffixes that models sometimes add
+		// Patterns like "Here's the completion:", "The code is:", etc.
+		const explanationPatterns = [
+			/^Here'?s?\s+(the|a)?\s+completion:?\s*/i,
+			/^The\s+code\s+is:?\s*/i,
+			/^Completion:?\s*/i,
+			/^Code:?\s*/i,
+			/^Here\s+is\s+(the|a)?\s+completion:?\s*/i,
+		];
+
+		for (const pattern of explanationPatterns) {
+			cleaned = cleaned.replace(pattern, "");
+		}
+
+		cleaned = cleaned.trim();
+		if (!cleaned) {
+			return "";
+		}
+
 		// Check if text starts with a code block fence
 		if (cleaned.startsWith("```")) {
 			const lines = cleaned.split(/\r?\n/);
 
 			// Remove opening fence (first line that starts with ```)
+			// Also handle language identifier like ```typescript or ```ts
 			if (lines.length > 0 && lines[0].trim().startsWith("```")) {
 				lines.shift();
 			}
 
-			// Remove closing fence (last line that is exactly ``` or starts with ``` and has no other content)
+			// Remove closing fence (last line that is exactly ``` or starts with ```)
 			if (lines.length > 0) {
 				const lastLine = lines[lines.length - 1].trim();
-				// Only remove if it's exactly ``` or starts with ``` and has no meaningful content after
-				if (lastLine === "```" || (lastLine.startsWith("```") && lastLine.length <= 3)) {
+				// Remove if it's exactly ``` or starts with ``` and has minimal content after
+				if (lastLine === "```" || (lastLine.startsWith("```") && lastLine.length <= 4)) {
 					lines.pop();
+				}
+			}
+
+			// Remove any trailing explanation text after code block
+			while (lines.length > 0) {
+				const lastLine = lines[lines.length - 1].trim().toLowerCase();
+				if (
+					lastLine === "" ||
+					explanationPatterns.some((p) => p.test(lastLine)) ||
+					lastLine.startsWith("note:") ||
+					lastLine.startsWith("note ")
+				) {
+					lines.pop();
+				} else {
+					break;
 				}
 			}
 
 			cleaned = lines.join("\n").trim();
 		}
+
+		// Final cleanup: remove leading/trailing whitespace and normalize line endings
+		cleaned = cleaned.replace(/\r\n/g, "\n").trim();
 
 		return cleaned;
 	}
