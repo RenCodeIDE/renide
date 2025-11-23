@@ -821,10 +821,15 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			(id) => selected[id] === true
 		);
 		if (!allowedIds.length) {
+			// Empty selection - fall back to default behavior
 			this.logService.debug(
-				`[gemini] tool selection for request ${requestId} contained no enabled entries`
+				`[gemini] tool selection for request ${requestId} contained no enabled entries, falling back to default`
 			);
-			return [];
+			const allTools = Array.from(this.languageModelToolsService.getTools());
+			if (chatMode === ChatModeKind.Plan) {
+				return allTools.filter((tool) => tool.id !== "create_file");
+			}
+			return allTools;
 		}
 		const allowedSet = new Set(allowedIds);
 		const allowedTools: IToolData[] = [];
@@ -833,6 +838,22 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				allowedTools.push(tool);
 			}
 		}
+
+		// CRITICAL FIX: If filtering resulted in zero tools, fall back to default
+		// This prevents empty tool arrays from being sent to Gemini, which would prevent tool calls
+		if (allowedTools.length === 0) {
+			this.logService.warn(
+				`[gemini] Tool filtering for request ${requestId} resulted in zero tools (selected IDs: ${allowedIds.join(
+					", "
+				)}), falling back to default behavior`
+			);
+			const allTools = Array.from(this.languageModelToolsService.getTools());
+			if (chatMode === ChatModeKind.Plan) {
+				return allTools.filter((tool) => tool.id !== "create_file");
+			}
+			return allTools;
+		}
+
 		this.logService.debug(
 			`[gemini] resolved ${
 				allowedTools.length
@@ -853,6 +874,11 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 	} {
 		const allowedTools = this.getAllowedToolData(requestId, chatMode);
 		if (!allowedTools.length) {
+			this.logService.warn(
+				`[gemini] buildGeminiToolDeclarations: No tools available for request ${requestId} in mode ${
+					chatMode || "unknown"
+				}. This will prevent tool calls.`
+			);
 			return { tools: [], nameToToolId: new Map(), summaries: [] };
 		}
 
