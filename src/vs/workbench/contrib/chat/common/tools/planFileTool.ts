@@ -10,13 +10,14 @@ import { Disposable } from '../../../../../base/common/lifecycle.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { isWindows } from '../../../../../base/common/platform.js';
 import { localize } from '../../../../../nls.js';
+import { IEditorService } from '../../../../../workbench/services/editor/common/editorService.js';
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../../platform/log/common/log.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { CountTokensCallback, IPreparedToolInvocation, IToolData, IToolImpl, IToolInvocation, IToolInvocationPreparationContext, IToolResult, ToolDataSource, ToolProgress } from '../languageModelToolsService.js';
 
-const DEFAULT_PLAN_FILE_NAME = 'plan.md';
+const DEFAULT_PLAN_FILE_NAME = 'plan.plan.md';
 
 export interface IPlanFileToolInput {
 	filename?: string;
@@ -38,7 +39,7 @@ export const PlanFileToolData: IToolData = {
 		properties: {
 			filename: {
 				type: 'string',
-				description: localize('planFileTool.filename', "The markdown filename to create or update, e.g. `feature-plan.md`. Defaults to plan.md.")
+				description: localize('planFileTool.filename', "The markdown filename to create or update, e.g. `feature.plan.md`. Defaults to plan.plan.md.")
 			},
 			directory: {
 				type: 'string',
@@ -63,6 +64,7 @@ export class PlanFileTool extends Disposable implements IToolImpl {
 		@IFileService private readonly fileService: IFileService,
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
 		@ILogService private readonly logService: ILogService,
+		@IEditorService private readonly editorService: IEditorService,
 		@IInstantiationService _instaService: IInstantiationService,
 	) {
 		super();
@@ -94,13 +96,29 @@ export class PlanFileTool extends Disposable implements IToolImpl {
 			const buffer = VSBuffer.fromString(contentToWrite);
 			await this.fileService.writeFile(uri, buffer);
 
+			// Automatically open the plan file in the editor
+			try {
+				await this.editorService.openEditor({
+					resource: uri,
+					options: {
+						pinned: true,
+						preserveFocus: false,
+						revealIfVisible: true
+					}
+				});
+				this.logService.debug(`[PlanFileTool] Opened plan file: ${uri.toString()}`);
+			} catch (error) {
+				this.logService.warn(`[PlanFileTool] Failed to open plan file: ${error}`);
+				// Continue even if opening fails
+			}
+
 			const workspaceRelative = this.getWorkspaceRelativePath(uri);
-			const markdownLink = new MarkdownString(`[Open plan file](${uri.toString(true)})`);
+			const markdownLink = new MarkdownString(`[Plan file created: ${workspaceRelative ?? uri.fsPath}](${uri.toString(true)})`);
 			markdownLink.isTrusted = true;
 
 			return {
 				content: [
-					{ kind: 'text', value: localize('planFileTool.success', "Plan file updated: {0}", workspaceRelative ?? uri.fsPath) }
+					{ kind: 'text', value: localize('planFileTool.success', "Plan file created and opened: {0}", workspaceRelative ?? uri.fsPath) }
 				],
 				toolResultMessage: markdownLink
 			};
@@ -128,7 +146,7 @@ export class PlanFileTool extends Disposable implements IToolImpl {
 
 	private sanitizeFilename(name: string): string {
 		const trimmed = name.trim().toLowerCase();
-		const normalized = trimmed.endsWith('.md') ? trimmed : `${trimmed}.md`;
+		const normalized = trimmed.endsWith('.plan.md') ? trimmed : (trimmed.endsWith('.md') ? trimmed.replace(/\.md$/, '.plan.md') : `${trimmed}.plan.md`);
 		return normalized.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '-');
 	}
 

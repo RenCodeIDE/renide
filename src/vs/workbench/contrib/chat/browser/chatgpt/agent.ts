@@ -317,7 +317,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					token,
 					modelToUse,
 					contextString,
-					toolResultsForServer
+					toolResultsForServer,
+					request.chatMode
 				);
 				let streamedText = false;
 
@@ -1135,13 +1136,15 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		token: CancellationToken,
 		model: string,
 		context?: string,
-		toolResults?: ServerToolResult[]
+		toolResults?: ServerToolResult[],
+		mode?: string
 	): Promise<ChatGPTStreamingResponse> {
 		const toolNames = tools.map((f) => f.function.name);
 		this.logService.info(
 			`[chatgpt-server] performRequest: model=${model}, messages=${messages.length
 			}, tools=${toolNames.join(", ") || "none"
-			}, hasContext=${!!context}, toolResults=${toolResults?.length || 0}`
+			}, hasContext=${!!context}, toolResults=${toolResults?.length || 0
+			}, mode=${mode || "unknown"}`
 		);
 
 		const accessToken = await this.getAccessToken();
@@ -1242,6 +1245,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				modelName: model,
 				tools: serverTools,
 				toolResults: hasToolResults ? toolResults : undefined,
+				mode: mode,
 			},
 			this.logService
 		);

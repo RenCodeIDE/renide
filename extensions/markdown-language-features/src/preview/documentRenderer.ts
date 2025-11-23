@@ -85,7 +85,7 @@ export class MdDocumentRenderer {
 		const nonce = getNonce();
 		const csp = this._getCsp(resourceProvider, sourceUri, nonce);
 
-		const body = await this.renderBody(markdownDocument, resourceProvider);
+		const body = await this.renderBody(markdownDocument, resourceProvider, nonce);
 		if (token.isCancellationRequested) {
 			return { html: '', containingImages: new Set() };
 		}
@@ -117,9 +117,39 @@ export class MdDocumentRenderer {
 	public async renderBody(
 		markdownDocument: vscode.TextDocument,
 		resourceProvider: WebviewResourceProvider,
+		nonce?: string,
 	): Promise<MarkdownContentProviderOutput> {
 		const rendered = await this._engine.render(markdownDocument, resourceProvider);
-		const html = `<div class="markdown-body" dir="auto">${rendered.html}<div class="code-line" data-line="${markdownDocument.lineCount}"></div></div>`;
+		
+		// Inject "Start Execution" button for .plan.md files
+		let planFileHeader = '';
+		if (markdownDocument.uri.fsPath.endsWith('.plan.md')) {
+			const sourceUri = markdownDocument.uri.toString();
+			const scriptNonce = nonce || getNonce();
+			planFileHeader = `
+				<div class="plan-execution-header" style="position: sticky; top: 0; z-index: 1000; background: var(--vscode-editor-background); padding: 12px; border-bottom: 1px solid var(--vscode-panel-border); margin-bottom: 16px;">
+					<button id="start-execution-btn" style="background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500;">
+						▶ Start Execution
+					</button>
+					<script nonce="${scriptNonce}">
+						(function() {
+							const button = document.getElementById('start-execution-btn');
+							if (button) {
+								button.addEventListener('click', () => {
+									const vscode = acquireVsCodeApi();
+									vscode.postMessage({
+										type: 'startExecution',
+										source: '${sourceUri}'
+									});
+								});
+							}
+						})();
+					</script>
+				</div>
+			`;
+		}
+		
+		const html = `${planFileHeader}<div class="markdown-body" dir="auto">${rendered.html}<div class="code-line" data-line="${markdownDocument.lineCount}"></div></div>`;
 		return {
 			html,
 			containingImages: rendered.containingImages

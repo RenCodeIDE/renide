@@ -157,6 +157,7 @@ export interface IChatAgentRequest {
 	userSelectedModelId?: string;
 	userSelectedTools?: UserSelectedTools;
 	modeInstructions?: IChatRequestModeInstructions;
+	chatMode?: string;
 	editedFileEvents?: IChatAgentEditedFileEvent[];
 
 	/**

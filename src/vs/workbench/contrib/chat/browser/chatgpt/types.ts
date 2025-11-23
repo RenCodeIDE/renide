@@ -84,6 +84,7 @@ export interface ServerToolResult {
 export interface ServerRequestOptions {
 	readonly context?: string;
 	readonly modelName?: string;
+	readonly mode?: string;
 	readonly tools?: Array<{
 		name: string;
 		description?: string;
