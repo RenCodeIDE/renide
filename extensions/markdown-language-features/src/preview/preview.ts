@@ -150,6 +150,10 @@ class MarkdownPreview extends Disposable implements WebviewResourceProvider {
 					vscode.window.showWarningMessage(
 						vscode.l10n.t("Could not load 'markdown.styles': {0}", e.unloadedStyles.join(', ')));
 					break;
+
+				case 'startExecution':
+					vscode.commands.executeCommand('workbench.action.chat.startPlanExecution', e.source);
+					break;
 			}
 		}));
 

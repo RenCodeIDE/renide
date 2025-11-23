@@ -135,12 +135,25 @@ export class ChatSelectedTools extends Disposable {
 				currentMap = ToolEnablementStates.fromMap(this._toolsService.toToolAndToolSetEnablementMap(modeTools));
 			}
 		}
+		if (!currentMap && currentMode.kind === ChatModeKind.Plan) {
+			// Explicitly enable plan tools for Plan mode
+			const planTools = ['plan.writeFile', 'plan.visualize'];
+			currentMap = ToolEnablementStates.fromMap(this._toolsService.toToolAndToolSetEnablementMap(planTools));
+		}
 		if (!currentMap) {
 			currentMap = this._globalState.read(r);
 		}
 		for (const tool of this._allTools.read(r)) {
 			if (tool.canBeReferencedInPrompt) {
-				map.set(tool, currentMap.tools.get(tool.id) !== false); // if unknown, it's enabled
+				let enabled = currentMap.tools.get(tool.id) !== false; // if unknown, it's enabled
+				
+				// In Plan mode, explicitly disable the generic createFile tool
+				// Use createPlanFile instead for creating plan files
+				if (currentMode.kind === ChatModeKind.Plan && tool.id === 'create_file') {
+					enabled = false;
+				}
+				
+				map.set(tool, enabled);
 			}
 		}
 		for (const toolSet of this._toolsService.toolSets.read(r)) {

@@ -12,6 +12,8 @@ import { ConfirmationTool, ConfirmationToolData } from './confirmationTool.js';
 import { EditTool, EditToolData } from './editFileTool.js';
 import { createManageTodoListToolData, ManageTodoListTool, TodoListToolWriteOnlySettingId, TodoListToolDescriptionFieldSettingId } from './manageTodoListTool.js';
 import { ManagePlanTool, ManagePlanToolData } from './managePlanTool.js';
+import { PlanFileTool, PlanFileToolData } from './planFileTool.js';
+import { CreatePlanFileTool, CreatePlanFileToolData } from './createPlanFileTool.js';
 import { ReadFileTool, ReadFileToolData } from './readFileTool.js';
 import { CreateFileTool, CreateFileToolData } from './createFileTool.js';
 import { DeleteFileTool, DeleteFileToolData } from './deleteFileTool.js';
@@ -50,6 +52,13 @@ export class BuiltinToolsContribution extends Disposable implements IWorkbenchCo
 		// Register the plan management tool (internal agent tool)
 		const managePlanTool = instantiationService.createInstance(ManagePlanTool);
 		this._register(toolsService.registerTool(ManagePlanToolData, managePlanTool));
+
+		// Register the plan file tools (Plan Mode)
+		const createPlanFileTool = instantiationService.createInstance(CreatePlanFileTool);
+		this._register(toolsService.registerTool(CreatePlanFileToolData, createPlanFileTool));
+
+		const planFileTool = instantiationService.createInstance(PlanFileTool);
+		this._register(toolsService.registerTool(PlanFileToolData, planFileTool));
 
 		// Register file operation tools
 		const readFileTool = instantiationService.createInstance(ReadFileTool);

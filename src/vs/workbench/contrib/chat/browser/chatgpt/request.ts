@@ -78,6 +78,9 @@ export async function sendChatGPTRequest(
 	if (options?.modelName) {
 		payload["modelName"] = options.modelName;
 	}
+	if (options?.mode) {
+		payload["mode"] = options.mode;
+	}
 	if (options?.tools !== undefined) {
 		payload["tools"] = options.tools;
 	}

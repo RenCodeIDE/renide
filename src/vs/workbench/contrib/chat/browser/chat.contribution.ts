@@ -1014,6 +1014,8 @@ registerWorkbenchContribution2(ChatSessionsView.ID, ChatSessionsView, WorkbenchP
 registerWorkbenchContribution2(ChatEditingNotebookFileSystemProviderContrib.ID, ChatEditingNotebookFileSystemProviderContrib, WorkbenchPhase.BlockStartup);
 registerWorkbenchContribution2(UserToolSetsContributions.ID, UserToolSetsContributions, WorkbenchPhase.Eventually);
 registerWorkbenchContribution2(PromptLanguageFeaturesProvider.ID, PromptLanguageFeaturesProvider, WorkbenchPhase.Eventually);
+import { PlanFilePreviewHandler } from './planFilePreviewHandler.js';
+registerWorkbenchContribution2(PlanFilePreviewHandler.ID, PlanFilePreviewHandler, WorkbenchPhase.AfterRestored);
 
 registerChatActions();
 registerChatAccessibilityActions();

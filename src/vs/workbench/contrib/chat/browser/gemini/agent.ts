@@ -16,6 +16,8 @@ import {
 	UserSelectedTools,
 	IChatAgentService,
 } from "../../common/chatAgents.js";
+import { ChatMode } from "../../common/chatModes.js";
+import { ChatModeKind } from "../../common/constants.js";
 import { ChatErrorLevel, IChatProgress } from "../../common/chatService.js";
 import {
 	ILanguageModelsService,
@@ -180,7 +182,26 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 			tools: toolConfigs,
 			nameToToolId,
 			summaries,
-		} = this.buildGeminiToolDeclarations(request.requestId);
+		} = this.buildGeminiToolDeclarations(request.requestId, request.chatMode);
+
+		// Inject Plan mode instructions BEFORE tool summaries for better visibility
+		if (request.chatMode === ChatModeKind.Plan) {
+			const instructions = ChatMode.Plan.modeInstructions?.get();
+			if (instructions) {
+				messages.push({
+					role: ChatMessageRole.System,
+					content: [
+						{
+							type: "text",
+							value:
+								instructions.content +
+								"\n\nIMPORTANT: Never write plan content in chat messages. Always use the writePlan tool to create/update the .plan.md file. Reference the file path in chat instead of duplicating content.",
+						},
+					],
+				});
+			}
+		}
+
 		if (summaries.length) {
 			messages.push({
 				role: ChatMessageRole.System,
@@ -265,7 +286,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 					toolConfigs,
 					token,
 					modelToUse,
-					toolResultsForServer
+					toolResultsForServer,
+					request.chatMode
 				);
 				let streamedText = false;
 
@@ -779,13 +801,21 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		this.requestTools.set(requestId, tools);
 	}
 
-	private getAllowedToolData(requestId: string): IToolData[] {
+	private getAllowedToolData(
+		requestId: string,
+		chatMode?: string
+	): IToolData[] {
 		const selected = this.requestTools.get(requestId);
 		if (!selected) {
 			this.logService.debug(
-				`[gemini] no tools selected for request ${requestId}`
+				`[gemini] no tools selected for request ${requestId}, defaulting to all available tools`
 			);
-			return [];
+			const allTools = Array.from(this.languageModelToolsService.getTools());
+			// In Plan mode, filter out create_file even when no tools are explicitly selected
+			if (chatMode === ChatModeKind.Plan) {
+				return allTools.filter((tool) => tool.id !== "create_file");
+			}
+			return allTools;
 		}
 		const allowedIds = Object.keys(selected).filter(
 			(id) => selected[id] === true
@@ -813,12 +843,15 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		return allowedTools;
 	}
 
-	private buildGeminiToolDeclarations(requestId: string): {
+	private buildGeminiToolDeclarations(
+		requestId: string,
+		chatMode?: string
+	): {
 		tools: Array<{ name: string; description?: string; parameters: unknown }>;
 		nameToToolId: Map<string, string>;
 		summaries: string[];
 	} {
-		const allowedTools = this.getAllowedToolData(requestId);
+		const allowedTools = this.getAllowedToolData(requestId, chatMode);
 		if (!allowedTools.length) {
 			return { tools: [], nameToToolId: new Map(), summaries: [] };
 		}
@@ -970,7 +1003,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		tools: Array<{ name: string; description?: string; parameters: unknown }>,
 		token: CancellationToken,
 		model: string,
-		toolResults?: ServerToolResult[]
+		toolResults?: ServerToolResult[],
+		mode?: string
 	): Promise<ChatGPTStreamingResponse> {
 		const toolNames = tools.map((t) => t.name || "<unnamed>");
 		this.logService.info(
@@ -978,7 +1012,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				messages.length
 			}, tools=${toolNames.join(", ") || "none"}, toolResults=${
 				toolResults?.length || 0
-			}`
+			}, mode=${mode || "unknown"}`
 		);
 
 		const accessToken = await this.getAccessToken();
@@ -1016,6 +1050,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				modelName: model,
 				tools: tools,
 				toolResults: hasToolResults ? toolResults : undefined,
+				mode: mode,
 			},
 			this.logService,
 			"gemini"
@@ -1085,6 +1120,9 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				content: [{ type: "text", value: contextPrompt.prompt }],
 			});
 		}
+
+		// Note: Plan mode instructions are injected after buildMessages completes,
+		// right before tool summaries, to ensure they are prominent and not buried
 
 		for (const entry of history) {
 			if (!entry) {

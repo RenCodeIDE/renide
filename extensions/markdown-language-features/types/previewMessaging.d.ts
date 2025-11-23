@@ -38,6 +38,11 @@ export namespace FromWebviewMessage {
 		readonly unloadedStyles: readonly string[];
 	}
 
+	export interface StartExecution extends BaseMessage {
+		readonly type: 'startExecution';
+		readonly source: string;
+	}
+
 	export type Type =
 		| CacheImageSizes
 		| RevealLine
@@ -45,6 +50,7 @@ export namespace FromWebviewMessage {
 		| ClickLink
 		| ShowPreviewSecuritySelector
 		| PreviewStyleLoadError
+		| StartExecution
 		;
 }
 
