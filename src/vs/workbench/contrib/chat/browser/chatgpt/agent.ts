@@ -107,16 +107,29 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 	}
 
 	private resolveModelFromRequest(userSelectedModelId?: string): string {
+		this.logService.info(`[ChatGPTAgent] resolveModelFromRequest: received userSelectedModelId="${userSelectedModelId || 'undefined'}"`);
+
+		const availableModelIdentifiers = CHATGPT_MODELS.map(m => m.identifier);
+		this.logService.debug(`[ChatGPTAgent] resolveModelFromRequest: available model identifiers in CHATGPT_MODELS: [${availableModelIdentifiers.join(', ')}]`);
+
 		if (userSelectedModelId) {
 			const selectedModelConfig = CHATGPT_MODELS.find(
 				(m) => m.identifier === userSelectedModelId
 			);
 			if (selectedModelConfig) {
+				this.logService.info(`[ChatGPTAgent] resolveModelFromRequest: MATCH FOUND! userSelectedModelId="${userSelectedModelId}" -> resolved model ID="${selectedModelConfig.id}"`);
 				return selectedModelConfig.id;
+			} else {
+				this.logService.warn(`[ChatGPTAgent] resolveModelFromRequest: NO MATCH FOUND for userSelectedModelId="${userSelectedModelId}" in CHATGPT_MODELS, falling back to default`);
 			}
+		} else {
+			this.logService.warn(`[ChatGPTAgent] resolveModelFromRequest: userSelectedModelId is undefined, falling back to default`);
 		}
+
 		const defaultModel = CHATGPT_MODELS.find((m) => m.isDefault);
-		return defaultModel?.id || "gpt-5-nano-2025-08-07";
+		const resolvedModelId = defaultModel?.id || "gpt-5-nano-2025-08-07";
+		this.logService.info(`[ChatGPTAgent] resolveModelFromRequest: using DEFAULT model ID="${resolvedModelId}" (isDefault=${!!defaultModel}, identifier="${defaultModel?.identifier || 'N/A'}")`);
+		return resolvedModelId;
 	}
 
 	async invoke(
@@ -148,6 +161,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		const modelToUse = this.resolveModelFromRequest(
 			request.userSelectedModelId
 		);
+		this.logService.info(`[ChatGPTAgent] invoke: resolved modelToUse="${modelToUse}" from userSelectedModelId="${request.userSelectedModelId || 'undefined'}"`);
 
 		if (request.userSelectedTools) {
 			this.logService.debug(
@@ -311,6 +325,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					);
 				}
 
+				this.logService.info(`[ChatGPTAgent] invoke: calling performRequest with modelToUse="${modelToUse}" (modelName will be sent as "${modelToUse}")`);
 				const streamingResponse = await this.performRequest(
 					messages,
 					toolConfigs,
@@ -1233,6 +1248,15 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			}, toolResults=${toolResults?.length || 0})`
 		);
 
+		const requestOptions = {
+			context,
+			modelName: model,
+			tools: serverTools,
+			toolResults: hasToolResults ? toolResults : undefined,
+			mode,
+		};
+		this.logService.info(`[ChatGPTAgent] performRequest: sending request with modelName="${model || 'undefined'}" in options to server`);
+
 		const response = await sendChatGPTRequest(
 			this.requestService,
 			accessToken,
@@ -1240,13 +1264,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			endpoint,
 			ideMessages,
 			token,
-			{
-				context,
-				modelName: model,
-				tools: serverTools,
-				toolResults: hasToolResults ? toolResults : undefined,
-				mode: mode,
-			},
+			requestOptions,
 			this.logService
 		);
 

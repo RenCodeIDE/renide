@@ -797,6 +797,9 @@ export class ChatService extends Disposable implements IChatService {
 							}
 						}));
 
+						const userSelectedModelId = options?.userSelectedModelId;
+						this.trace('sendRequest', `[ChatService] prepareChatAgentRequest: userSelectedModelId="${userSelectedModelId || 'undefined'}" being passed to agent ${agent.id}`);
+
 						return {
 							sessionId,
 							requestId: request.id,
@@ -811,7 +814,7 @@ export class ChatService extends Disposable implements IChatService {
 							locationData: request.locationData,
 							acceptedConfirmationData: options?.acceptedConfirmationData,
 							rejectedConfirmationData: options?.rejectedConfirmationData,
-							userSelectedModelId: options?.userSelectedModelId,
+							userSelectedModelId: userSelectedModelId,
 							userSelectedTools: options?.userSelectedTools?.get(),
 							modeInstructions: options?.modeInfo?.modeInstructions,
 							chatMode: options?.modeInfo?.kind,

@@ -108,12 +108,9 @@ export async function sendChatGPTRequest(
 	}
 
 	logService?.info(`[chatgpt-server] Sending request to ${url}`);
+	logService?.info(`[chatgpt-server] Request payload: model="${payload.model}", modelName="${payload.modelName || 'undefined'}", messages=${messages.length}, tools=${options?.tools?.length || 0}, toolResults=${options?.toolResults?.length || 0}`);
 	logService?.debug(
-		`[chatgpt-server] Request payload: model=${payload.model}, messages=${
-			messages.length
-		}, tools=${options?.tools?.length || 0}, toolResults=${
-			options?.toolResults?.length || 0
-		}`
+		`[chatgpt-server] Full request payload details: ${JSON.stringify({ model: payload.model, modelName: payload.modelName, messagesCount: messages.length, toolsCount: options?.tools?.length || 0, toolResultsCount: options?.toolResults?.length || 0 })}`
 	);
 
 	const stream = new AsyncIterableSource<ChatGPTContentPart[]>();

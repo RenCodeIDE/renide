@@ -2657,8 +2657,11 @@ export class ChatWidget extends Disposable implements IChatWidget {
 				}
 			}
 
+			const currentLanguageModelId = this.input.currentLanguageModel;
+			this.logService.info(`[ChatWidget] _acceptInput: currentLanguageModel="${currentLanguageModelId || 'undefined'}", passing as userSelectedModelId`);
+
 			const result = await this.chatService.sendRequest(this.viewModel.sessionId, requestInputs.input, {
-				userSelectedModelId: this.input.currentLanguageModel,
+				userSelectedModelId: currentLanguageModelId,
 				location: this.location,
 				locationData: this._location.resolveData?.(),
 				parserContext: { selectedAgent: this._lastSelectedAgent, mode: this.input.currentModeKind },

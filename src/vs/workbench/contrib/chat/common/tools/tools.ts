@@ -20,6 +20,7 @@ import { DeleteFileTool, DeleteFileToolData } from './deleteFileTool.js';
 import { SearchFilesTool, SearchFilesToolData } from './searchFilesTool.js';
 import { GetDocsTool, GetDocsToolData } from './getDocsTool.js';
 import { CheckLinterTool, CheckLinterToolData } from './checkLinterTool.js';
+import { SemanticSearchTool, SemanticSearchToolData } from './semanticSearchTool.js';
 
 export class BuiltinToolsContribution extends Disposable implements IWorkbenchContribution {
 
@@ -79,6 +80,10 @@ export class BuiltinToolsContribution extends Disposable implements IWorkbenchCo
 		// Register the linter check tool
 		const checkLinterTool = instantiationService.createInstance(CheckLinterTool);
 		this._register(toolsService.registerTool(CheckLinterToolData, checkLinterTool));
+
+		// Register the semantic codebase search tool
+		const semanticSearchTool = instantiationService.createInstance(SemanticSearchTool);
+		this._register(toolsService.registerTool(SemanticSearchToolData, semanticSearchTool));
 	}
 }
 
