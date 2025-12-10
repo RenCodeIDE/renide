@@ -45,6 +45,7 @@ import { ChatService } from '../common/chatServiceImpl.js';
 import { IChatSessionsService } from '../common/chatSessionsService.js';
 import { ChatSlashCommandService, IChatSlashCommandService } from '../common/chatSlashCommands.js';
 import { ChatTodoListService, IChatTodoListService } from '../common/chatTodoListService.js';
+import { PlanExecutionTracker, IPlanExecutionTracker } from '../common/planExecutionTracker.js';
 import { ChatTransferService, IChatTransferService } from '../common/chatTransferService.js';
 import { IChatVariablesService } from '../common/chatVariables.js';
 import { ChatWidgetHistoryService, IChatWidgetHistoryService } from '../common/chatWidgetHistoryService.js';
@@ -1079,6 +1080,7 @@ registerSingleton(IChatContextPickService, ChatContextPickService, Instantiation
 registerSingleton(IChatModeService, ChatModeService, InstantiationType.Delayed);
 registerSingleton(IChatAttachmentResolveService, ChatAttachmentResolveService, InstantiationType.Delayed);
 registerSingleton(IChatTodoListService, ChatTodoListService, InstantiationType.Delayed);
+registerSingleton(IPlanExecutionTracker, PlanExecutionTracker, InstantiationType.Delayed);
 registerSingleton(IChatOutputRendererService, ChatOutputRendererService, InstantiationType.Delayed);
 registerSingleton(IChatLayoutService, ChatLayoutService, InstantiationType.Delayed);
 

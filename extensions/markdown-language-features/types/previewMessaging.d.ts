@@ -83,11 +83,20 @@ export namespace ToWebviewMessage {
 		readonly imageSource: string;
 	}
 
+	export interface UpdatePlanProgress extends BaseMessage {
+		readonly type: 'updatePlanProgress';
+		readonly progress: number;
+		readonly completedTodos: number;
+		readonly totalTodos: number;
+		readonly status?: 'not-started' | 'starting' | 'in-progress' | 'completed' | 'failed';
+	}
+
 	export type Type =
 		| OnDidChangeTextEditorSelection
 		| UpdateView
 		| UpdateContent
 		| CopyImageContent
 		| OpenImageContent
+		| UpdatePlanProgress
 		;
 }

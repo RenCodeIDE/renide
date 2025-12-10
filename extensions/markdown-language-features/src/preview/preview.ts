@@ -152,7 +152,16 @@ class MarkdownPreview extends Disposable implements WebviewResourceProvider {
 					break;
 
 				case 'startExecution':
-					vscode.commands.executeCommand('workbench.action.chat.startPlanExecution', e.source);
+					this._logger.trace('Plan Execution', `Message received in preview.ts, source: ${e.source}`);
+					Promise.resolve(vscode.commands.executeCommand('workbench.action.chat.startPlanExecution', e.source))
+						.then((result) => {
+							this._logger.trace('Plan Execution', `Command executed successfully, result: ${result}`);
+						})
+						.catch((error: unknown) => {
+							const errorMessage = error instanceof Error ? error.message : String(error);
+							this._logger.trace('Plan Execution', `Command execution failed: ${errorMessage}`);
+							vscode.window.showErrorMessage(`Failed to start plan execution: ${errorMessage}`);
+						});
 					break;
 			}
 		}));

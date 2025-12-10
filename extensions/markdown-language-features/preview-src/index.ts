@@ -22,6 +22,8 @@ let documentVersion = 0;
 let documentResource = settings.settings.source;
 
 const vscode = acquireVsCodeApi();
+// Expose for injected scripts (like plan execution button)
+(window as any).vscodeApi = vscode;
 
 // eslint-disable-next-line local/code-no-any-casts
 const originalState = vscode.getState() ?? {} as any;
@@ -220,6 +222,43 @@ window.addEventListener('message', async event => {
 				onUpdateView(data.line);
 			}
 			return;
+
+		case 'updatePlanProgress': {
+			if (data.source === documentResource) {
+				const progressText = document.getElementById('plan-progress-text');
+				const progressBar = document.getElementById('plan-progress-bar');
+				const todoStats = document.getElementById('plan-todo-stats');
+				
+				if (progressText) {
+					progressText.textContent = `${data.progress}%`;
+				}
+				if (progressBar) {
+					progressBar.style.width = `${data.progress}%`;
+				}
+				if (todoStats) {
+					todoStats.textContent = `${data.completedTodos}/${data.totalTodos} todos`;
+				}
+				
+				// Update execution status if provided
+				if (data.status) {
+					const button = document.getElementById('start-execution-btn');
+					if (button) {
+						const statusLabels: Record<string, string> = {
+							'not-started': '▶ Start Execution',
+							'starting': '⏳ Starting...',
+							'in-progress': '⏸ Pause Execution',
+							'completed': '✓ Completed',
+							'failed': '✗ Failed'
+						};
+						button.textContent = statusLabels[data.status] || '▶ Start Execution';
+						if (data.status === 'completed' || data.status === 'failed') {
+							button.disabled = true;
+						}
+					}
+				}
+			}
+			return;
+		}
 
 		case 'updateContent': {
 			const root = document.querySelector('.markdown-body')!;
