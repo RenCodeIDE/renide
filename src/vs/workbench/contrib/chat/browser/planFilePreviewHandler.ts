@@ -14,11 +14,19 @@ import { ChatMode } from '../common/chatModes.js';
 import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
 import { handleModeSwitch } from './actions/chatActions.js';
 import { URI } from '../../../../base/common/uri.js';
+import { VSBuffer } from '../../../../base/common/buffer.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { IWorkbenchContribution } from '../../../common/contributions.js';
 import { registerAction2, Action2 } from '../../../../platform/actions/common/actions.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { localize } from '../../../../nls.js';
+import { PlanValidator } from '../common/planValidator.js';
+import { parsePlanMetadata } from '../common/tools/planTemplates.js';
+import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
+import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
+import { Action } from '../../../../base/common/actions.js';
+import { IChatTodoListService, IChatTodo } from '../common/chatTodoListService.js';
+import { IPlanExecutionTracker } from '../common/planExecutionTracker.js';
 
 /**
  * Handler for automatically opening .plan.md files in preview mode
@@ -29,6 +37,8 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 	private static _instance: PlanFilePreviewHandler | undefined;
 	private readonly _openedPlanFiles = new Set<string>();
 
+	private readonly planValidator: PlanValidator;
+
 	constructor(
 		@IEditorService private readonly editorService: IEditorService,
 		@ICommandService private readonly commandService: ICommandService,
@@ -38,9 +48,14 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 		@IChatWidgetService private readonly chatWidgetService: IChatWidgetService,
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@IFileService private readonly fileService: IFileService,
+		@INotificationService private readonly notificationService: INotificationService,
+		@IDialogService private readonly dialogService: IDialogService,
+		@IChatTodoListService private readonly todoListService: IChatTodoListService,
+		@IPlanExecutionTracker private readonly executionTracker: IPlanExecutionTracker,
 	) {
 		super();
 		PlanFilePreviewHandler._instance = this;
+		this.planValidator = this.instantiationService.createInstance(PlanValidator);
 
 		// Listen for file opens
 		this._register(this.editorService.onDidActiveEditorChange(() => {
@@ -48,6 +63,13 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 			if (activeEditor?.resource) {
 				this.handleFileOpen(activeEditor.resource);
 			}
+		}));
+
+		// Listen to execution state changes to update preview
+		this._register(this.executionTracker.onDidUpdateExecutionState(({ planUri, state }) => {
+			// Trigger preview refresh by updating the file (if it's open)
+			// The preview will automatically refresh when the file changes
+			this.logService.debug(`[PlanFilePreviewHandler] Execution state updated for ${planUri}: ${state.status}`);
 		}));
 	}
 
@@ -86,12 +108,127 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 		this.logService.info(`[PlanFilePreviewHandler] Start execution requested for: ${planFileUri.fsPath}`);
 
 		try {
-			// Open chat view and get widget
-			let widget = await showChatView(this.viewsService, this.layoutService);
+			// Verify file exists
+			if (!await this.fileService.exists(planFileUri)) {
+				this.notificationService.error(localize('planExecution.fileNotFound', 'Plan file not found: {0}', planFileUri.fsPath));
+				this.logService.error(`[PlanFilePreviewHandler] Plan file does not exist: ${planFileUri.fsPath}`);
+				return;
+			}
+
+			// Read plan file content
+			let planContent = '';
+			try {
+				const fileContent = await this.fileService.readFile(planFileUri);
+				planContent = fileContent.value.toString();
+			} catch (error) {
+				const errorMessage = error instanceof Error ? error.message : String(error);
+				this.notificationService.error(localize('planExecution.readError', 'Failed to read plan file: {0}', errorMessage));
+				this.logService.error(`[PlanFilePreviewHandler] Failed to read plan file: ${error}`);
+				return;
+			}
+
+			// Validate plan before execution
+			const validationResult = await this.planValidator.validatePlan(planContent, planFileUri);
 			
-			// If no widget from view, try last focused widget
+			// Extract todos from plan (enhanced extraction)
+			const todos = this.extractTodosFromPlan(planContent);
+			const planMetadata = parsePlanMetadata(planContent);
+			
+			this.logService.debug(`[PlanFilePreviewHandler] Extracted ${todos.length} todos from plan`);
+
+			// Show execution preview with validation results
+			const previewMessage = this.buildExecutionPreview(planMetadata, validationResult, todos);
+			const severity = validationResult.isValid ? Severity.Info : Severity.Warning;
+			
+			// Get widget first for use in notification action
+			let widget = await showChatView(this.viewsService, this.layoutService);
 			if (!widget) {
 				widget = this.chatWidgetService.lastFocusedWidget;
+			}
+			
+			// Create actions for notification
+			const executeAction = new Action('execute-plan', localize('executePlan', 'Execute Plan'), undefined, true, async () => {
+				await this.executePlanInternal(planFileUri, planContent, planMetadata, validationResult, todos, widget);
+			});
+			
+			const cancelAction = new Action('cancel-execution', localize('cancel', 'Cancel'), undefined, true, () => {
+				this.logService.info('[PlanFilePreviewHandler] Plan execution cancelled by user');
+			});
+			
+			// Show preview notification
+			const handle = this.notificationService.notify({
+				severity,
+				message: previewMessage,
+				actions: {
+					primary: [executeAction],
+					secondary: [cancelAction]
+				},
+				sticky: !validationResult.isValid
+			});
+
+			// Auto-close after 5 seconds if valid, or wait for user action if invalid
+			if (validationResult.isValid) {
+				setTimeout(async () => {
+					handle.close();
+					// Auto-execute if valid
+					await this.executePlanInternal(planFileUri, planContent, planMetadata, validationResult, todos, widget);
+				}, 5000);
+			}
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			this.notificationService.error(localize('planExecution.error', 'Failed to start plan execution: {0}', errorMessage));
+			this.logService.error('[PlanFilePreviewHandler] Failed to start execution', error);
+		}
+	}
+
+	/**
+	 * Build execution preview message
+	 */
+	private buildExecutionPreview(
+		planMetadata: ReturnType<typeof parsePlanMetadata>,
+		validationResult: Awaited<ReturnType<PlanValidator['validatePlan']>>,
+		todos: Array<{ id: string; text: string; completed: boolean; section?: string; lineNumber?: number }>
+	): string {
+		const parts: string[] = [];
+		
+		if (planMetadata?.title) {
+			parts.push(`Plan: ${planMetadata.title}`);
+		}
+		
+		parts.push(`Quality Score: ${validationResult.score}/100`);
+		
+		if (todos.length > 0) {
+			const incompleteTodos = todos.filter(t => !t.completed).length;
+			parts.push(`${incompleteTodos} of ${todos.length} todos remaining`);
+		}
+		
+		if (!validationResult.isValid) {
+			parts.push(`⚠️ ${validationResult.errors.length} error(s) found`);
+		} else if (validationResult.warnings.length > 0) {
+			parts.push(`ℹ️ ${validationResult.warnings.length} warning(s)`);
+		}
+		
+		return parts.join(' • ');
+	}
+
+	/**
+	 * Internal method to execute the plan
+	 */
+	private async executePlanInternal(
+		planFileUri: URI,
+		planContent: string,
+		planMetadata: ReturnType<typeof parsePlanMetadata>,
+		validationResult: Awaited<ReturnType<PlanValidator['validatePlan']>>,
+		todos: Array<{ id: string; text: string; completed: boolean; section?: string; lineNumber?: number }>,
+		widget: any
+	): Promise<void> {
+		try {
+			// Get or create widget
+			if (!widget) {
+				widget = await showChatView(this.viewsService, this.layoutService);
+				if (!widget) {
+					widget = this.chatWidgetService.lastFocusedWidget;
+				}
 			}
 
 			if (!widget) {
@@ -99,7 +236,7 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 				return;
 			}
 
-			// Switch to Agent mode
+			// Switch to Agent mode (preserve conversation if possible)
 			const agentMode = ChatMode.Agent;
 			const currentMode = widget.input.currentModeKind;
 			
@@ -115,38 +252,225 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 				);
 
 				if (!chatModeCheck) {
+					this.notificationService.warn(localize('planExecution.modeSwitchCancelled', 'Mode switch was cancelled'));
 					this.logService.warn('[PlanFilePreviewHandler] Mode switch was cancelled');
 					return;
 				}
 
 				widget.input.setChatMode(agentMode.id);
 
+				// Only clear session if absolutely necessary (e.g., Edit mode conflicts)
+				// For Plan → Agent switch, typically should NOT require clearing
 				if (chatModeCheck.needToClearSession) {
-					await this.commandService.executeCommand('workbench.action.chat.newChat');
+					// Show confirmation before clearing session
+					const confirmed = await this.dialogService.confirm({
+						type: 'info',
+						title: localize('planExecution.clearSessionTitle', 'Start new session?'),
+						message: localize('planExecution.clearSessionPrompt', 'Switching to Agent mode will clear your current session. Continue?'),
+						primaryButton: localize('yes', 'Yes'),
+						cancelButton: localize('no', 'No')
+					});
+					
+					if (confirmed.confirmed) {
+						await this.commandService.executeCommand('workbench.action.chat.newChat');
+					} else {
+						this.logService.info('[PlanFilePreviewHandler] User cancelled session clear');
+						return;
+					}
 				}
 			}
 
-			// Read plan file content
-			let planContent = '';
-			try {
-				const fileContent = await this.fileService.readFile(planFileUri);
-				planContent = fileContent.value.toString();
-			} catch (error) {
-				this.logService.warn(`[PlanFilePreviewHandler] Failed to read plan file: ${error}`);
-			}
-
-			// Prepare message
+			// Get session ID
+			const sessionId = widget.viewModel?.model.sessionId || 'default';
+			
+			// Start execution tracking
+			const incompleteTodos = todos.filter(t => !t.completed);
+			this.executionTracker.startExecution(planFileUri.toString(), sessionId, incompleteTodos.length);
+			
+			// Prepare enhanced message that instructs agent to create todos using ManageTodoListTool
 			const workspaceRelativePath = this.getWorkspaceRelativePath(planFileUri);
-			const message = `Please implement the plan in ${workspaceRelativePath || planFileUri.fsPath}.\n\n${planContent ? `Plan content:\n\n${planContent}` : ''}`;
+			const planTitle = planMetadata?.title || workspaceRelativePath || planFileUri.fsPath;
+			
+			let message = `Please implement the plan: ${planTitle}\n\n`;
+			
+			if (planMetadata?.status) {
+				message += `Plan Status: ${planMetadata.status}\n\n`;
+			}
+			
+			if (validationResult.score < 70) {
+				message += `Note: Plan quality score is ${validationResult.score}/100. ${validationResult.suggestions.slice(0, 2).join(' ')}\n\n`;
+			}
+			
+			message += `Plan file: ${workspaceRelativePath || planFileUri.fsPath}\n\n`;
+			
+			// Instruct agent to create todos using ManageTodoListTool (more explicit format)
+			if (incompleteTodos.length > 0) {
+				message += `=== REQUIRED: Create Todo List First ===\n\n`;
+				message += `Before starting implementation, you MUST call the 'todos' tool to create the todo list.\n\n`;
+				message += `Tool: todos\n`;
+				message += `Operation: write\n`;
+				message += `TodoList format:\n`;
+				message += `[\n`;
+				
+				incompleteTodos.forEach((todo, index) => {
+					message += `  {\n`;
+					message += `    "id": ${index + 1},\n`;
+					message += `    "title": "${todo.text.replace(/"/g, '\\"')}",\n`;
+					message += `    "description": "${(todo.section ? `Section: ${todo.section}` : 'From plan file').replace(/"/g, '\\"')}",\n`;
+					message += `    "status": "not-started"\n`;
+					message += `  }${index < incompleteTodos.length - 1 ? ',' : ''}\n`;
+				});
+				
+				message += `]\n\n`;
+				message += `After creating the todos using the tool, work through each one systematically:\n`;
+				message += `1. Mark a todo as "in-progress" when you start working on it\n`;
+				message += `2. Mark it as "completed" when finished\n`;
+				message += `3. Reference the plan file for exact implementation details\n\n`;
+			}
+			
+			message += `Plan content:\n\n${planContent}`;
+			
+			// Listen to todo updates to sync with execution tracker and plan file
+			this._register(this.todoListService.onDidUpdateTodos((updatedSessionId) => {
+				if (updatedSessionId === sessionId) {
+					const currentTodos = this.todoListService.getTodos(updatedSessionId);
+					const completedCount = currentTodos.filter(t => t.status === 'completed').length;
+					this.executionTracker.updateProgress(planFileUri.toString(), completedCount);
+					
+					// Sync plan file with todo completion
+					this.syncPlanFileWithTodos(planFileUri, planContent, todos, currentTodos).catch(error => {
+						this.logService.warn(`[PlanFilePreviewHandler] Failed to sync plan file: ${error}`);
+					});
+				}
+			}));
 
 			// Set input and send
+			this.logService.info(`[PlanFilePreviewHandler] Setting input message (length: ${message.length} chars)`);
 			widget.setInput(message);
 			await widget.waitForReady();
+			this.logService.info(`[PlanFilePreviewHandler] Widget ready, accepting input`);
 			await widget.acceptInput();
+			this.logService.info(`[PlanFilePreviewHandler] Input accepted, message sent to agent`);
 
-			this.logService.info('[PlanFilePreviewHandler] Start execution message sent');
+			// Mark execution as in-progress
+			this.executionTracker.setExecutionState(planFileUri.toString(), {
+				status: 'in-progress'
+			});
+
+			// Fallback: If agent doesn't create todos within 3 seconds, create them directly
+			if (incompleteTodos.length > 0) {
+				setTimeout(async () => {
+					const currentTodos = this.todoListService.getTodos(sessionId);
+					if (currentTodos.length === 0) {
+						this.logService.warn(`[PlanFilePreviewHandler] Agent did not create todos, creating them directly as fallback`);
+						const chatTodos: IChatTodo[] = incompleteTodos.map((todo, index) => ({
+							id: index + 1,
+							title: todo.text,
+							description: todo.section ? `Section: ${todo.section}` : undefined,
+							status: 'not-started' as const
+						}));
+						this.todoListService.setTodos(sessionId, chatTodos);
+						this.logService.info(`[PlanFilePreviewHandler] Created ${chatTodos.length} todos directly as fallback`);
+					}
+				}, 3000);
+			}
+
+			this.logService.info(`[PlanFilePreviewHandler] Plan execution started. Validation: ${validationResult.isValid ? 'passed' : 'failed'} (score: ${validationResult.score}/100), Todos: ${incompleteTodos.length}`);
 		} catch (error) {
-			this.logService.error('[PlanFilePreviewHandler] Failed to start execution', error);
+			this.logService.error('[PlanFilePreviewHandler] Failed to execute plan', error);
+		}
+	}
+
+	/**
+	 * Extract todos from plan content with enhanced regex patterns
+	 */
+	private extractTodosFromPlan(planContent: string): Array<{ id: string; text: string; completed: boolean; section?: string; lineNumber?: number }> {
+		const todos: Array<{ id: string; text: string; completed: boolean; section?: string; lineNumber?: number }> = [];
+		
+		// Enhanced regex patterns to match various markdown todo formats
+		const todoPatterns = [
+			/^\s*[-*]\s*\[([\sx])\]\s*(.+)$/gim,  // Standard: - [ ] or - [x]
+			/^\s*\d+\.\s*\[([\sx])\]\s*(.+)$/gim, // Numbered: 1. [ ] or 1. [x]
+		];
+		
+		const lines = planContent.split('\n');
+		let currentSection: string | undefined;
+		
+		for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+			const line = lines[lineIndex];
+			
+			// Track current section
+			const sectionMatch = line.match(/^##\s+(.+)$/);
+			if (sectionMatch) {
+				currentSection = sectionMatch[1].trim();
+			}
+			
+			// Try each pattern
+			for (const pattern of todoPatterns) {
+				pattern.lastIndex = 0; // Reset regex
+				const match = pattern.exec(line);
+				if (match) {
+					const todoId = `todo-${lineIndex}-${todos.length}`;
+					todos.push({
+						id: todoId,
+						text: match[2].trim(),
+						completed: match[1].toLowerCase() === 'x',
+						section: currentSection,
+						lineNumber: lineIndex + 1
+					});
+					break; // Found a match, move to next line
+				}
+			}
+		}
+		
+		return todos;
+	}
+
+	/**
+	 * Sync plan file markdown with todo completion status
+	 */
+	private async syncPlanFileWithTodos(
+		planFileUri: URI,
+		originalContent: string,
+		planTodos: Array<{ id: string; text: string; completed: boolean; lineNumber?: number }>,
+		chatTodos: IChatTodo[]
+	): Promise<void> {
+		try {
+			// Create a map of chat todos by title for matching
+			const chatTodoMap = new Map<string, IChatTodo>();
+			for (const todo of chatTodos) {
+				chatTodoMap.set(todo.title, todo);
+			}
+
+			// Update plan content with completed todos
+			let updatedContent = originalContent;
+			const lines = updatedContent.split('\n');
+
+			for (const planTodo of planTodos) {
+				const chatTodo = chatTodoMap.get(planTodo.text);
+				if (chatTodo && chatTodo.status === 'completed' && !planTodo.completed) {
+					// Find the line and mark it as completed
+					if (planTodo.lineNumber && planTodo.lineNumber <= lines.length) {
+						const lineIndex = planTodo.lineNumber - 1;
+						const line = lines[lineIndex];
+						// Replace [ ] with [x] (case-insensitive)
+						const updatedLine = line.replace(/\[\s\]/gi, '[x]');
+						if (updatedLine !== line) {
+							lines[lineIndex] = updatedLine;
+						}
+					}
+				}
+			}
+
+			const newContent = lines.join('\n');
+			if (newContent !== originalContent) {
+				// Write updated content back to file
+				const buffer = VSBuffer.fromString(newContent);
+				await this.fileService.writeFile(planFileUri, buffer);
+				this.logService.debug(`[PlanFilePreviewHandler] Updated plan file with completed todos`);
+			}
+		} catch (error) {
+			this.logService.warn(`[PlanFilePreviewHandler] Error syncing plan file: ${error}`);
 		}
 	}
 
@@ -182,16 +506,34 @@ class StartPlanExecutionAction extends Action2 {
 	}
 
 	async run(accessor: ServicesAccessor, uri?: string): Promise<void> {
+		const logService = accessor.get(ILogService);
+		const notificationService = accessor.get(INotificationService);
+		
+		logService.info(`[StartPlanExecutionAction] Command called with URI: ${uri}`);
+		
 		if (!uri) {
+			logService.error('[StartPlanExecutionAction] No URI provided');
+			notificationService.error(localize('planExecution.noUri', 'Plan execution failed: No plan file URI provided'));
 			return;
 		}
 
 		const handler = PlanFilePreviewHandler.getInstance();
 		if (!handler) {
+			logService.error('[StartPlanExecutionAction] PlanFilePreviewHandler instance not found');
+			notificationService.error(localize('planExecution.noHandler', 'Plan execution failed: Handler not available. Please try again.'));
 			return;
 		}
 
-		await handler.handleStartExecution(URI.parse(uri));
+		try {
+			logService.info(`[StartPlanExecutionAction] Parsing URI: ${uri}`);
+			const planUri = URI.parse(uri);
+			logService.info(`[StartPlanExecutionAction] Parsed URI successfully: ${planUri.toString()}`);
+			await handler.handleStartExecution(planUri);
+		} catch (error) {
+			const errorMessage = error instanceof Error ? error.message : String(error);
+			logService.error('[StartPlanExecutionAction] Failed to parse URI or execute plan', error);
+			notificationService.error(localize('planExecution.parseError', 'Failed to parse plan URI: {0}', errorMessage));
+		}
 	}
 }
 

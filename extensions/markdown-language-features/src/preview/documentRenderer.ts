@@ -121,39 +121,219 @@ export class MdDocumentRenderer {
 	): Promise<MarkdownContentProviderOutput> {
 		const rendered = await this._engine.render(markdownDocument, resourceProvider);
 		
-		// Inject "Start Execution" button for .plan.md files
+		// Inject enhanced plan preview for .plan.md files
 		let planFileHeader = '';
+		let planProgressScript = '';
 		if (markdownDocument.uri.fsPath.endsWith('.plan.md')) {
 			const sourceUri = markdownDocument.uri.toString();
 			const scriptNonce = nonce || getNonce();
+			const planContent = markdownDocument.getText();
+			const planStats = this.parsePlanStats(planContent);
+			
+			// Extract todos for display
+			const todos = this.extractTodosForDisplay(planContent);
+			const incompleteTodos = todos.filter(t => !t.completed);
+			
 			planFileHeader = `
 				<div class="plan-execution-header" style="position: sticky; top: 0; z-index: 1000; background: var(--vscode-editor-background); padding: 12px; border-bottom: 1px solid var(--vscode-panel-border); margin-bottom: 16px;">
-					<button id="start-execution-btn" style="background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500;">
-						▶ Start Execution
-					</button>
-					<script nonce="${scriptNonce}">
-						(function() {
-							const button = document.getElementById('start-execution-btn');
-							if (button) {
-								button.addEventListener('click', () => {
-									const vscode = acquireVsCodeApi();
-									vscode.postMessage({
+					<div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 12px;">
+						<button id="start-execution-btn" style="background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500;">
+							▶ Start Execution
+						</button>
+						<div id="execution-status-badge" style="padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); display: none;">
+							<span id="execution-status-text">Not Started</span>
+						</div>
+						<div style="flex: 1; min-width: 200px;">
+							<div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+								<span style="font-size: 12px; color: var(--vscode-descriptionForeground);">Progress:</span>
+								<span id="plan-progress-text" style="font-size: 12px; font-weight: 500;">${planStats.progress}%</span>
+							</div>
+							<div style="width: 100%; height: 6px; background: var(--vscode-progressBar-background); border-radius: 3px; overflow: hidden;">
+								<div id="plan-progress-bar" style="height: 100%; width: ${planStats.progress}%; background: var(--vscode-progressBar-foreground); transition: width 0.3s ease;"></div>
+							</div>
+						</div>
+						<div style="font-size: 12px; color: var(--vscode-descriptionForeground);">
+							<span id="plan-todo-stats">${planStats.completedTodos}/${planStats.totalTodos} todos</span>
+						</div>
+					</div>
+					${incompleteTodos.length > 0 ? `
+					<div style="border-top: 1px solid var(--vscode-panel-border); padding-top: 12px; margin-top: 8px;">
+						<div style="font-size: 12px; font-weight: 600; margin-bottom: 8px; color: var(--vscode-foreground);">Todos (${incompleteTodos.length} remaining):</div>
+						<div style="max-height: 150px; overflow-y: auto; font-size: 12px;">
+							${incompleteTodos.map(todo => `
+								<div style="padding: 4px 0; display: flex; align-items: start; gap: 8px;">
+									<span style="color: var(--vscode-descriptionForeground);">☐</span>
+									<span style="flex: 1; color: var(--vscode-foreground);">${this.escapeHtml(todo.text)}</span>
+								</div>
+							`).join('')}
+						</div>
+					</div>
+					` : ''}
+				</div>
+			`;
+			
+			planProgressScript = `
+				<script nonce="${scriptNonce}">
+					(function() {
+						const button = document.getElementById('start-execution-btn');
+						if (button) {
+							button.addEventListener('click', () => {
+								console.log('[Plan Execution] Button clicked for:', '${sourceUri}');
+								// Use existing API if available (exposed from preview-src/index.ts)
+								const vscode = (window as any).vscodeApi;
+								if (!vscode) {
+									console.error('[Plan Execution] VS Code API not available');
+									alert('VS Code API not available. Please refresh the preview.');
+									return;
+								}
+								
+								try {
+									const message = {
 										type: 'startExecution',
 										source: '${sourceUri}'
-									});
-								});
+									};
+									console.log('[Plan Execution] Sending message:', message);
+									vscode.postMessage(message);
+									console.log('[Plan Execution] Message sent successfully');
+								} catch (error) {
+									console.error('[Plan Execution] Failed to send message:', error);
+									alert('Failed to send execution request: ' + (error instanceof Error ? error.message : String(error)));
+								}
+							});
+						}
+						
+						// Enhance todos with interactive checkboxes
+						const todoRegex = /<li[^>]*>\\s*<input[^>]*type=["']checkbox["'][^>]*>/gi;
+						const listItems = document.querySelectorAll('li');
+						listItems.forEach(li => {
+							const text = li.textContent || '';
+							if (/^\\s*\\[\\s*\\]/.test(text) || /^\\s*\\[x\\]/i.test(text)) {
+								li.classList.add('plan-todo-item');
+								const isChecked = /^\\s*\\[x\\]/i.test(text);
+								if (isChecked) {
+									li.style.opacity = '0.6';
+									li.style.textDecoration = 'line-through';
+								}
 							}
-						})();
-					</script>
-				</div>
+						});
+						
+						// Add section progress indicators
+						const sections = document.querySelectorAll('h2');
+						sections.forEach(section => {
+							const sectionId = section.id || section.textContent?.toLowerCase().replace(/\\s+/g, '-') || '';
+							const sectionContent = section.nextElementSibling;
+							if (sectionContent) {
+								const todos = sectionContent.querySelectorAll('.plan-todo-item');
+								if (todos.length > 0) {
+									const completed = Array.from(todos).filter(t => t.style.textDecoration === 'line-through').length;
+									const total = todos.length;
+									const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
+									
+									const progressBadge = document.createElement('span');
+									progressBadge.style.cssText = 'margin-left: 8px; font-size: 11px; color: var(--vscode-descriptionForeground);';
+									progressBadge.textContent = \`[\${completed}/\${total}]\`;
+									section.appendChild(progressBadge);
+								}
+							}
+						});
+						
+						// Listen for progress updates
+						window.addEventListener('message', (event) => {
+							const data = event.data;
+							if (data && data.type === 'updatePlanProgress' && data.source === '${sourceUri}') {
+								const progressText = document.getElementById('plan-progress-text');
+								const progressBar = document.getElementById('plan-progress-bar');
+								const todoStats = document.getElementById('plan-todo-stats');
+								const statusBadge = document.getElementById('execution-status-badge');
+								const statusText = document.getElementById('execution-status-text');
+								const button = document.getElementById('start-execution-btn');
+								
+								if (progressText) progressText.textContent = data.progress + '%';
+								if (progressBar) progressBar.style.width = data.progress + '%';
+								if (todoStats) todoStats.textContent = data.completedTodos + '/' + data.totalTodos + ' todos';
+								
+								if (data.status && statusBadge && statusText) {
+									const statusLabels = {
+										'not-started': 'Not Started',
+										'starting': 'Starting...',
+										'in-progress': 'Executing',
+										'completed': 'Completed',
+										'failed': 'Failed'
+									};
+									statusText.textContent = statusLabels[data.status] || 'Unknown';
+									statusBadge.style.display = 'block';
+									
+									if (button) {
+										const buttonLabels = {
+											'not-started': '▶ Start Execution',
+											'starting': '⏳ Starting...',
+											'in-progress': '⏸ Pause Execution',
+											'completed': '✓ Completed',
+											'failed': '✗ Failed'
+										};
+										button.textContent = buttonLabels[data.status] || '▶ Start Execution';
+										if (data.status === 'completed' || data.status === 'failed') {
+											button.disabled = true;
+										}
+									}
+								}
+							}
+						});
+					})();
+				</script>
 			`;
 		}
 		
-		const html = `${planFileHeader}<div class="markdown-body" dir="auto">${rendered.html}<div class="code-line" data-line="${markdownDocument.lineCount}"></div></div>`;
+		const html = `${planFileHeader}<div class="markdown-body" dir="auto">${rendered.html}<div class="code-line" data-line="${markdownDocument.lineCount}"></div></div>${planProgressScript}`;
 		return {
 			html,
 			containingImages: rendered.containingImages
 		};
+	}
+	
+	/**
+	 * Parse plan statistics from markdown content
+	 */
+	private parsePlanStats(content: string): { totalTodos: number; completedTodos: number; progress: number } {
+		const todos = this.extractTodosForDisplay(content);
+		const totalTodos = todos.length;
+		const completedTodos = todos.filter(t => t.completed).length;
+		const progress = totalTodos > 0 ? Math.round((completedTodos / totalTodos) * 100) : 0;
+		
+		return { totalTodos, completedTodos, progress };
+	}
+
+	/**
+	 * Extract todos from plan content for display
+	 */
+	private extractTodosForDisplay(content: string): Array<{ text: string; completed: boolean }> {
+		const todos: Array<{ text: string; completed: boolean }> = [];
+		const todoPatterns = [
+			/^\s*[-*]\s*\[([\sx])\]\s*(.+)$/gim,  // Standard: - [ ] or - [x]
+			/^\s*\d+\.\s*\[([\sx])\]\s*(.+)$/gim, // Numbered: 1. [ ] or 1. [x]
+		];
+		
+		for (const pattern of todoPatterns) {
+			pattern.lastIndex = 0;
+			let match;
+			while ((match = pattern.exec(content)) !== null) {
+				todos.push({
+					text: match[2].trim(),
+					completed: match[1].toLowerCase() === 'x'
+				});
+			}
+		}
+		
+		return todos;
+	}
+
+	/**
+	 * Escape HTML to prevent XSS
+	 */
+	private escapeHtml(text: string): string {
+		const div = document.createElement('div');
+		div.textContent = text;
+		return div.innerHTML;
 	}
 
 	public renderFileNotFoundDocument(resource: vscode.Uri): string {
