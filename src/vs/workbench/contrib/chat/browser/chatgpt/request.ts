@@ -12,9 +12,7 @@ import {
 import { IDisposable } from "../../../../../base/common/lifecycle.js";
 import { localize } from "../../../../../nls.js";
 import { ILogService } from "../../../../../platform/log/common/log.js";
-import {
-	IRequestService,
-} from "../../../../../platform/request/common/request.js";
+import { IRequestService } from "../../../../../platform/request/common/request.js";
 import { SSEParser } from "../../../../../base/common/sseParser.js";
 import { IChatMessage } from "../../common/languageModels.js";
 import { validateIDEFormatStatic } from "./validation.js";
@@ -30,7 +28,7 @@ export async function sendChatGPTRequest(
 	requestService: IRequestService,
 	accessToken: string | undefined,
 	serverAddress: string,
-	endpoint: "/api/agent/tools",
+	endpoint: "/api/agent/tools" | "/api/agent/ask",
 	messages: IChatMessage[],
 	token: CancellationToken,
 	options?: ServerRequestOptions,
@@ -108,9 +106,21 @@ export async function sendChatGPTRequest(
 	}
 
 	logService?.info(`[chatgpt-server] Sending request to ${url}`);
-	logService?.info(`[chatgpt-server] Request payload: model="${payload.model}", modelName="${payload.modelName || 'undefined'}", messages=${messages.length}, tools=${options?.tools?.length || 0}, toolResults=${options?.toolResults?.length || 0}`);
+	logService?.info(
+		`[chatgpt-server] Request payload: model="${payload.model}", modelName="${
+			payload.modelName || "undefined"
+		}", messages=${messages.length}, tools=${
+			options?.tools?.length || 0
+		}, toolResults=${options?.toolResults?.length || 0}`
+	);
 	logService?.debug(
-		`[chatgpt-server] Full request payload details: ${JSON.stringify({ model: payload.model, modelName: payload.modelName, messagesCount: messages.length, toolsCount: options?.tools?.length || 0, toolResultsCount: options?.toolResults?.length || 0 })}`
+		`[chatgpt-server] Full request payload details: ${JSON.stringify({
+			model: payload.model,
+			modelName: payload.modelName,
+			messagesCount: messages.length,
+			toolsCount: options?.tools?.length || 0,
+			toolResultsCount: options?.toolResults?.length || 0,
+		})}`
 	);
 
 	const stream = new AsyncIterableSource<ChatGPTContentPart[]>();
@@ -355,7 +365,9 @@ export async function sendChatGPTRequest(
 						errorMessage += ` - ${errorText}`;
 					}
 				}
-				logService?.error(`[chatgpt-server] Request failed with status ${response.status}`);
+				logService?.error(
+					`[chatgpt-server] Request failed with status ${response.status}`
+				);
 				logService?.error(`[chatgpt-server] Error details: ${errorMessage}`);
 				throw new Error(errorMessage);
 			}
@@ -395,10 +407,11 @@ export async function sendChatGPTRequest(
 						finalizeError(new CancellationError());
 					}
 				} else {
-					const err = readError instanceof Error ? readError : new Error(String(readError));
-					logService?.error(
-						`[Stream] Error reading stream: ${err.message}`
-					);
+					const err =
+						readError instanceof Error
+							? readError
+							: new Error(String(readError));
+					logService?.error(`[Stream] Error reading stream: ${err.message}`);
 					finalizeError(err);
 				}
 			} finally {
@@ -411,7 +424,10 @@ export async function sendChatGPTRequest(
 					finalizeError(new CancellationError());
 				}
 			} else {
-				const err = fetchError instanceof Error ? fetchError : new Error(String(fetchError));
+				const err =
+					fetchError instanceof Error
+						? fetchError
+						: new Error(String(fetchError));
 				logService?.error(`[chatgpt-server] Fetch error: ${err.message}`);
 				finalizeError(err);
 			}

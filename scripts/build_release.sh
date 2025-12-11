@@ -19,18 +19,54 @@ npm install
 echo "🔧 Rebuilding native dependencies for Electron..."
 npx electron-builder install-app-deps
 
-echo "🔨 Compiling source code..."
+echo "🔨 Compiling source code for production (to out-build/)..."
 # We use max-old-space-size to prevent memory crashes during the heavy compilation
 export NODE_OPTIONS="--max-old-space-size=8192"
-npm run compile
+npx gulp compile-build-without-mangling
 
 # Verify compilation success
-if [ ! -f "out/main.js" ]; then
-    echo "❌ Error: Compilation failed. out/main.js not found!"
+if [ ! -f "out-build/main.js" ]; then
+    echo "❌ Error: Compilation failed. out-build/main.js not found!"
+    exit 1
+fi
+echo "✅ Compilation to out-build/ completed"
+
+# Create nls.messages.json if missing (required for VS Code to load)
+if [ ! -f "out-build/nls.messages.json" ]; then
+    echo "📝 Creating missing nls.messages.json..."
+    echo '[]' > out-build/nls.messages.json
+fi
+
+# CRITICAL: Bundle JavaScript files using esbuild (via gulp)
+# This creates bundled JS files that work inside ASAR archives
+echo "📦 Bundling JavaScript (required for production builds)..."
+npx gulp bundle-vscode
+
+# Verify bundling succeeded
+if [ ! -d "out-vscode" ]; then
+    echo "❌ Error: Bundling failed. out-vscode directory not found!"
     exit 1
 fi
 
-echo "🍎 Packaging for macOS..."
+# Verify the bundled workbench file exists and is large enough
+if [ -f "out-vscode/vs/workbench/workbench.desktop.main.js" ]; then
+    BUNDLE_SIZE=$(stat -f%z "out-vscode/vs/workbench/workbench.desktop.main.js" 2>/dev/null || stat -c%s "out-vscode/vs/workbench/workbench.desktop.main.js")
+    echo "✅ Bundled workbench.desktop.main.js size: $BUNDLE_SIZE bytes"
+    if [ "$BUNDLE_SIZE" -lt 100000 ]; then
+        echo "⚠️  Warning: Bundle seems too small, might not be properly bundled"
+    fi
+else
+    echo "❌ Error: Bundled workbench.desktop.main.js not found!"
+    exit 1
+fi
+
+# Create 'out' directory from bundled output for electron-builder
+echo "📋 Creating out/ from bundled output..."
+rm -rf out
+cp -r out-vscode out
+echo "✅ Bundled output copied to out/"
+
+echo "🍎 Packaging for macOS with electron-builder..."
 npm run dist:mac
 
 echo "✅ Done! Your app is in the 'release' folder."

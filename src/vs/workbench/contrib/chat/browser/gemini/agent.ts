@@ -801,6 +801,44 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		this.requestTools.set(requestId, tools);
 	}
 
+	/**
+	 * List of tool IDs that are blocked in Ask mode.
+	 * These are tools that modify files or system state.
+	 */
+	private static readonly ASK_MODE_BLOCKED_TOOLS = [
+		"vscode_editFile",
+		"edit_file",
+		"vscode_createFile",
+		"create_file",
+		"vscode_deleteFile",
+		"delete_file",
+		"vscode_runTerminal",
+		"run_terminal",
+		"vscode_applyDiff",
+		"apply_diff",
+		"vscode_writeFile",
+		"write_file",
+		"vscode_writePlan",
+		"writePlan",
+		"vscode_createPlanFile",
+		"createPlanFile",
+	];
+
+	/**
+	 * Filters tools to only include those allowed in Ask mode.
+	 * Blocks edit/write tools that could modify the codebase.
+	 */
+	private filterAskModeTools(tools: IToolData[]): IToolData[] {
+		return tools.filter((tool) => {
+			const isBlocked =
+				GeminiAgentImplementation.ASK_MODE_BLOCKED_TOOLS.includes(tool.id);
+			if (isBlocked) {
+				this.logService.debug(`[gemini] Ask mode: blocking tool ${tool.id}`);
+			}
+			return !isBlocked;
+		});
+	}
+
 	private getAllowedToolData(
 		requestId: string,
 		chatMode?: string
@@ -815,6 +853,10 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			if (chatMode === ChatModeKind.Plan) {
 				return allTools.filter((tool) => tool.id !== "create_file");
 			}
+			// In Ask mode, filter out all edit/write tools
+			if (chatMode === ChatModeKind.Ask) {
+				return this.filterAskModeTools(allTools);
+			}
 			return allTools;
 		}
 		const allowedIds = Object.keys(selected).filter(
@@ -828,6 +870,9 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			const allTools = Array.from(this.languageModelToolsService.getTools());
 			if (chatMode === ChatModeKind.Plan) {
 				return allTools.filter((tool) => tool.id !== "create_file");
+			}
+			if (chatMode === ChatModeKind.Ask) {
+				return this.filterAskModeTools(allTools);
 			}
 			return allTools;
 		}
@@ -851,7 +896,19 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			if (chatMode === ChatModeKind.Plan) {
 				return allTools.filter((tool) => tool.id !== "create_file");
 			}
+			if (chatMode === ChatModeKind.Ask) {
+				return this.filterAskModeTools(allTools);
+			}
 			return allTools;
+		}
+
+		// Apply Ask mode filtering even for user-selected tools
+		if (chatMode === ChatModeKind.Ask) {
+			const filteredTools = this.filterAskModeTools(allowedTools);
+			this.logService.debug(
+				`[gemini] Ask mode: filtered ${allowedTools.length} user-selected tools to ${filteredTools.length} allowed tools`
+			);
+			return filteredTools;
 		}
 
 		this.logService.debug(
@@ -1056,7 +1113,9 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			`[gemini-server] Message format validation passed: ${messages.length} messages in IDE format`
 		);
 
-		const endpoint: "/api/agent/tools" = "/api/agent/tools";
+		// Use /api/agent/ask endpoint for Ask mode, /api/agent/tools for other modes
+		const endpoint: "/api/agent/tools" | "/api/agent/ask" =
+			mode === ChatModeKind.Ask ? "/api/agent/ask" : "/api/agent/tools";
 		const hasToolResults = toolResults && toolResults.length > 0;
 
 		this.logService.info(

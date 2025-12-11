@@ -23,13 +23,18 @@ import { ILogService } from "../../../../../platform/log/common/log.js";
 import { env } from "../../../../../base/common/process.js";
 import { CancellationToken } from "../../../../../base/common/cancellation.js";
 import { streamToBuffer } from "../../../../../base/common/buffer.js";
-import { ITextModelService, IResolvedTextEditorModel } from "../../../../../editor/common/services/resolverService.js";
+import {
+	ITextModelService,
+	IResolvedTextEditorModel,
+} from "../../../../../editor/common/services/resolverService.js";
 import { ILanguageFeaturesService } from "../../../../../editor/common/services/languageFeatures.js";
 import { SymbolKind } from "../../../../../editor/common/languages.js";
 import { IRange } from "../../../../../editor/common/core/range.js";
 import { IReference } from "../../../../../base/common/lifecycle.js";
 import { ITextModel } from "../../../../../editor/common/model.js";
 import { basename, extname } from "../../../../../base/common/resources.js";
+import { IWorkspaceContextService } from "../../../../../platform/workspace/common/workspace.js";
+import { computeWorkspaceHashSync } from "./workspaceHash.js";
 
 const STORAGE_KEY = "ren.docs.latest";
 const STORAGE_KEY_PREFIX_FILE = "ren.docs.file.";
@@ -65,6 +70,7 @@ export class DocsService extends Disposable implements IDocsService {
 	private latest: string | undefined;
 	private fileDocsCache: Map<string, FileDocs> = new Map();
 	private directoryDocsCache: Map<string, DirectoryDocs> = new Map();
+	private cachedProjectHash: string | undefined;
 
 	constructor(
 		@IStorageService private readonly storageService: IStorageService,
@@ -76,7 +82,9 @@ export class DocsService extends Disposable implements IDocsService {
 		@ILogService private readonly logService: ILogService,
 		@ITextModelService private readonly textModelService: ITextModelService,
 		@ILanguageFeaturesService
-		private readonly languageFeaturesService: ILanguageFeaturesService
+		private readonly languageFeaturesService: ILanguageFeaturesService,
+		@IWorkspaceContextService
+		private readonly workspaceContextService: IWorkspaceContextService
 	) {
 		super();
 		this.latest = this.storageService.get(
@@ -84,6 +92,64 @@ export class DocsService extends Disposable implements IDocsService {
 			StorageScope.WORKSPACE,
 			undefined
 		);
+	}
+
+	/**
+	 * Get or compute the project hash for the current workspace.
+	 * Uses the first workspace folder's URI to generate a consistent hash.
+	 */
+	private getProjectHash(): string | undefined {
+		if (this.cachedProjectHash) {
+			return this.cachedProjectHash;
+		}
+
+		const folders = this.workspaceContextService.getWorkspace().folders;
+		if (folders.length === 0) {
+			return undefined;
+		}
+
+		// Use the first workspace folder as the project identifier
+		const workspaceRoot = folders[0].uri;
+		this.cachedProjectHash = computeWorkspaceHashSync(workspaceRoot);
+		this.logService.debug(
+			`[DocsService] Computed project hash: ${this.cachedProjectHash} for workspace: ${workspaceRoot.fsPath}`
+		);
+
+		return this.cachedProjectHash;
+	}
+
+	/**
+	 * Compute a hash of the file content using djb2 algorithm.
+	 * This is used to compare against stored merkleHash to skip redundant doc generation.
+	 */
+	private computeContentHash(content: string): string {
+		// djb2 hash algorithm - same as used elsewhere for consistency
+		let hash = 5381;
+		for (let i = 0; i < content.length; i++) {
+			hash = (hash << 5) + hash + content.charCodeAt(i);
+			hash = hash & hash; // Convert to 32-bit integer
+		}
+
+		// Convert to positive hex string and pad to 16 chars
+		const positiveHash = hash >>> 0;
+		return positiveHash.toString(16).padStart(16, "0");
+	}
+
+	/**
+	 * Generate a chunk ID from a file URI.
+	 * Uses the file path relative to workspace or absolute path as a stable identifier.
+	 */
+	private getChunkIdFromUri(uri: URI): string {
+		const folders = this.workspaceContextService.getWorkspace().folders;
+		if (folders.length > 0) {
+			const workspaceRoot = folders[0].uri.fsPath;
+			if (uri.fsPath.startsWith(workspaceRoot)) {
+				// Use relative path for consistency
+				return uri.fsPath.substring(workspaceRoot.length).replace(/^[/\\]/, "");
+			}
+		}
+		// Fall back to absolute path
+		return uri.fsPath;
 	}
 
 	private async getFileContent(uri: URI): Promise<string> {
@@ -158,6 +224,15 @@ export class DocsService extends Disposable implements IDocsService {
 			// Collect symbol/state summary to help documentation quality
 			const symbolSummary = await this.collectSymbolSummary(uri);
 
+			// Compute hash-checking metadata to avoid redundant doc generation
+			const projectHash = this.getProjectHash();
+			const merkleHash = this.computeContentHash(fileContent);
+			const chunkId = this.getChunkIdFromUri(uri);
+
+			this.logService.debug(
+				`[DocsService] File doc metadata: chunkId=${chunkId}, projectHash=${projectHash}, merkleHash=${merkleHash}`
+			);
+
 			const payload = {
 				chunks: [
 					{
@@ -166,6 +241,11 @@ export class DocsService extends Disposable implements IDocsService {
 							filePath: uri.fsPath,
 							language: language,
 							symbolSummary: symbolSummary,
+							// Include hash-checking metadata for server-side deduplication
+							merkleHash: merkleHash,
+							chunkId: chunkId,
+							projectHash: projectHash,
+							// userName is extracted from auth token on server side
 						},
 					},
 				],
@@ -219,10 +299,27 @@ export class DocsService extends Disposable implements IDocsService {
 					completion_tokens: number;
 					total_tokens: number;
 				};
+				skipped?: boolean;
+				message?: string;
 			}>(response);
 
 			if (!result) {
 				this.logService.warn(`[DocsService] API returned empty response`);
+				return this.generatePlaceholderContent(uri);
+			}
+
+			// Check if generation was skipped due to unchanged hash
+			if (result.skipped) {
+				this.logService.info(
+					`[DocsService] Doc generation skipped for ${uri.fsPath}: ${
+						result.message || "hash unchanged"
+					}`
+				);
+				// Return cached content if available, otherwise use placeholder
+				const cached = this.getFileDocs(uri);
+				if (cached?.content) {
+					return cached.content;
+				}
 				return this.generatePlaceholderContent(uri);
 			}
 
@@ -289,18 +386,14 @@ export class DocsService extends Disposable implements IDocsService {
 				}
 
 				if (this.isFunctionSymbol(symbol.kind)) {
-					const context = parentName
-						? ` inside ${parentName}`
-						: " (top-level)";
+					const context = parentName ? ` inside ${parentName}` : " (top-level)";
 					functionLines.push(
 						`- \`${symbol.name}\` (${kindLabel}, ${lineSpan})${context}`
 					);
 				}
 
 				if (this.isStateSymbol(symbol.kind)) {
-					const context = parentName
-						? `inside ${parentName}`
-						: "top-level";
+					const context = parentName ? `inside ${parentName}` : "top-level";
 					stateLines.push(
 						`- \`${symbol.name}\` (${kindLabel}, ${lineSpan}) ${context}`
 					);
@@ -322,9 +415,7 @@ export class DocsService extends Disposable implements IDocsService {
 				);
 			}
 			if (nestedLines.length > 0) {
-				sections.push(
-					"Nested Symbols:\n" + this.joinWithLimit(nestedLines)
-				);
+				sections.push("Nested Symbols:\n" + this.joinWithLimit(nestedLines));
 			}
 			if (stateLines.length > 0) {
 				sections.push("State Candidates:\n" + this.joinWithLimit(stateLines));
@@ -369,12 +460,16 @@ export class DocsService extends Disposable implements IDocsService {
 				if (Array.isArray(result) && result.length > 0) {
 					// DocumentSymbol[] has children property
 					if (typeof result[0].children !== "undefined") {
-						return result.map((symbol: any) => this.convertDocumentSymbol(symbol));
+						return result.map((symbol: any) =>
+							this.convertDocumentSymbol(symbol)
+						);
 					}
 
 					// SymbolInformation[] – treat as flat list
 					if (!fallback) {
-						fallback = result.map((info: any) => this.convertSymbolInformation(info));
+						fallback = result.map((info: any) =>
+							this.convertSymbolInformation(info)
+						);
 					}
 				}
 			} catch (error) {
@@ -483,7 +578,7 @@ export class DocsService extends Disposable implements IDocsService {
 
 	private joinWithLimit(lines: string[], max = 24): string {
 		if (lines.length <= max) {
-		return lines.join("\n");
+			return lines.join("\n");
 		}
 		const sliced = lines.slice(0, max);
 		sliced.push(`- ... (+${lines.length - max} more)`);
@@ -559,33 +654,33 @@ export class DocsService extends Disposable implements IDocsService {
 		const content = await this.generateFileDocContent(uri);
 		const fileDoc: FileDocs = {
 			uri,
-				content,
-				format: "markdown",
-				generatedAt: Date.now(),
-			};
+			content,
+			format: "markdown",
+			generatedAt: Date.now(),
+		};
 
-			// Store in cache and storage
+		// Store in cache and storage
 		const fileUri = uri.toString();
 		this.fileDocsCache.set(fileUri, fileDoc);
-			this.logService.info(
+		this.logService.info(
 			`[DocsService] Stored file doc in cache: ${fileUri}, content length: ${content.length} chars`
-			);
+		);
 		const storageKey = getFileStorageKey(uri);
-			this.storageService.store(
-				storageKey,
+		this.storageService.store(
+			storageKey,
 			JSON.stringify(fileDoc),
-				StorageScope.WORKSPACE,
-				StorageTarget.MACHINE
-			);
-			this.logService.info(
+			StorageScope.WORKSPACE,
+			StorageTarget.MACHINE
+		);
+		this.logService.info(
 			`[DocsService] Stored file doc in storage: ${storageKey}`
-			);
+		);
 
 		// Emit update event
 		this._onDidUpdateFileDocs.fire(fileDoc);
-			this.logService.info(
+		this.logService.info(
 			`[DocsService] Firing onDidUpdateFileDocs event for file: ${fileUri}`
-			);
+		);
 
 		this.logService.info(
 			`[DocsService] generateDocsForFile completed for ${uri.fsPath}`
@@ -642,16 +737,14 @@ export class DocsService extends Disposable implements IDocsService {
 	async removeDocsForFile(uri: URI): Promise<void> {
 		const fileUri = uri.toString();
 
-			// Remove from cache
+		// Remove from cache
 		this.fileDocsCache.delete(fileUri);
 
-			// Remove from storage
+		// Remove from storage
 		const storageKey = getFileStorageKey(uri);
-			this.storageService.remove(storageKey, StorageScope.WORKSPACE);
+		this.storageService.remove(storageKey, StorageScope.WORKSPACE);
 
-		this.logService.info(
-			`[DocsService] Removed file docs for ${uri.fsPath}`
-		);
+		this.logService.info(`[DocsService] Removed file docs for ${uri.fsPath}`);
 	}
 
 	// Directory-level methods
@@ -773,8 +866,14 @@ export class DocsService extends Disposable implements IDocsService {
 					filePath: string;
 					language: string;
 					symbolSummary?: string;
+					merkleHash?: string;
+					chunkId?: string;
+					projectHash?: string;
 				};
 			}> = [];
+
+			// Get project hash once for all chunks
+			const projectHash = this.getProjectHash();
 
 			for (const fileUri of files) {
 				try {
@@ -787,12 +886,20 @@ export class DocsService extends Disposable implements IDocsService {
 					const language = this.detectLanguage(fileExtension);
 					const symbolSummary = await this.collectSymbolSummary(fileUri);
 
+					// Compute hash-checking metadata
+					const merkleHash = this.computeContentHash(fileContent);
+					const chunkId = this.getChunkIdFromUri(fileUri);
+
 					chunks.push({
 						text: fileContent,
 						metadata: {
 							filePath: fileUri.fsPath,
 							language: language,
 							symbolSummary: symbolSummary,
+							// Include hash-checking metadata for server-side deduplication
+							merkleHash: merkleHash,
+							chunkId: chunkId,
+							projectHash: projectHash,
 						},
 					});
 				} catch (error) {
@@ -872,10 +979,43 @@ export class DocsService extends Disposable implements IDocsService {
 					completion_tokens: number;
 					total_tokens: number;
 				};
+				skipped?: boolean;
+				message?: string;
 			}>(response);
 
-			if (!result || !result.documentation) {
+			if (!result) {
 				this.logService.warn(`[DocsService] API returned empty response`);
+				return {
+					content: this.generateDirectoryPlaceholderContent(directoryUri),
+					includedFiles: files,
+				};
+			}
+
+			// Check if generation was skipped due to unchanged hash
+			if (result.skipped) {
+				this.logService.info(
+					`[DocsService] Directory doc generation skipped for ${
+						directoryUri.fsPath
+					}: ${result.message || "hash unchanged"}`
+				);
+				// Return cached content if available, otherwise use placeholder
+				const cached = this.getDirectoryDocs(directoryUri);
+				if (cached?.content) {
+					return {
+						content: cached.content,
+						includedFiles: cached.includedFiles || files,
+					};
+				}
+				return {
+					content: this.generateDirectoryPlaceholderContent(directoryUri),
+					includedFiles: files,
+				};
+			}
+
+			if (!result.documentation) {
+				this.logService.warn(
+					`[DocsService] API response missing documentation field`
+				);
 				return {
 					content: this.generateDirectoryPlaceholderContent(directoryUri),
 					includedFiles: files,
@@ -890,7 +1030,10 @@ export class DocsService extends Disposable implements IDocsService {
 				includedFiles: files,
 			};
 		} catch (error) {
-			this.logService.error(`[DocsService] Error generating directory docs:`, error);
+			this.logService.error(
+				`[DocsService] Error generating directory docs:`,
+				error
+			);
 			return {
 				content: this.generateDirectoryPlaceholderContent(directoryUri),
 				includedFiles: [],
@@ -917,7 +1060,9 @@ export class DocsService extends Disposable implements IDocsService {
 		);
 
 		// Generate directory-level documentation
-		const { content, includedFiles } = await this.generateDirectoryDocContent(uri);
+		const { content, includedFiles } = await this.generateDirectoryDocContent(
+			uri
+		);
 		const directoryDoc: DirectoryDocs = {
 			uri,
 			content,
@@ -984,7 +1129,9 @@ export class DocsService extends Disposable implements IDocsService {
 				const directoryDoc = JSON.parse(stored) as DirectoryDocs;
 				this.directoryDocsCache.set(directoryUri, directoryDoc);
 				this.logService.debug(
-					`[DocsService] getDirectoryDocs: Loaded from storage for ${directoryUri}, content length: ${directoryDoc.content.length}, files: ${directoryDoc.fileCount || 0}`
+					`[DocsService] getDirectoryDocs: Loaded from storage for ${directoryUri}, content length: ${
+						directoryDoc.content.length
+					}, files: ${directoryDoc.fileCount || 0}`
 				);
 				return directoryDoc;
 			} catch (e) {

@@ -17,6 +17,8 @@ files:
 asar: true
 asarUnpack:
   - "**/*.node"
+  - "**/node_modules/@vscode/ripgrep/**"
+  - "**/node_modules/node-pty/**"
 
 npmRebuild: true
 

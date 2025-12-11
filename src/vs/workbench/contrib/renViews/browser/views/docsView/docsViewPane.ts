@@ -70,7 +70,8 @@ export class DocsViewPane extends ViewPane {
 		@ITextModelService private readonly textModelService: ITextModelService,
 		@ILanguageFeaturesService
 		private readonly languageFeaturesService: ILanguageFeaturesService,
-		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
+		@IWorkspaceContextService
+		private readonly workspaceContextService: IWorkspaceContextService,
 		@IFileDialogService private readonly fileDialogService: IFileDialogService
 	) {
 		super(
@@ -97,7 +98,10 @@ export class DocsViewPane extends ViewPane {
 		this._register(
 			this.docsService.onDidUpdateFileDocs((fileDoc) => {
 				// If this is the current file, update view immediately
-				if (this.mode === "file" && this.currentFileUri?.toString() === fileDoc.uri.toString()) {
+				if (
+					this.mode === "file" &&
+					this.currentFileUri?.toString() === fileDoc.uri.toString()
+				) {
 					this.updateForActiveFile();
 				}
 			})
@@ -107,7 +111,10 @@ export class DocsViewPane extends ViewPane {
 		this._register(
 			this.docsService.onDidUpdateDirectoryDocs((directoryDoc) => {
 				// If this is the current directory, update view immediately
-				if (this.mode === "directory" && this.selectedDirectory?.toString() === directoryDoc.uri.toString()) {
+				if (
+					this.mode === "directory" &&
+					this.selectedDirectory?.toString() === directoryDoc.uri.toString()
+				) {
 					this.updateForSelectedDirectory();
 				}
 			})
@@ -134,13 +141,14 @@ export class DocsViewPane extends ViewPane {
 		wrapper.style.flex = "1";
 		wrapper.style.overflow = "hidden";
 		wrapper.style.background = "var(--vscode-editor-background)"; // Ensure background matches editor
-		
+
 		container.appendChild(wrapper);
 
 		// Create toolbar container
 		this.toolbarContainer = document.createElement("div");
 		this.toolbarContainer.style.padding = "8px 12px";
-		this.toolbarContainer.style.borderBottom = "1px solid var(--vscode-panel-border)";
+		this.toolbarContainer.style.borderBottom =
+			"1px solid var(--vscode-panel-border)";
 		this.toolbarContainer.style.display = "flex";
 		this.toolbarContainer.style.gap = "8px";
 		this.toolbarContainer.style.alignItems = "center";
@@ -184,7 +192,9 @@ export class DocsViewPane extends ViewPane {
 		}
 
 		// Get mode select before clearing
-		const modeSelect = this.toolbarContainer.querySelector("select") as HTMLSelectElement | null;
+		const modeSelect = this.toolbarContainer.querySelector(
+			"select"
+		) as HTMLSelectElement | null;
 		const modeValue = modeSelect?.value || this.mode;
 
 		// Clear all children
@@ -199,17 +209,17 @@ export class DocsViewPane extends ViewPane {
 		newModeSelect.style.borderRadius = "2px";
 		newModeSelect.style.fontSize = "12px";
 		newModeSelect.style.cursor = "pointer";
-		
+
 		const fileOption = document.createElement("option");
 		fileOption.value = "file";
 		fileOption.textContent = "File";
 		newModeSelect.appendChild(fileOption);
-		
+
 		const directoryOption = document.createElement("option");
 		directoryOption.value = "directory";
 		directoryOption.textContent = "Directory";
 		newModeSelect.appendChild(directoryOption);
-		
+
 		newModeSelect.value = modeValue;
 		newModeSelect.addEventListener("change", () => {
 			this.mode = newModeSelect.value as DocsMode;
@@ -256,7 +266,9 @@ export class DocsViewPane extends ViewPane {
 
 		if (!uri || uri.scheme !== "file") {
 			this.currentFileUri = undefined;
-			this.renderEmptyState("No file selected. Open a file to see its documentation.");
+			this.renderEmptyState(
+				"No file selected. Open a file to see its documentation."
+			);
 			return;
 		}
 
@@ -270,7 +282,9 @@ export class DocsViewPane extends ViewPane {
 		}
 
 		if (!this.selectedDirectory) {
-			this.renderEmptyState("No directory selected. Click 'Select Folder' to choose a directory.");
+			this.renderEmptyState(
+				"No directory selected. Click 'Select Folder' to choose a directory."
+			);
 			return;
 		}
 
@@ -321,7 +335,10 @@ export class DocsViewPane extends ViewPane {
 			return;
 		}
 
-		console.log("[DocsViewPane] renderFileDocs - doc length:", fileDoc.content.length);
+		console.log(
+			"[DocsViewPane] renderFileDocs - doc length:",
+			fileDoc.content.length
+		);
 
 		// Create header with file info and regenerate button
 		const header = document.createElement("div");
@@ -336,7 +353,7 @@ export class DocsViewPane extends ViewPane {
 		const fileInfo = document.createElement("div");
 		fileInfo.style.flex = "1";
 		fileInfo.style.minWidth = "0";
-		
+
 		const fileName = document.createElement("div");
 		fileName.textContent = uri.fsPath.split("/").pop() || uri.fsPath;
 		fileName.style.fontWeight = "600";
@@ -344,17 +361,11 @@ export class DocsViewPane extends ViewPane {
 		fileName.style.marginBottom = "4px";
 		fileName.style.color = "var(--vscode-foreground)";
 		fileInfo.appendChild(fileName);
-		
-		const filePath = document.createElement("div");
-		filePath.textContent = uri.fsPath;
-		filePath.style.fontSize = "11px";
-		filePath.style.color = "var(--vscode-descriptionForeground)";
-		filePath.style.marginBottom = "6px";
-		filePath.style.wordBreak = "break-all";
-		fileInfo.appendChild(filePath);
-		
+
 		const generatedAt = document.createElement("div");
-		generatedAt.textContent = `Last updated: ${new Date(fileDoc.generatedAt).toLocaleString()}`;
+		generatedAt.textContent = `Last updated: ${new Date(
+			fileDoc.generatedAt
+		).toLocaleString()}`;
 		generatedAt.style.fontSize = "11px";
 		generatedAt.style.color = "var(--vscode-descriptionForeground)";
 		fileInfo.appendChild(generatedAt);
@@ -378,9 +389,7 @@ export class DocsViewPane extends ViewPane {
 			regenBtn.disabled = true;
 			regenBtn.textContent = "Regenerating...";
 			try {
-				await this.commandService.executeCommand(
-					"ren.docs.regenerateFile"
-				);
+				await this.commandService.executeCommand("ren.docs.regenerateFile");
 			} finally {
 				regenBtn.disabled = false;
 				regenBtn.textContent = localize("renDocs.regenerate", "Regenerate");
@@ -391,26 +400,79 @@ export class DocsViewPane extends ViewPane {
 		this.contentContainer.appendChild(header);
 
 		// Render markdown content using markdown renderer service
-		const markdown = new MarkdownString(fileDoc.content, { isTrusted: true, supportHtml: true });
-		
+		const markdown = new MarkdownString(fileDoc.content, {
+			isTrusted: true,
+			supportHtml: true,
+		});
+
 		let renderedMarkdown: any;
 		try {
 			renderedMarkdown = this.markdownRendererService.render(markdown, {
 				sanitizerConfig: {
 					allowedTags: {
-						override: ['html', 'body', 'div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'pre', 'code', 'a', 'br', 'strong', 'em', 'b', 'i', 'blockquote', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'img', 'del', 'sup', 'sub']
+						override: [
+							"html",
+							"body",
+							"div",
+							"span",
+							"p",
+							"h1",
+							"h2",
+							"h3",
+							"h4",
+							"h5",
+							"h6",
+							"ul",
+							"ol",
+							"li",
+							"pre",
+							"code",
+							"a",
+							"br",
+							"strong",
+							"em",
+							"b",
+							"i",
+							"blockquote",
+							"hr",
+							"table",
+							"thead",
+							"tbody",
+							"tr",
+							"th",
+							"td",
+							"img",
+							"del",
+							"sup",
+							"sub",
+						],
 					},
 					allowedAttributes: {
 						override: [
-							'class', 'style', 'title', 'id', 'name', 'role', 'aria-label', 'aria-hidden',
-							'href', 'target', 'rel',
-							'src', 'alt', 'width', 'height'
-						]
-					}
-				}
+							"class",
+							"style",
+							"title",
+							"id",
+							"name",
+							"role",
+							"aria-label",
+							"aria-hidden",
+							"href",
+							"target",
+							"rel",
+							"src",
+							"alt",
+							"width",
+							"height",
+						],
+					},
+				},
 			});
 		} catch (error) {
-			console.error("[DocsViewPane] Markdown render failed (TrustedHTML issue?):", error);
+			console.error(
+				"[DocsViewPane] Markdown render failed (TrustedHTML issue?):",
+				error
+			);
 		}
 
 		if (renderedMarkdown) {
@@ -419,29 +481,33 @@ export class DocsViewPane extends ViewPane {
 
 			// Add styling class and append to container
 			renderedMarkdown.element.classList.add("ren-docs-view__content-markdown");
-			
+
 			// Debug check: if empty, show raw
 			if (!renderedMarkdown.element.innerHTML && fileDoc.content) {
-				console.warn("[DocsViewPane] Markdown renderer produced empty output. Falling back to raw text.");
+				console.warn(
+					"[DocsViewPane] Markdown renderer produced empty output. Falling back to raw text."
+				);
 				const rawPre = document.createElement("pre");
 				rawPre.style.whiteSpace = "pre-wrap";
 				rawPre.style.wordBreak = "break-word";
 				rawPre.textContent = fileDoc.content;
 				renderedMarkdown.element.appendChild(rawPre);
 			}
-			
+
 			// Apply enhanced styling to markdown content
 			this.applyMarkdownStyles(renderedMarkdown.element);
-			
+
 			// Enhance markdown with clickable symbols
 			if (uri) {
 				this.enhanceMarkdownWithClickableSymbols(renderedMarkdown.element, uri);
 			}
-			
+
 			this.contentContainer.appendChild(renderedMarkdown.element);
 		} else {
 			// Hard fallback if render threw exception
-			console.warn("[DocsViewPane] Render failed completely. Showing raw text fallback.");
+			console.warn(
+				"[DocsViewPane] Render failed completely. Showing raw text fallback."
+			);
 			const rawPre = document.createElement("pre");
 			rawPre.style.whiteSpace = "pre-wrap";
 			rawPre.style.wordBreak = "break-word";
@@ -459,7 +525,7 @@ export class DocsViewPane extends ViewPane {
 	): Promise<void> {
 		// Find all code elements (symbol names in backticks)
 		const codeElements = element.querySelectorAll("code");
-		
+
 		if (codeElements.length === 0) {
 			return;
 		}
@@ -469,11 +535,15 @@ export class DocsViewPane extends ViewPane {
 			const reference = await this.textModelService.createModelReference(uri);
 			try {
 				const textModel = reference.object.textEditorModel;
-				
+
 				// Process each code element
 				for (const codeEl of Array.from(codeElements)) {
 					const symbolName = codeEl.textContent?.trim();
-					if (!symbolName || symbolName.includes(" ") || symbolName.includes("\n")) {
+					if (
+						!symbolName ||
+						symbolName.includes(" ") ||
+						symbolName.includes("\n")
+					) {
 						continue; // Skip multi-word or multi-line code blocks
 					}
 
@@ -495,11 +565,19 @@ export class DocsViewPane extends ViewPane {
 						codeEl.style.color = "var(--vscode-textLink-foreground)";
 						codeEl.style.textDecoration = "underline";
 						codeEl.style.transition = "opacity 0.2s";
-						
-						const isExternal = symbolLocation.uri && symbolLocation.uri.toString() !== uri.toString();
-						const locationText = isExternal 
-							? `Go to ${cleanName} in ${symbolLocation.uri?.fsPath.split("/").pop() || "file"}`
-							: `Go to ${cleanName}${symbolLocation.lineNumber ? ` (line ${symbolLocation.lineNumber})` : ""}`;
+
+						const isExternal =
+							symbolLocation.uri &&
+							symbolLocation.uri.toString() !== uri.toString();
+						const locationText = isExternal
+							? `Go to ${cleanName} in ${
+									symbolLocation.uri?.fsPath.split("/").pop() || "file"
+							  }`
+							: `Go to ${cleanName}${
+									symbolLocation.lineNumber
+										? ` (line ${symbolLocation.lineNumber})`
+										: ""
+							  }`;
 						codeEl.title = locationText;
 
 						codeEl.addEventListener("click", async (e) => {
@@ -521,17 +599,22 @@ export class DocsViewPane extends ViewPane {
 						});
 					} else {
 						// Try to find in other files via definition providers
-						const definition = await this.findSymbolDefinition(textModel, cleanName);
+						const definition = await this.findSymbolDefinition(
+							textModel,
+							cleanName
+						);
 						if (definition) {
 							codeEl.style.cursor = "pointer";
 							codeEl.style.color = "var(--vscode-textLink-foreground)";
 							codeEl.style.textDecoration = "underline";
 							codeEl.style.transition = "opacity 0.2s";
-							
+
 							const defUri = definition.uri;
 							const isExternal = defUri.toString() !== uri.toString();
 							const locationText = isExternal
-								? `Go to ${cleanName} in ${defUri.fsPath.split("/").pop() || "file"}`
+								? `Go to ${cleanName} in ${
+										defUri.fsPath.split("/").pop() || "file"
+								  }`
 								: `Go to ${cleanName} (line ${definition.lineNumber})`;
 							codeEl.title = locationText;
 
@@ -558,7 +641,10 @@ export class DocsViewPane extends ViewPane {
 				reference.dispose();
 			}
 		} catch (error) {
-			console.warn("[DocsViewPane] Failed to enhance markdown with clickable symbols:", error);
+			console.warn(
+				"[DocsViewPane] Failed to enhance markdown with clickable symbols:",
+				error
+			);
 		}
 	}
 
@@ -591,7 +677,9 @@ export class DocsViewPane extends ViewPane {
 							);
 							if (!definitions) continue;
 
-							const defs = Array.isArray(definitions) ? definitions : [definitions];
+							const defs = Array.isArray(definitions)
+								? definitions
+								: [definitions];
 							for (const def of defs) {
 								if (def && def.uri && def.range) {
 									// Extract line/column from IRange
@@ -624,7 +712,7 @@ export class DocsViewPane extends ViewPane {
 			// Get document symbols
 			const providers =
 				this.languageFeaturesService.documentSymbolProvider.all(textModel);
-			
+
 			for (const provider of providers) {
 				try {
 					const symbols = await provider.provideDocumentSymbols(
@@ -715,7 +803,8 @@ export class DocsViewPane extends ViewPane {
 						location.lineNumber,
 						location.column
 					),
-					selectionRevealType: TextEditorSelectionRevealType.CenterIfOutsideViewport,
+					selectionRevealType:
+						TextEditorSelectionRevealType.CenterIfOutsideViewport,
 				},
 			});
 		} catch (error) {
@@ -758,7 +847,8 @@ export class DocsViewPane extends ViewPane {
 		for (const code of Array.from(codeBlocks)) {
 			(code as HTMLElement).style.padding = "12px";
 			(code as HTMLElement).style.borderRadius = "4px";
-			(code as HTMLElement).style.backgroundColor = "var(--vscode-textCodeBlock-background)";
+			(code as HTMLElement).style.backgroundColor =
+				"var(--vscode-textCodeBlock-background)";
 			(code as HTMLElement).style.display = "block";
 			(code as HTMLElement).style.overflowX = "auto";
 		}
@@ -770,10 +860,12 @@ export class DocsViewPane extends ViewPane {
 			if (parent && parent.tagName === "PRE") {
 				continue; // Skip code blocks
 			}
-			(code as HTMLElement).style.backgroundColor = "var(--vscode-textCodeBlock-background)";
+			(code as HTMLElement).style.backgroundColor =
+				"var(--vscode-textCodeBlock-background)";
 			(code as HTMLElement).style.padding = "2px 4px";
 			(code as HTMLElement).style.borderRadius = "3px";
-			(code as HTMLElement).style.fontFamily = "var(--vscode-editor-font-family)";
+			(code as HTMLElement).style.fontFamily =
+				"var(--vscode-editor-font-family)";
 			(code as HTMLElement).style.fontSize = "12px";
 		}
 
@@ -803,10 +895,12 @@ export class DocsViewPane extends ViewPane {
 		empty.style.padding = "16px";
 		empty.style.textAlign = "center";
 		empty.style.color = "var(--vscode-descriptionForeground)";
-		empty.textContent = message || localize(
-			"renDocs.empty",
-			"No file selected. Open a file to see its documentation."
-		);
+		empty.textContent =
+			message ||
+			localize(
+				"renDocs.empty",
+				"No file selected. Open a file to see its documentation."
+			);
 		this.contentContainer.appendChild(empty);
 	}
 
@@ -911,7 +1005,7 @@ export class DocsViewPane extends ViewPane {
 		const directoryInfo = document.createElement("div");
 		directoryInfo.style.flex = "1";
 		directoryInfo.style.minWidth = "0";
-		
+
 		const directoryName = document.createElement("div");
 		directoryName.textContent = basename(uri) || uri.fsPath;
 		directoryName.style.fontWeight = "600";
@@ -919,14 +1013,6 @@ export class DocsViewPane extends ViewPane {
 		directoryName.style.marginBottom = "4px";
 		directoryName.style.color = "var(--vscode-foreground)";
 		directoryInfo.appendChild(directoryName);
-		
-		const directoryPath = document.createElement("div");
-		directoryPath.textContent = uri.fsPath;
-		directoryPath.style.fontSize = "11px";
-		directoryPath.style.color = "var(--vscode-descriptionForeground)";
-		directoryPath.style.marginBottom = "6px";
-		directoryPath.style.wordBreak = "break-all";
-		directoryInfo.appendChild(directoryPath);
 
 		const fileCount = document.createElement("div");
 		fileCount.textContent = `Files: ${directoryDoc.fileCount || 0}`;
@@ -934,9 +1020,11 @@ export class DocsViewPane extends ViewPane {
 		fileCount.style.color = "var(--vscode-descriptionForeground)";
 		fileCount.style.marginBottom = "6px";
 		directoryInfo.appendChild(fileCount);
-		
+
 		const generatedAt = document.createElement("div");
-		generatedAt.textContent = `Last updated: ${new Date(directoryDoc.generatedAt).toLocaleString()}`;
+		generatedAt.textContent = `Last updated: ${new Date(
+			directoryDoc.generatedAt
+		).toLocaleString()}`;
 		generatedAt.style.fontSize = "11px";
 		generatedAt.style.color = "var(--vscode-descriptionForeground)";
 		directoryInfo.appendChild(generatedAt);
@@ -972,23 +1060,73 @@ export class DocsViewPane extends ViewPane {
 		this.contentContainer.appendChild(header);
 
 		// Render markdown content using markdown renderer service
-		const markdown = new MarkdownString(directoryDoc.content, { isTrusted: true, supportHtml: true });
-		
+		const markdown = new MarkdownString(directoryDoc.content, {
+			isTrusted: true,
+			supportHtml: true,
+		});
+
 		let renderedMarkdown: any;
 		try {
 			renderedMarkdown = this.markdownRendererService.render(markdown, {
 				sanitizerConfig: {
 					allowedTags: {
-						override: ['html', 'body', 'div', 'span', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'pre', 'code', 'a', 'br', 'strong', 'em', 'b', 'i', 'blockquote', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'img', 'del', 'sup', 'sub']
+						override: [
+							"html",
+							"body",
+							"div",
+							"span",
+							"p",
+							"h1",
+							"h2",
+							"h3",
+							"h4",
+							"h5",
+							"h6",
+							"ul",
+							"ol",
+							"li",
+							"pre",
+							"code",
+							"a",
+							"br",
+							"strong",
+							"em",
+							"b",
+							"i",
+							"blockquote",
+							"hr",
+							"table",
+							"thead",
+							"tbody",
+							"tr",
+							"th",
+							"td",
+							"img",
+							"del",
+							"sup",
+							"sub",
+						],
 					},
 					allowedAttributes: {
 						override: [
-							'class', 'style', 'title', 'id', 'name', 'role', 'aria-label', 'aria-hidden',
-							'href', 'target', 'rel',
-							'src', 'alt', 'width', 'height'
-						]
-					}
-				}
+							"class",
+							"style",
+							"title",
+							"id",
+							"name",
+							"role",
+							"aria-label",
+							"aria-hidden",
+							"href",
+							"target",
+							"rel",
+							"src",
+							"alt",
+							"width",
+							"height",
+						],
+					},
+				},
 			});
 		} catch (error) {
 			console.error("[DocsViewPane] Directory markdown render failed:", error);
@@ -1000,20 +1138,22 @@ export class DocsViewPane extends ViewPane {
 
 			// Add styling class and append to container
 			renderedMarkdown.element.classList.add("ren-docs-view__content-markdown");
-			
+
 			// Debug check: if empty, show raw
 			if (!renderedMarkdown.element.innerHTML && directoryDoc.content) {
-				console.warn("[DocsViewPane] Markdown renderer produced empty output. Falling back to raw text.");
+				console.warn(
+					"[DocsViewPane] Markdown renderer produced empty output. Falling back to raw text."
+				);
 				const rawPre = document.createElement("pre");
 				rawPre.style.whiteSpace = "pre-wrap";
 				rawPre.style.wordBreak = "break-word";
 				rawPre.textContent = directoryDoc.content;
 				renderedMarkdown.element.appendChild(rawPre);
 			}
-			
+
 			// Apply enhanced styling to markdown content
 			this.applyMarkdownStyles(renderedMarkdown.element);
-			
+
 			this.contentContainer.appendChild(renderedMarkdown.element);
 		} else {
 			// Fallback

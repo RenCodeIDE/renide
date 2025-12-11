@@ -4,8 +4,8 @@
 	"applicationName": "ren",
 	"dataFolderName": ".ren",
 	"renAccount": {
-		"apiBaseUrl": "https://ren-ide-server.goyalishaan2005.workers.dev",
-		"webPortalUrl": "https://ren-ide-server.goyalishaan2005.workers.dev"
+		"apiBaseUrl": "https://ren-ide.com/api",
+		"webPortalUrl": "https://ren-ide.com"
 	},
 	"win32MutexName": "ren",
 	"licenseName": "MIT",

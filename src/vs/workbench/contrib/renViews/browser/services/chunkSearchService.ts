@@ -14,10 +14,12 @@ import { IRequestService } from "../../../../../platform/request/common/request.
 import { ISecretStorageService } from "../../../../../platform/secrets/common/secrets.js";
 import { IProductService } from "../../../../../platform/product/common/productService.js";
 import { ILogService } from "../../../../../platform/log/common/log.js";
+import { IWorkspaceContextService } from "../../../../../platform/workspace/common/workspace.js";
 import {
 	ChunkVectorSearchResult,
 	searchChunkVectors,
 } from "./chunkVectorClient.js";
+import { computeWorkspaceHashSync } from "./workspaceHash.js";
 
 const ACCESS_TOKEN_KEY = "ren.auth.accessToken";
 
@@ -36,15 +38,40 @@ class ChunkSearchService extends Disposable implements IChunkSearchService {
 	declare readonly _serviceBrand: undefined;
 
 	private cachedServerAddress: string | undefined;
+	private cachedProjectHash: string | undefined;
 
 	constructor(
 		@IRequestService private readonly requestService: IRequestService,
 		@ISecretStorageService
 		private readonly secretStorageService: ISecretStorageService,
 		@IProductService private readonly productService: IProductService,
-		@ILogService private readonly logService: ILogService
+		@ILogService private readonly logService: ILogService,
+		@IWorkspaceContextService
+		private readonly workspaceContextService: IWorkspaceContextService
 	) {
 		super();
+	}
+
+	private getProjectHash(): string | undefined {
+		if (this.cachedProjectHash) {
+			return this.cachedProjectHash;
+		}
+
+		const folders = this.workspaceContextService.getWorkspace().folders;
+		if (folders.length === 0) {
+			this.logService.warn(
+				"[ChunkSearchService] No workspace folders available for project hash"
+			);
+			return undefined;
+		}
+
+		const workspaceRoot = folders[0].uri;
+		this.cachedProjectHash = computeWorkspaceHashSync(workspaceRoot);
+		this.logService.debug(
+			`[ChunkSearchService] Computed project hash: ${this.cachedProjectHash}`
+		);
+
+		return this.cachedProjectHash;
 	}
 
 	async search(query: string, limit = 5): Promise<ChunkSearchResult[]> {
@@ -67,10 +94,17 @@ class ChunkSearchService extends Disposable implements IChunkSearchService {
 			);
 		}
 
+		const projectHash = this.getProjectHash();
+		if (!projectHash) {
+			throw new Error(
+				"No workspace folder available. Please open a workspace to search."
+			);
+		}
+
 		const cappedLimit = Math.max(1, Math.min(25, Math.floor(limit)));
 
 		this.logService.trace(
-			`[ChunkSearchService] Searching chunks (query="${trimmed}", limit=${cappedLimit})`
+			`[ChunkSearchService] Searching chunks (query="${trimmed}", limit=${cappedLimit}, projectHash=${projectHash})`
 		);
 
 		return searchChunkVectors(
@@ -82,6 +116,7 @@ class ChunkSearchService extends Disposable implements IChunkSearchService {
 			},
 			{
 				query: trimmed,
+				projectHash,
 				limit: cappedLimit,
 			}
 		);

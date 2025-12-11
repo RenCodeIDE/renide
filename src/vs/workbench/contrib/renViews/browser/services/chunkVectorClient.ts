@@ -16,6 +16,7 @@ import { IRequestOptions } from "../../../../../base/parts/request/common/reques
 export interface ChunkVectorMetadata {
 	chunkId: string;
 	userName: string;
+	projectHash: string;
 	filePath: string;
 	startLine: number;
 	endLine: number;
@@ -59,6 +60,7 @@ export interface ChunkVectorUpsertPayload {
 
 export interface ChunkVectorSearchRequest {
 	query: string;
+	projectHash: string;
 	limit?: number;
 }
 
@@ -217,10 +219,9 @@ export async function searchChunkVectors(
 						typeof item.userName === "string" ? item.userName : undefined,
 					dependencyGraph: {
 						files: Array.isArray(rawFiles)
-							? rawFiles
-									.filter((candidate): candidate is string => {
-										return typeof candidate === "string";
-									})
+							? rawFiles.filter((candidate): candidate is string => {
+									return typeof candidate === "string";
+							  })
 							: [],
 						symbols: Array.isArray(rawSymbols)
 							? rawSymbols
@@ -230,68 +231,51 @@ export async function searchChunkVectors(
 									)
 									.map((candidate) => ({
 										name:
-											typeof candidate.name === "string"
-												? candidate.name
-												: "",
+											typeof candidate.name === "string" ? candidate.name : "",
 										kind:
-											typeof candidate.kind === "string"
-												? candidate.kind
-												: "",
-										uri:
-											typeof candidate.uri === "string"
-												? candidate.uri
-												: "",
+											typeof candidate.kind === "string" ? candidate.kind : "",
+										uri: typeof candidate.uri === "string" ? candidate.uri : "",
 										range:
 											typeof candidate.range === "object" &&
 											candidate.range !== null
 												? {
 														startLineNumber: Number.isFinite(
-															(candidate.range as any)
-																?.startLineNumber
+															(candidate.range as any)?.startLineNumber
 														)
 															? Math.max(
 																	0,
 																	Math.floor(
-																		(candidate.range as any)
-																			.startLineNumber
+																		(candidate.range as any).startLineNumber
 																	)
-																)
+															  )
 															: undefined,
 														startColumn: Number.isFinite(
-															(candidate.range as any)
-																?.startColumn
+															(candidate.range as any)?.startColumn
 														)
 															? Math.max(
 																	0,
 																	Math.floor(
-																		(candidate.range as any)
-																			.startColumn
+																		(candidate.range as any).startColumn
 																	)
-																)
+															  )
 															: undefined,
 														endLineNumber: Number.isFinite(
-															(candidate.range as any)
-																?.endLineNumber
+															(candidate.range as any)?.endLineNumber
 														)
 															? Math.max(
 																	0,
 																	Math.floor(
-																		(candidate.range as any)
-																			.endLineNumber
+																		(candidate.range as any).endLineNumber
 																	)
-																)
+															  )
 															: undefined,
 														endColumn: Number.isFinite(
-															(candidate.range as any)
-																?.endColumn
+															(candidate.range as any)?.endColumn
 														)
 															? Math.max(
 																	0,
-																	Math.floor(
-																		(candidate.range as any)
-																			.endColumn
-																	)
-																)
+																	Math.floor((candidate.range as any).endColumn)
+															  )
 															: undefined,
 												  }
 												: undefined,
@@ -305,13 +289,8 @@ export async function searchChunkVectors(
 									)
 									.map((candidate) => ({
 										name:
-											typeof candidate.name === "string"
-												? candidate.name
-												: "",
-										uri:
-											typeof candidate.uri === "string"
-												? candidate.uri
-												: "",
+											typeof candidate.name === "string" ? candidate.name : "",
+										uri: typeof candidate.uri === "string" ? candidate.uri : "",
 										signature:
 											typeof candidate.signature === "string"
 												? candidate.signature
@@ -321,52 +300,42 @@ export async function searchChunkVectors(
 											candidate.range !== null
 												? {
 														startLineNumber: Number.isFinite(
-															(candidate.range as any)
-																?.startLineNumber
+															(candidate.range as any)?.startLineNumber
 														)
 															? Math.max(
 																	0,
 																	Math.floor(
-																		(candidate.range as any)
-																			.startLineNumber
+																		(candidate.range as any).startLineNumber
 																	)
-																)
+															  )
 															: undefined,
 														startColumn: Number.isFinite(
-															(candidate.range as any)
-																?.startColumn
+															(candidate.range as any)?.startColumn
 														)
 															? Math.max(
 																	0,
 																	Math.floor(
-																		(candidate.range as any)
-																			.startColumn
+																		(candidate.range as any).startColumn
 																	)
-																)
+															  )
 															: undefined,
 														endLineNumber: Number.isFinite(
-															(candidate.range as any)
-																?.endLineNumber
+															(candidate.range as any)?.endLineNumber
 														)
 															? Math.max(
 																	0,
 																	Math.floor(
-																		(candidate.range as any)
-																			.endLineNumber
+																		(candidate.range as any).endLineNumber
 																	)
-																)
+															  )
 															: undefined,
 														endColumn: Number.isFinite(
-															(candidate.range as any)
-																?.endColumn
+															(candidate.range as any)?.endColumn
 														)
 															? Math.max(
 																	0,
-																	Math.floor(
-																		(candidate.range as any)
-																			.endColumn
-																	)
-																)
+																	Math.floor((candidate.range as any).endColumn)
+															  )
 															: undefined,
 												  }
 												: undefined,

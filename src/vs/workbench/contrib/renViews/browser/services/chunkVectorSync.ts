@@ -29,6 +29,8 @@ import {
 	ChunkVectorUpsertPayload,
 	upsertChunkVector,
 } from "./chunkVectorClient.js";
+import { computeWorkspaceHashSync } from "./workspaceHash.js";
+import { IWorkspaceContextService } from "../../../../../platform/workspace/common/workspace.js";
 
 const ACCESS_TOKEN_KEY = "ren.auth.accessToken";
 const DEFAULT_DEBOUNCE_MS = 400;
@@ -121,6 +123,7 @@ export function buildChunkDependencyGraph(
 export class ChunkVectorSyncCoordinator extends Disposable {
 	private readonly pendingByFile = new Map<string, PendingFlush>();
 	private cachedServerAddress: string | undefined;
+	private cachedProjectHash: string | undefined;
 	private consentState: "accepted" | "declined" | undefined;
 	private consentDeclineNotified = false;
 
@@ -136,7 +139,9 @@ export class ChunkVectorSyncCoordinator extends Disposable {
 		@IFileService private readonly fileService: IFileService,
 		@IRenAuthService private readonly renAuthService: IRenAuthService,
 		@IStorageService private readonly storageService: IStorageService,
-		@IDialogService private readonly dialogService: IDialogService
+		@IDialogService private readonly dialogService: IDialogService,
+		@IWorkspaceContextService
+		private readonly workspaceContextService: IWorkspaceContextService
 	) {
 		super();
 	}
@@ -184,7 +189,9 @@ export class ChunkVectorSyncCoordinator extends Disposable {
 				);
 			} catch (error) {
 				const message =
-					error instanceof Error ? error.message : String(error ?? "Unknown error");
+					error instanceof Error
+						? error.message
+						: String(error ?? "Unknown error");
 				this.logService.error(
 					`[ChunkVectorSync] Failed to sync chunk ${chunkId}: ${message}`
 				);
@@ -229,6 +236,15 @@ export class ChunkVectorSyncCoordinator extends Disposable {
 			return;
 		}
 
+		// Get project hash for namespace isolation
+		const projectHash = this.getProjectHash();
+		if (!projectHash) {
+			this.logService.trace(
+				`[ChunkVectorSync] Skipping chunk ${chunkId}: no workspace folder available for project hash.`
+			);
+			return;
+		}
+
 		const chunkText = await this.extractChunkText(record);
 		if (!chunkText || !chunkText.trim()) {
 			this.logService.trace(
@@ -246,6 +262,7 @@ export class ChunkVectorSyncCoordinator extends Disposable {
 			metadata: {
 				chunkId,
 				userName,
+				projectHash,
 				filePath: relativePath,
 				startLine,
 				endLine,
@@ -268,7 +285,9 @@ export class ChunkVectorSyncCoordinator extends Disposable {
 			);
 		} catch (error) {
 			const message =
-				error instanceof Error ? error.message : String(error ?? "Unknown error");
+				error instanceof Error
+					? error.message
+					: String(error ?? "Unknown error");
 			this.logService.error(
 				`[ChunkVectorSync] Vector upsert failed for ${chunkId}: ${message}`
 			);
@@ -276,8 +295,33 @@ export class ChunkVectorSyncCoordinator extends Disposable {
 		}
 	}
 
+	/**
+	 * Get or compute the project hash for the current workspace.
+	 * Uses the first workspace folder's URI to generate a consistent hash.
+	 */
+	private getProjectHash(): string | undefined {
+		if (this.cachedProjectHash) {
+			return this.cachedProjectHash;
+		}
 
-	private async extractChunkText(record: ChunkRecord): Promise<string | undefined> {
+		const folders = this.workspaceContextService.getWorkspace().folders;
+		if (folders.length === 0) {
+			return undefined;
+		}
+
+		// Use the first workspace folder as the project identifier
+		const workspaceRoot = folders[0].uri;
+		this.cachedProjectHash = computeWorkspaceHashSync(workspaceRoot);
+		this.logService.debug(
+			`[ChunkVectorSync] Computed project hash: ${this.cachedProjectHash} for workspace: ${workspaceRoot.fsPath}`
+		);
+
+		return this.cachedProjectHash;
+	}
+
+	private async extractChunkText(
+		record: ChunkRecord
+	): Promise<string | undefined> {
 		if (record.range) {
 			try {
 				const reference = await this.textModelService.createModelReference(
@@ -306,7 +350,9 @@ export class ChunkVectorSyncCoordinator extends Disposable {
 				}
 			} catch (error) {
 				const message =
-					error instanceof Error ? error.message : String(error ?? "Unknown error");
+					error instanceof Error
+						? error.message
+						: String(error ?? "Unknown error");
 				this.logService.debug(
 					`[ChunkVectorSync] Failed to read model for ${record.uri.toString()}: ${message}`
 				);
@@ -335,7 +381,9 @@ export class ChunkVectorSyncCoordinator extends Disposable {
 			return lines.slice(startIndex, endIndex + 1).join("\n");
 		} catch (error) {
 			const message =
-				error instanceof Error ? error.message : String(error ?? "Unknown error");
+				error instanceof Error
+					? error.message
+					: String(error ?? "Unknown error");
 			this.logService.debug(
 				`[ChunkVectorSync] Failed to read file fallback for ${uri.toString()}: ${message}`
 			);
@@ -384,14 +432,16 @@ export class ChunkVectorSyncCoordinator extends Disposable {
 	}
 
 	private isVectorizationEnabled(): boolean {
-		const enabled =
-			this.configurationService.getValue<boolean>("ren.vectorization.enabled");
+		const enabled = this.configurationService.getValue<boolean>(
+			"ren.vectorization.enabled"
+		);
 		return enabled === true;
 	}
 
 	private getDebounceMs(): number {
-		const value =
-			this.configurationService.getValue<number>("ren.vectorization.debounceMs");
+		const value = this.configurationService.getValue<number>(
+			"ren.vectorization.debounceMs"
+		);
 		if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
 			return value;
 		}
@@ -428,14 +478,8 @@ export class ChunkVectorSyncCoordinator extends Disposable {
 				"Enable chunk vector indexing?"
 			),
 			detail,
-			primaryButton: localize(
-				"ren.vectorization.consent.enable",
-				"Enable"
-			),
-			cancelButton: localize(
-				"ren.vectorization.consent.notNow",
-				"Not now"
-			),
+			primaryButton: localize("ren.vectorization.consent.enable", "Enable"),
+			cancelButton: localize("ren.vectorization.consent.notNow", "Not now"),
 		});
 
 		this.consentState = result.confirmed ? "accepted" : "declined";
@@ -458,4 +502,3 @@ export class ChunkVectorSyncCoordinator extends Disposable {
 		super.dispose();
 	}
 }
-

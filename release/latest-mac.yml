@@ -1,8 +1,8 @@
 version: 1.106.0
 files:
   - url: Ren-1.106.0-arm64.dmg
-    sha512: 24sMmbWe0ICsHBy2FEAhtw6UTOMDD+8zl4Mb/4NIrs4IhPRuDtIXR/l1P5Nl1gt3ObaoZkP57TalCGWdLdlSew==
-    size: 174170391
+    sha512: vv66IzZlZAIoJD6xxox9wBii9+/lIjWsLlNCcfrroffPcdmXidW1CEZ81UsgkF3lDVqteqVkvTsj5vbedUTrLA==
+    size: 183384758
 path: Ren-1.106.0-arm64.dmg
-sha512: 24sMmbWe0ICsHBy2FEAhtw6UTOMDD+8zl4Mb/4NIrs4IhPRuDtIXR/l1P5Nl1gt3ObaoZkP57TalCGWdLdlSew==
-releaseDate: '2025-12-10T21:45:37.608Z'
+sha512: vv66IzZlZAIoJD6xxox9wBii9+/lIjWsLlNCcfrroffPcdmXidW1CEZ81UsgkF3lDVqteqVkvTsj5vbedUTrLA==
+releaseDate: '2025-12-11T08:49:50.643Z'

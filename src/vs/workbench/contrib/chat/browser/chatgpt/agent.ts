@@ -51,14 +51,56 @@ import { extractTextFromParts } from "./utils.js";
 import { ContextBuilder } from "../../common/contextBuilder.js";
 import { IConfigurationService } from "../../../../../platform/configuration/common/configuration.js";
 import { ILanguageFeaturesService } from "../../../../../editor/common/services/languageFeatures.js";
-import { IAgentPlanner, PlanContext, ToolMetadata } from "../../common/agentPlanner.js";
+import {
+	IAgentPlanner,
+	PlanContext,
+	ToolMetadata,
+} from "../../common/agentPlanner.js";
 import { IDependencyGraphService } from "../../common/dependencyGraphService.js";
 import { IWorkspaceContextService } from "../../../../../platform/workspace/common/workspace.js";
 import { IFileService } from "../../../../../platform/files/common/files.js";
 import { URI } from "../../../../../base/common/uri.js";
-
+import { ChatModeKind } from "../../common/constants.js";
 
 export class ChatGPTAgentImplementation implements IChatAgentImplementation {
+	/**
+	 * List of tool IDs that are blocked in Ask mode.
+	 * These are tools that modify files or system state.
+	 */
+	private static readonly ASK_MODE_BLOCKED_TOOLS = [
+		"vscode_editFile",
+		"edit_file",
+		"vscode_createFile",
+		"create_file",
+		"vscode_deleteFile",
+		"delete_file",
+		"vscode_runTerminal",
+		"run_terminal",
+		"vscode_applyDiff",
+		"apply_diff",
+		"vscode_writeFile",
+		"write_file",
+		"vscode_writePlan",
+		"writePlan",
+		"vscode_createPlanFile",
+		"createPlanFile",
+	];
+
+	/**
+	 * Filters tools to only include those allowed in Ask mode.
+	 * Blocks edit/write tools that could modify the codebase.
+	 */
+	private filterAskModeTools(tools: IToolData[]): IToolData[] {
+		return tools.filter((tool) => {
+			const isBlocked =
+				ChatGPTAgentImplementation.ASK_MODE_BLOCKED_TOOLS.includes(tool.id);
+			if (isBlocked) {
+				this.logService.debug(`[chatgpt] Ask mode: blocking tool ${tool.id}`);
+			}
+			return !isBlocked;
+		});
+	}
+
 	private readonly requestTools = new Map<string, UserSelectedTools>();
 	private readonly fallbackCountTokens: CountTokensCallback = async (
 		input: string,
@@ -79,9 +121,13 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		private readonly dependencyGraphService?: IDependencyGraphService,
 		private readonly workspaceService?: IWorkspaceContextService,
 		private readonly fileService?: IFileService,
-		languageFeaturesService?: ILanguageFeaturesService,
+		languageFeaturesService?: ILanguageFeaturesService
 	) {
-		this.contextBuilder = new ContextBuilder(textModelService, logService, languageFeaturesService);
+		this.contextBuilder = new ContextBuilder(
+			textModelService,
+			logService,
+			languageFeaturesService
+		);
 	}
 
 	private async getAccessToken(): Promise<string | undefined> {
@@ -99,7 +145,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			return token ?? undefined;
 		} catch (error) {
 			this.logService.error(
-				`[chatgpt-server] Error retrieving access token: ${error instanceof Error ? error.message : String(error)
+				`[chatgpt-server] Error retrieving access token: ${
+					error instanceof Error ? error.message : String(error)
 				}`
 			);
 			return undefined;
@@ -107,28 +154,46 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 	}
 
 	private resolveModelFromRequest(userSelectedModelId?: string): string {
-		this.logService.info(`[ChatGPTAgent] resolveModelFromRequest: received userSelectedModelId="${userSelectedModelId || 'undefined'}"`);
+		this.logService.info(
+			`[ChatGPTAgent] resolveModelFromRequest: received userSelectedModelId="${
+				userSelectedModelId || "undefined"
+			}"`
+		);
 
-		const availableModelIdentifiers = CHATGPT_MODELS.map(m => m.identifier);
-		this.logService.debug(`[ChatGPTAgent] resolveModelFromRequest: available model identifiers in CHATGPT_MODELS: [${availableModelIdentifiers.join(', ')}]`);
+		const availableModelIdentifiers = CHATGPT_MODELS.map((m) => m.identifier);
+		this.logService.debug(
+			`[ChatGPTAgent] resolveModelFromRequest: available model identifiers in CHATGPT_MODELS: [${availableModelIdentifiers.join(
+				", "
+			)}]`
+		);
 
 		if (userSelectedModelId) {
 			const selectedModelConfig = CHATGPT_MODELS.find(
 				(m) => m.identifier === userSelectedModelId
 			);
 			if (selectedModelConfig) {
-				this.logService.info(`[ChatGPTAgent] resolveModelFromRequest: MATCH FOUND! userSelectedModelId="${userSelectedModelId}" -> resolved model ID="${selectedModelConfig.id}"`);
+				this.logService.info(
+					`[ChatGPTAgent] resolveModelFromRequest: MATCH FOUND! userSelectedModelId="${userSelectedModelId}" -> resolved model ID="${selectedModelConfig.id}"`
+				);
 				return selectedModelConfig.id;
 			} else {
-				this.logService.warn(`[ChatGPTAgent] resolveModelFromRequest: NO MATCH FOUND for userSelectedModelId="${userSelectedModelId}" in CHATGPT_MODELS, falling back to default`);
+				this.logService.warn(
+					`[ChatGPTAgent] resolveModelFromRequest: NO MATCH FOUND for userSelectedModelId="${userSelectedModelId}" in CHATGPT_MODELS, falling back to default`
+				);
 			}
 		} else {
-			this.logService.warn(`[ChatGPTAgent] resolveModelFromRequest: userSelectedModelId is undefined, falling back to default`);
+			this.logService.warn(
+				`[ChatGPTAgent] resolveModelFromRequest: userSelectedModelId is undefined, falling back to default`
+			);
 		}
 
 		const defaultModel = CHATGPT_MODELS.find((m) => m.isDefault);
 		const resolvedModelId = defaultModel?.id || "gpt-5-nano-2025-08-07";
-		this.logService.info(`[ChatGPTAgent] resolveModelFromRequest: using DEFAULT model ID="${resolvedModelId}" (isDefault=${!!defaultModel}, identifier="${defaultModel?.identifier || 'N/A'}")`);
+		this.logService.info(
+			`[ChatGPTAgent] resolveModelFromRequest: using DEFAULT model ID="${resolvedModelId}" (isDefault=${!!defaultModel}, identifier="${
+				defaultModel?.identifier || "N/A"
+			}")`
+		);
 		return resolvedModelId;
 	}
 
@@ -161,11 +226,16 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		const modelToUse = this.resolveModelFromRequest(
 			request.userSelectedModelId
 		);
-		this.logService.info(`[ChatGPTAgent] invoke: resolved modelToUse="${modelToUse}" from userSelectedModelId="${request.userSelectedModelId || 'undefined'}"`);
+		this.logService.info(
+			`[ChatGPTAgent] invoke: resolved modelToUse="${modelToUse}" from userSelectedModelId="${
+				request.userSelectedModelId || "undefined"
+			}"`
+		);
 
 		if (request.userSelectedTools) {
 			this.logService.debug(
-				`[chatgpt] reading tools from request object for request ${request.requestId
+				`[chatgpt] reading tools from request object for request ${
+					request.requestId
 				}: ${JSON.stringify(request.userSelectedTools)}`
 			);
 			this.requestTools.set(request.requestId, request.userSelectedTools);
@@ -177,11 +247,16 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			token
 		);
 		const { tools: toolConfigs, nameToToolId } =
-			this.buildChatGPTToolDeclarations(request.requestId);
+			this.buildChatGPTToolDeclarations(request.requestId, request.chatMode);
 
 		// Generate plan if planner is available and this is an agent mode request
 		let planId: string | undefined;
-		if (this.agentPlanner && this.dependencyGraphService && this.workspaceService && this.fileService) {
+		if (
+			this.agentPlanner &&
+			this.dependencyGraphService &&
+			this.workspaceService &&
+			this.fileService
+		) {
 			try {
 				// Collect workspace files for context
 				const workspaceFolders = this.workspaceService.getWorkspace().folders;
@@ -192,25 +267,31 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					try {
 						const stat = await this.fileService.resolve(rootUri);
 						if (stat.children) {
-							for (const child of stat.children.slice(0, 100)) { // Limit to 100 files for performance
+							for (const child of stat.children.slice(0, 100)) {
+								// Limit to 100 files for performance
 								if (!child.isDirectory) {
 									workspaceFiles.push(child.resource);
 								}
 							}
 						}
 					} catch (error) {
-						this.logService.warn(`[chatgpt] Failed to list workspace files: ${error}`);
+						this.logService.warn(
+							`[chatgpt] Failed to list workspace files: ${error}`
+						);
 					}
 				}
 
 				// Get dependency graphs for relevant files
-				const dependencyGraphs = await this.dependencyGraphService.getDependencyGraphs(workspaceFiles);
+				const dependencyGraphs =
+					await this.dependencyGraphService.getDependencyGraphs(workspaceFiles);
 
 				// Get tool metadata
-				const availableTools: ToolMetadata[] = Array.from(this.languageModelToolsService.getTools()).map(tool => ({
+				const availableTools: ToolMetadata[] = Array.from(
+					this.languageModelToolsService.getTools()
+				).map((tool) => ({
 					id: tool.id,
 					name: tool.displayName,
-					description: tool.modelDescription || tool.userDescription || '',
+					description: tool.modelDescription || tool.userDescription || "",
 					cost: tool.orchestration?.cost,
 					latency: tool.orchestration?.latency,
 					prerequisites: tool.orchestration?.prerequisites,
@@ -245,13 +326,15 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			request,
 			token
 		);
-		const contextString = contextPrompt?.prompt || '';
+		const contextString = contextPrompt?.prompt || "";
 
-// System prompt is now injected by the server
+		// System prompt is now injected by the server
 
 		// Remove upper limit on iterations - allow unlimited tool call iterations
 		// This can be configured via chat.agent.maxIterations if needed, but defaults to unlimited
-		const maxIterations = this.configurationService.getValue<number>('chat.agent.maxIterations') ?? Number.MAX_SAFE_INTEGER;
+		const maxIterations =
+			this.configurationService.getValue<number>("chat.agent.maxIterations") ??
+			Number.MAX_SAFE_INTEGER;
 		let iteration = 0;
 		let pendingToolResults: ServerToolResult[] | undefined = undefined;
 		const conversationToolResults = new Map<string, ServerToolResult>();
@@ -279,7 +362,9 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				const iterationStartTime = Date.now();
 				const elapsedSinceRequestStart = iterationStartTime - requestStartTime;
 				this.logService.info(
-					`[chatgpt-server] invoke iteration ${iteration + 1}${maxIterations < Number.MAX_SAFE_INTEGER ? `/${maxIterations}` : ''} (elapsed: ${elapsedSinceRequestStart}ms)`
+					`[chatgpt-server] invoke iteration ${iteration + 1}${
+						maxIterations < Number.MAX_SAFE_INTEGER ? `/${maxIterations}` : ""
+					} (elapsed: ${elapsedSinceRequestStart}ms)`
 				);
 
 				// Keep a handle on tool results used for this request. Do NOT materialize tool
@@ -325,7 +410,9 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					);
 				}
 
-				this.logService.info(`[ChatGPTAgent] invoke: calling performRequest with modelToUse="${modelToUse}" (modelName will be sent as "${modelToUse}")`);
+				this.logService.info(
+					`[ChatGPTAgent] invoke: calling performRequest with modelToUse="${modelToUse}" (modelName will be sent as "${modelToUse}")`
+				);
 				const streamingResponse = await this.performRequest(
 					messages,
 					toolConfigs,
@@ -377,13 +464,15 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 
 					const iterationEndTime = Date.now();
 					this.logService.info(
-						`[Stream] [${iterationEndTime}] Completed async iteration (duration: ${iterationEndTime - streamIterationStartTime
+						`[Stream] [${iterationEndTime}] Completed async iteration (duration: ${
+							iterationEndTime - streamIterationStartTime
 						}ms)`
 					);
 				} catch (error) {
 					const errorTimestamp = Date.now();
 					this.logService.error(
-						`[Stream] [${errorTimestamp}] Error in async iteration: ${error instanceof Error ? error.message : String(error)
+						`[Stream] [${errorTimestamp}] Error in async iteration: ${
+							error instanceof Error ? error.message : String(error)
 						}`
 					);
 					if (!token.isCancellationRequested) {
@@ -459,10 +548,15 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 
 					const toolResultsForNextRequest: ServerToolResult[] = [];
 					const toolCallIds = toolCallParts.map((part) => part.toolCall!.id);
-					const toolCallNames = toolCallParts.map((part) => part.toolCall!.name);
+					const toolCallNames = toolCallParts.map(
+						(part) => part.toolCall!.name
+					);
 					this.logService.info(
-						`[chatgpt-server] Executing ${toolCallParts.length
-						} tool call(s): ${toolCallNames.map((name, i) => `${name} (${toolCallIds[i]})`).join(", ")}`
+						`[chatgpt-server] Executing ${
+							toolCallParts.length
+						} tool call(s): ${toolCallNames
+							.map((name, i) => `${name} (${toolCallIds[i]})`)
+							.join(", ")}`
 					);
 
 					// Log each tool call with details
@@ -471,7 +565,13 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						const toolId = nameToToolId.get(toolName);
 						const toolArgs = part.toolCall!.args ?? {};
 						this.logService.info(
-							`[Tool Call ${index + 1}/${toolCallParts.length}] Name: ${toolName}, ID: ${toolId || 'unknown'}, CallID: ${part.toolCall!.id}, Args: ${JSON.stringify(toolArgs).substring(0, 200)}${JSON.stringify(toolArgs).length > 200 ? '...' : ''}`
+							`[Tool Call ${index + 1}/${
+								toolCallParts.length
+							}] Name: ${toolName}, ID: ${toolId || "unknown"}, CallID: ${
+								part.toolCall!.id
+							}, Args: ${JSON.stringify(toolArgs).substring(0, 200)}${
+								JSON.stringify(toolArgs).length > 200 ? "..." : ""
+							}`
 						);
 					});
 
@@ -524,9 +624,17 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 							// Find task associated with this tool
 							const plan = this.agentPlanner.getPlan(request.requestId);
 							if (plan) {
-								const associatedTask = plan.tasks.find(t => t.toolId === toolId || t.description.toLowerCase().includes(toolName.toLowerCase()));
+								const associatedTask = plan.tasks.find(
+									(t) =>
+										t.toolId === toolId ||
+										t.description.toLowerCase().includes(toolName.toLowerCase())
+								);
 								if (associatedTask) {
-									this.agentPlanner.updateTaskStatus(planId, associatedTask.id, 'in_progress');
+									this.agentPlanner.updateTaskStatus(
+										planId,
+										associatedTask.id,
+										"in_progress"
+									);
 								}
 							}
 						}
@@ -620,8 +728,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 										textOutput.trim().length > 0
 											? textOutput
 											: result.toolResultError
-												? `Error: ${result.toolResultError}`
-												: "Tool executed successfully but returned no output.";
+											? `Error: ${result.toolResultError}`
+											: "Tool executed successfully but returned no output.";
 
 									return {
 										toolCallId: callId,
@@ -635,8 +743,12 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						try {
 							resultsBuffer[index] = await runWithTimeout();
 							const taskTime = Date.now() - taskStartTime;
-							const resultText = resultsBuffer[index]?.content?.[0]?.value || 'No output';
-							const resultPreview = resultText.length > 100 ? resultText.substring(0, 100) + '...' : resultText;
+							const resultText =
+								resultsBuffer[index]?.content?.[0]?.value || "No output";
+							const resultPreview =
+								resultText.length > 100
+									? resultText.substring(0, 100) + "..."
+									: resultText;
 							this.logService.info(
 								`[Tool Execution] Completed: ${toolName} (ID: ${toolId}, CallID: ${callId}) in ${taskTime}ms - Result: ${resultPreview}`
 							);
@@ -645,10 +757,23 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 							if (planId && this.agentPlanner && toolId) {
 								const plan = this.agentPlanner.getPlan(request.requestId);
 								if (plan) {
-									const associatedTask = plan.tasks.find(t => t.toolId === toolId || t.description.toLowerCase().includes(toolName.toLowerCase()));
+									const associatedTask = plan.tasks.find(
+										(t) =>
+											t.toolId === toolId ||
+											t.description
+												.toLowerCase()
+												.includes(toolName.toLowerCase())
+									);
 									if (associatedTask) {
-										const resultText = resultsBuffer[index]?.content?.[0]?.value || 'Completed successfully';
-										this.agentPlanner.updateTaskStatus(planId, associatedTask.id, 'completed', resultText);
+										const resultText =
+											resultsBuffer[index]?.content?.[0]?.value ||
+											"Completed successfully";
+										this.agentPlanner.updateTaskStatus(
+											planId,
+											associatedTask.id,
+											"completed",
+											resultText
+										);
 									}
 								}
 							}
@@ -676,9 +801,21 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 							if (planId && this.agentPlanner && toolId) {
 								const plan = this.agentPlanner.getPlan(request.requestId);
 								if (plan) {
-									const associatedTask = plan.tasks.find(t => t.toolId === toolId || t.description.toLowerCase().includes(toolName.toLowerCase()));
+									const associatedTask = plan.tasks.find(
+										(t) =>
+											t.toolId === toolId ||
+											t.description
+												.toLowerCase()
+												.includes(toolName.toLowerCase())
+									);
 									if (associatedTask) {
-										this.agentPlanner.updateTaskStatus(planId, associatedTask.id, 'failed', undefined, message);
+										this.agentPlanner.updateTaskStatus(
+											planId,
+											associatedTask.id,
+											"failed",
+											undefined,
+											message
+										);
 									}
 								}
 							}
@@ -702,8 +839,10 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					const parallelExecutionTime = Date.now() - parallelExecutionStartTime;
 					this.logService.info(
 						`[chatgpt-server] Completed parallel execution of ${tasks.length} tool call(s) in ${parallelExecutionTime}ms ` +
-						`(avg: ${(parallelExecutionTime / tasks.length).toFixed(2)}ms per call, ` +
-						`concurrency: ${maxConcurrency})`
+							`(avg: ${(parallelExecutionTime / tasks.length).toFixed(
+								2
+							)}ms per call, ` +
+							`concurrency: ${maxConcurrency})`
 					);
 
 					// Collect results in input order, ensuring a message per callId
@@ -729,8 +868,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					);
 					this.logService.info(
 						`[chatgpt-server] Collected ${toolResultsForNextRequest.length} tool results for next request. ` +
-						`Expected: ${toolCallIds.join(", ")}, ` +
-						`Got: ${resultCallIds.join(", ")}`
+							`Expected: ${toolCallIds.join(", ")}, ` +
+							`Got: ${resultCallIds.join(", ")}`
 					);
 
 					// Verify all tool calls have results
@@ -739,7 +878,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					);
 					if (missingResults.length > 0) {
 						this.logService.error(
-							`[chatgpt-server] CRITICAL: ${missingResults.length
+							`[chatgpt-server] CRITICAL: ${
+								missingResults.length
 							} tool call(s) missing results: ${missingResults.join(", ")}`
 						);
 					}
@@ -977,13 +1117,20 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		this.requestTools.set(requestId, tools);
 	}
 
-	private getAllowedToolData(requestId: string): IToolData[] {
+	private getAllowedToolData(
+		requestId: string,
+		chatMode?: string
+	): IToolData[] {
 		const selected = this.requestTools.get(requestId);
 		if (!selected) {
 			const allTools = Array.from(this.languageModelToolsService.getTools());
 			this.logService.debug(
 				`[chatgpt] no tools selected for request ${requestId}, using all ${allTools.length} registered tools`
 			);
+			// In Ask mode, filter out all edit/write tools
+			if (chatMode === ChatModeKind.Ask) {
+				return this.filterAskModeTools(allTools);
+			}
 			return allTools;
 		}
 		const allowedIds = Object.keys(selected).filter(
@@ -994,17 +1141,32 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			this.logService.debug(
 				`[chatgpt] tool selection for request ${requestId} contained no enabled entries, using all ${allTools.length} registered tools`
 			);
+			// In Ask mode, filter out all edit/write tools
+			if (chatMode === ChatModeKind.Ask) {
+				return this.filterAskModeTools(allTools);
+			}
 			return allTools;
 		}
 		const allowedSet = new Set(allowedIds);
-		const allowedTools: IToolData[] = [];
+		let allowedTools: IToolData[] = [];
 		for (const tool of this.languageModelToolsService.getTools()) {
 			if (allowedSet.has(tool.id)) {
 				allowedTools.push(tool);
 			}
 		}
+
+		// Apply Ask mode filtering even for user-selected tools
+		if (chatMode === ChatModeKind.Ask) {
+			const filteredTools = this.filterAskModeTools(allowedTools);
+			this.logService.debug(
+				`[chatgpt] Ask mode: filtered ${allowedTools.length} user-selected tools to ${filteredTools.length} allowed tools`
+			);
+			allowedTools = filteredTools;
+		}
+
 		this.logService.debug(
-			`[chatgpt] resolved ${allowedTools.length
+			`[chatgpt] resolved ${
+				allowedTools.length
 			} tools for request ${requestId}: ${allowedTools
 				.map((tool) => tool.id)
 				.join(", ")}`
@@ -1012,11 +1174,14 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		return allowedTools;
 	}
 
-	private buildChatGPTToolDeclarations(requestId: string): {
+	private buildChatGPTToolDeclarations(
+		requestId: string,
+		chatMode?: string
+	): {
 		tools: OpenAIFunction[];
 		nameToToolId: Map<string, string>;
 	} {
-		const allowedTools = this.getAllowedToolData(requestId);
+		const allowedTools = this.getAllowedToolData(requestId, chatMode);
 		if (!allowedTools.length) {
 			return { tools: [], nameToToolId: new Map() };
 		}
@@ -1156,9 +1321,12 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 	): Promise<ChatGPTStreamingResponse> {
 		const toolNames = tools.map((f) => f.function.name);
 		this.logService.info(
-			`[chatgpt-server] performRequest: model=${model}, messages=${messages.length
-			}, tools=${toolNames.join(", ") || "none"
-			}, hasContext=${!!context}, toolResults=${toolResults?.length || 0
+			`[chatgpt-server] performRequest: model=${model}, messages=${
+				messages.length
+			}, tools=${
+				toolNames.join(", ") || "none"
+			}, hasContext=${!!context}, toolResults=${
+				toolResults?.length || 0
 			}, mode=${mode || "unknown"}`
 		);
 
@@ -1240,12 +1408,15 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			};
 		});
 
-		const endpoint: "/api/agent/tools" = "/api/agent/tools";
+		// Use /api/agent/ask endpoint for Ask mode, /api/agent/tools for other modes
+		const endpoint: "/api/agent/tools" | "/api/agent/ask" =
+			mode === ChatModeKind.Ask ? "/api/agent/ask" : "/api/agent/tools";
 		const hasToolResults = toolResults && toolResults.length > 0;
 
 		this.logService.info(
-			`[chatgpt-server] Using endpoint: ${endpoint} (tools=${serverTools.length
-			}, toolResults=${toolResults?.length || 0})`
+			`[chatgpt-server] Using endpoint: ${endpoint} (tools=${
+				serverTools.length
+			}, toolResults=${toolResults?.length || 0}, mode=${mode || "unknown"})`
 		);
 
 		const requestOptions = {
@@ -1255,7 +1426,11 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			toolResults: hasToolResults ? toolResults : undefined,
 			mode,
 		};
-		this.logService.info(`[ChatGPTAgent] performRequest: sending request with modelName="${model || 'undefined'}" in options to server`);
+		this.logService.info(
+			`[ChatGPTAgent] performRequest: sending request with modelName="${
+				model || "undefined"
+			}" in options to server`
+		);
 
 		const response = await sendChatGPTRequest(
 			this.requestService,
@@ -1271,13 +1446,15 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		response.result.then(
 			(result) => {
 				this.logService.info(
-					`[chatgpt-server] Request completed: ${result.parts.length
+					`[chatgpt-server] Request completed: ${
+						result.parts.length
 					} parts, finishReason=${result.finishReason || "none"}`
 				);
 			},
 			(error) => {
 				this.logService.error(
-					`[chatgpt-server] Streaming request failed: ${error instanceof Error ? error.message : String(error)
+					`[chatgpt-server] Streaming request failed: ${
+						error instanceof Error ? error.message : String(error)
 					}`
 				);
 			}
