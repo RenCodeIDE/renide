@@ -1,0 +1,105 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.monaco-workbench .ren-auth-gate-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 2000; /* Below dialogs (2575), above most workbench UI */
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+	background: radial-gradient(1200px 600px at 20% 10%, rgba(0, 122, 204, 0.15), transparent 60%),
+		linear-gradient(135deg, rgba(0, 0, 0, 0.65), rgba(0, 0, 0, 0.35));
+	backdrop-filter: blur(8px);
+	pointer-events: auto; /* Ensure overlay itself can receive events */
+}
+
+/* Block pointer events on all workbench content when auth gate is active */
+.monaco-workbench.ren-auth-gated > *:not(.ren-auth-gate-overlay):not(.monaco-dialog-modal-block) {
+	pointer-events: none !important;
+}
+
+/* But ALWAYS allow dialog interaction - dialogs sit above the overlay */
+.monaco-workbench .monaco-dialog-modal-block,
+.monaco-workbench .monaco-dialog-box,
+.monaco-workbench .monaco-dialog-box *,
+.monaco-workbench .dialog-message-container,
+.monaco-workbench .dialog-message-container *,
+.monaco-workbench .dialog-buttons-row,
+.monaco-workbench .dialog-buttons-row *,
+.monaco-workbench .monaco-inputbox,
+.monaco-workbench .monaco-inputbox *,
+.monaco-workbench .quick-input-widget,
+.monaco-workbench .quick-input-widget * {
+	pointer-events: auto !important;
+}
+
+.monaco-workbench .ren-auth-gate-card {
+	background: var(--vscode-editor-background);
+	border: 1px solid var(--vscode-toolbar-hoverOutline, rgba(255, 255, 255, 0.08));
+	border-radius: 12px;
+	padding: 28px;
+	max-width: 520px;
+	width: min(520px, 92vw);
+	box-shadow: 0 18px 48px rgba(0, 0, 0, 0.4);
+	text-align: center;
+}
+
+.monaco-workbench .ren-auth-gate-card h2 {
+	margin: 0 0 10px 0;
+	font-size: 1.8em;
+	line-height: 1.2;
+}
+
+.monaco-workbench .ren-auth-gate-card p {
+	margin: 0 0 18px 0;
+	font-size: 1.05em;
+	line-height: 1.5;
+	opacity: 0.9;
+}
+
+.monaco-workbench .ren-auth-gate-actions {
+	display: flex;
+	gap: 10px;
+	justify-content: center;
+}
+
+.monaco-workbench .ren-auth-gate-actions .cta {
+	min-width: 140px;
+	padding: 8px 20px;
+	font-size: 0.95em;
+	border-radius: 6px;
+	cursor: pointer;
+	transition: opacity 0.15s ease;
+}
+
+.monaco-workbench .ren-auth-gate-actions .cta:hover {
+	opacity: 0.9;
+}
+
+.monaco-workbench .ren-auth-gate-actions .cta.secondary {
+	background: transparent;
+	border: 1px solid var(--vscode-button-secondaryBackground, rgba(255, 255, 255, 0.2));
+	color: var(--vscode-button-secondaryForeground, inherit);
+}
+
+.monaco-workbench .ren-auth-gate-actions .cta.secondary:hover {
+	background: var(--vscode-button-secondaryHoverBackground, rgba(255, 255, 255, 0.1));
+}
+
+.monaco-workbench .ren-auth-gate-footer {
+	margin-top: 16px;
+	font-size: 0.85em;
+	opacity: 0.7;
+}
+
+/* Keep focus visible even on custom backgrounds */
+.monaco-workbench .ren-auth-gate-overlay :focus-visible {
+	outline: 2px solid var(--vscode-focusBorder);
+	outline-offset: 2px;
+}
+
+

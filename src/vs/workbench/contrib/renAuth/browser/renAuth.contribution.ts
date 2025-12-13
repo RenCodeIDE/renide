@@ -24,6 +24,7 @@ import { RenAccountDashboardInput } from '../../../services/renAuth/browser/renA
 const REN_AUTH_COMMANDS = {
 	LOGIN: 'ren.auth.login',
 	LOGOUT: 'ren.auth.logout',
+	REGISTER: 'ren.auth.register',
 	OPEN_DASHBOARD: 'ren.account.openDashboard'
 };
 
@@ -153,6 +154,126 @@ export class RenAuthContribution extends Disposable implements IWorkbenchContrib
 					notificationService.info(localize('renAuth.logoutSuccess', 'Successfully signed out of Ren.'));
 				} catch (error) {
 					notificationService.error(localize('renAuth.logoutError', 'Failed to sign out: {0}.', error instanceof Error ? error.message : String(error)));
+				}
+			}
+		}));
+
+		// Register action for creating a new account
+		this._register(registerAction2(class RenRegisterAction extends Action2 {
+			constructor() {
+				super({
+					id: REN_AUTH_COMMANDS.REGISTER,
+					title: localize2('renAuth.createAccount', 'Ren: Create Account'),
+					category: localize2('renAuth.category', 'Ren'),
+					f1: true
+				});
+			}
+
+			async run(accessor: ServicesAccessor) {
+				const dialogService = accessor.get(IDialogService);
+				const notificationService = accessor.get(INotificationService);
+				const authService = accessor.get(IRenAuthService);
+				const storageService = accessor.get(IStorageService);
+
+				if (authService.isAuthenticated) {
+					notificationService.info(localize('renAuth.alreadyLoggedIn', 'You are already logged in to Ren.'));
+					return;
+				}
+
+				// Show registration dialog
+				const result = await dialogService.input({
+					type: Severity.Info,
+					message: localize('renAuth.registerTitle', 'Create a Ren Account'),
+					inputs: [
+						{
+							type: 'text',
+							placeholder: localize('renAuth.usernamePlaceholder', 'Username')
+						},
+						{
+							type: 'text',
+							placeholder: localize('renAuth.emailPlaceholder', 'Email')
+						},
+						{
+							type: 'password',
+							placeholder: localize('renAuth.passwordPlaceholder', 'Password')
+						},
+						{
+							type: 'password',
+							placeholder: localize('renAuth.confirmPasswordPlaceholder', 'Confirm Password')
+						}
+					],
+					primaryButton: localize('renAuth.createAccountButton', 'Create Account'),
+					checkbox: {
+						label: localize('renAuth.rememberMe', 'Remember email'),
+						checked: true
+					}
+				});
+
+				if (!result.confirmed || !result.values) {
+					return;
+				}
+
+				const [username, email, password, confirmPassword] = result.values;
+
+				if (!username || !email || !password) {
+					notificationService.error(localize('renAuth.emptyFields', 'All fields are required.'));
+					return;
+				}
+
+				if (password !== confirmPassword) {
+					notificationService.error(localize('renAuth.passwordMismatch', 'Passwords do not match.'));
+					return;
+				}
+
+				// Validate email format
+				const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+				if (!emailRegex.test(email)) {
+					notificationService.error(localize('renAuth.invalidEmail', 'Please enter a valid email address.'));
+					return;
+				}
+
+				// Show progress notification
+				const progressNotification = notificationService.notify({
+					severity: Severity.Info,
+					message: localize('renAuth.creatingAccount', 'Creating your Ren account...'),
+					source: 'Ren Auth'
+				});
+
+				try {
+					// For now, we'll use the login endpoint with the registration info
+					// In a real implementation, this would call a register endpoint
+					// The backend should handle creating the account
+					const response = await fetch('https://api.ren.dev/auth/register', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ username, email, password })
+					});
+
+					progressNotification.close();
+
+					if (response.ok) {
+						const data = await response.json();
+						
+						// Remember email if checkbox was checked
+						if (result.checkboxChecked) {
+							storageService.store(REN_AUTH_STORAGE_KEYS.REMEMBERED_EMAIL, email, StorageScope.APPLICATION, 0);
+						}
+
+						notificationService.info(localize('renAuth.accountCreated', 'Account created successfully! You can now sign in.'));
+						
+						// Automatically trigger login after successful registration
+						if (data.token) {
+							// If the API returns a token, we can auto-login
+							await authService.login(email, password, !!result.checkboxChecked);
+						}
+					} else {
+						const errorData = await response.json().catch(() => ({}));
+						const errorMessage = errorData.message || localize('renAuth.registrationFailed', 'Failed to create account. Please try again.');
+						notificationService.error(errorMessage);
+					}
+				} catch (error) {
+					progressNotification.close();
+					notificationService.error(localize('renAuth.networkError', 'Network error. Please check your connection and try again.'));
 				}
 			}
 		}));

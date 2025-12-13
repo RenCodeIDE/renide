@@ -681,11 +681,13 @@ export function registerChatCodeCompareBlockActions() {
 						console.log('[DEBUG-METRICS] Applying agent edit');
 						// #endregion
 						const projectId = await metricsService.getProjectIdAsync();
+						// Flatten item.edits (TextEdit[][]) to TextEdit[] for metrics calculation
+						const allEdits = item.edits.flat();
 						metricsService.trackEditApplied({
 							editId: generateUuid(),
 							type: 'agent',
-							sizeChars: textEdits.reduce((sum, edit) => sum + edit.text.length, 0),
-							sizeLines: textEdits.length,
+							sizeChars: allEdits.reduce((sum: number, edit) => sum + edit.text.length, 0),
+							sizeLines: allEdits.length,
 							sessionId: response.session.sessionId,
 							projectId,
 						});

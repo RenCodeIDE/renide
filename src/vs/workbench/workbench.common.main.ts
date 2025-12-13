@@ -368,6 +368,7 @@ import './contrib/authentication/browser/authentication.contribution.js';
 
 // Ren Auth
 import './contrib/renAuth/browser/renAuth.contribution.js';
+import './contrib/renAuth/browser/renAuthGate.contribution.js';
 
 // User Data Sync
 import './contrib/userDataSync/browser/userDataSync.contribution.js';
