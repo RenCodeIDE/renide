@@ -154,6 +154,8 @@
 		".  header header header ."
 		". left-column . right-column ."
 		". footer footer footer .";
+	row-gap: 16px;
+	column-gap: 24px;
 }
 
 /* Center the header content for a cleaner, aligned look */
@@ -164,12 +166,17 @@
 	.gettingStartedSlideCategories
 	> .gettingStartedCategoriesContainer
 	> .header {
-		text-align: center;
+	text-align: center;
+	padding-top: 8px;
 	}
 
 .monaco-workbench .part.editor > .content .gettingStartedContainer .header h1,
 .monaco-workbench .part.editor > .content .gettingStartedContainer .header .subtitle {
 	text-align: center;
+}
+
+.monaco-workbench .part.editor > .content .gettingStartedContainer .gettingStartedCategoriesContainer .header p.subtitle {
+	margin-bottom: 0;
 }
 
 .monaco-workbench
@@ -249,6 +256,53 @@
 	> * {
 	overflow: hidden;
 	text-overflow: ellipsis;
+}
+
+.monaco-workbench .part.editor > .content .gettingStartedContainer.with-onboarding .gettingStartedSlideCategories,
+.monaco-workbench .part.editor > .content .gettingStartedContainer .gettingStartedSlideCategories.with-onboarding {
+	position: relative;
+}
+
+.monaco-workbench .part.editor > .content .gettingStartedContainer .onboarding-overlay {
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(135deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.35));
+	backdrop-filter: blur(6px);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 2;
+	padding: 24px;
+}
+
+.monaco-workbench .part.editor > .content .gettingStartedContainer .onboarding-card {
+	background: var(--vscode-editor-background);
+	border: 1px solid var(--vscode-toolbar-hoverOutline, rgba(255, 255, 255, 0.08));
+	border-radius: 10px;
+	padding: 24px;
+	max-width: 420px;
+	box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+	text-align: center;
+}
+
+.monaco-workbench .part.editor > .content .gettingStartedContainer .onboarding-card h2 {
+	margin: 0 0 8px 0;
+	font-size: 1.6em;
+}
+
+.monaco-workbench .part.editor > .content .gettingStartedContainer .onboarding-card p {
+	margin: 0 0 16px 0;
+	font-size: 1em;
+}
+
+.monaco-workbench .part.editor > .content .gettingStartedContainer .onboarding-card .onboarding-actions {
+	display: flex;
+	gap: 10px;
+	justify-content: center;
+}
+
+.monaco-workbench .part.editor > .content .gettingStartedContainer .onboarding-card .onboarding-actions .cta {
+	min-width: 120px;
 }
 
 .monaco-workbench
@@ -450,6 +504,28 @@
 	top: 3px;
 	max-width: 16px;
 	max-height: 16px;
+}
+
+.monaco-workbench .part.editor > .content .gettingStartedContainer .start-container li button.button-link,
+.monaco-workbench .part.editor > .content .gettingStartedContainer .recently-opened button.button-link {
+	width: 100%;
+	text-align: left;
+	padding: 8px 10px;
+	border-radius: 6px;
+	border: 1px solid var(--vscode-toolbar-hoverOutline, transparent);
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	justify-content: space-between;
+}
+
+.monaco-workbench .part.editor > .content .gettingStartedContainer .start-container li button.button-link:hover,
+.monaco-workbench .part.editor > .content .gettingStartedContainer .recently-opened button.button-link:hover {
+	background-color: var(--vscode-list-hoverBackground);
+}
+
+.monaco-workbench .part.editor > .content .gettingStartedContainer .recently-opened .path.detail {
+	opacity: 0.75;
 }
 
 .monaco-workbench

@@ -53,6 +53,7 @@ import {
 import type { GeminiContentPart } from "./types.js";
 import { IConfigurationService } from "../../../../../platform/configuration/common/configuration.js";
 import { ILanguageFeaturesService } from "../../../../../editor/common/services/languageFeatures.js";
+import { IMetricsService } from "../../../../services/metrics/common/metricsService.js";
 
 export class GeminiAgentImplementation implements IChatAgentImplementation {
 	private readonly requestTools = new Map<string, UserSelectedTools>();
@@ -72,7 +73,8 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 		private readonly languageModelsService: ILanguageModelsService,
 		private readonly chatAgentService: IChatAgentService,
 		private readonly configurationService: IConfigurationService,
-		languageFeaturesService?: ILanguageFeaturesService
+		languageFeaturesService?: ILanguageFeaturesService,
+		private readonly metricsService?: IMetricsService
 	) {
 		this.contextBuilder = new ContextBuilder(
 			textModelService,
@@ -281,13 +283,20 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 					conversationToolResults.size > 0
 						? Array.from(conversationToolResults.values())
 						: undefined;
+				// Get project ID asynchronously to ensure it's initialized
+				const projectId = await this.metricsService?.getProjectIdAsync();
+				// #region agent log
+				console.log('[DEBUG-METRICS] GeminiAgent projectId for request', { projectId, hasMetricsService: !!this.metricsService, sessionId: request.sessionId });
+				// #endregion
 				const streamingResponse = await this.performRequest(
 					messages,
 					toolConfigs,
 					token,
 					modelToUse,
 					toolResultsForServer,
-					request.chatMode
+					request.chatMode,
+					request.sessionId, // Pass sessionId for metrics tracking
+					projectId // Pass projectId for metrics tracking
 				);
 				let streamedText = false;
 
@@ -1087,7 +1096,9 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		token: CancellationToken,
 		model: string,
 		toolResults?: ServerToolResult[],
-		mode?: string
+		mode?: string,
+		sessionId?: string,
+		projectId?: string
 	): Promise<ChatGPTStreamingResponse> {
 		const toolNames = tools.map((t) => t.name || "<unnamed>");
 		this.logService.info(
@@ -1136,6 +1147,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				tools: tools,
 				toolResults: hasToolResults ? toolResults : undefined,
 				mode: mode,
+				sessionId,
+				projectId,
 			},
 			this.logService,
 			"gemini"

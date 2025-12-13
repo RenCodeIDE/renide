@@ -117,6 +117,7 @@ import './services/authentication/browser/dynamicAuthenticationProviderStorageSe
 import './services/authentication/browser/authenticationQueryService.js';
 import './services/accounts/common/defaultAccount.js';
 import './services/renAuth/browser/renAuthService.js';
+import './services/metrics/browser/metricsService.js';
 import '../platform/hover/browser/hoverService.js';
 import './services/assignment/common/assignmentService.js';
 import './services/outline/browser/outlineService.js';
@@ -418,6 +419,9 @@ import './contrib/scrollLocking/browser/scrollLocking.contribution.js';
 
 // Inline Completions
 import './contrib/inlineCompletions/browser/inlineCompletions.contribution.js';
+
+// Metrics Event Tracking
+import './contrib/metrics/browser/metricsContribution.js';
 
 // Drop or paste into
 import './contrib/dropOrPasteInto/browser/dropOrPasteInto.contribution.js';

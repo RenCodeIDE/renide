@@ -91,6 +91,10 @@ export interface ServerRequestOptions {
 		parameters?: unknown;
 	}>;
 	readonly toolResults?: ServerToolResult[];
+	/** Chat session ID for metrics tracking */
+	readonly sessionId?: string;
+	/** Project ID for metrics tracking */
+	readonly projectId?: string;
 }
 
 export interface IDEStreamPart {

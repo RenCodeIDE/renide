@@ -43,6 +43,7 @@ import { IWorkspaceContextService } from '../../../../../platform/workspace/comm
 import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
 import { ILanguageFeaturesService } from '../../../../../editor/common/services/languageFeatures.js';
+import { IMetricsService } from '../../../../services/metrics/common/metricsService.js';
 import '../../common/agentIntelligence.contribution.js';
 
 class ChatGPTAgentContribution
@@ -164,6 +165,14 @@ class ChatGPTAgentContribution
 			// Service not available
 		}
 
+		// Get metrics service for project tracking
+		let metricsService: IMetricsService | undefined;
+		try {
+			metricsService = this.instantiationService.invokeFunction(accessor => accessor.get(IMetricsService));
+		} catch {
+			// Service not available
+		}
+
 		const implementation = new ChatGPTAgentImplementation(
 			this.requestService,
 			normalizedServerAddress,
@@ -178,6 +187,7 @@ class ChatGPTAgentContribution
 			workspaceService,
 			fileService,
 			languageFeaturesService,
+			metricsService,
 		);
 		this._register(this.chatAgentService.registerAgentImplementation(agentId, implementation));
 

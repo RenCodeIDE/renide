@@ -39,6 +39,8 @@ import { IChatCodeBlockContextProviderService, IChatWidgetService } from '../cha
 import { DefaultChatTextEditor, ICodeBlockActionContext, ICodeCompareBlockActionContext } from '../codeBlockPart.js';
 import { CHAT_CATEGORY } from './chatActions.js';
 import { ApplyCodeBlockOperation, InsertCodeBlockOperation } from './codeBlockOperations.js';
+import { IMetricsService } from '../../../../services/metrics/common/metricsService.js';
+import { generateUuid } from '../../../../../base/common/uuid.js';
 
 const shellLangIds = [
 	'fish',
@@ -670,6 +672,34 @@ export function registerChatCodeCompareBlockActions() {
 				editorToApply.revealLineInCenterIfOutsideViewport(firstEdit.range.startLineNumber);
 				instaService.invokeFunction(reviewEdits, editorToApply, textEdits, CancellationToken.None, undefined);
 				response.setEditApplied(item, 1);
+
+				// Track edit applied for metrics
+				try {
+					const metricsService = accessor.get(IMetricsService);
+					if (metricsService) {
+						// #region agent log
+						console.log('[DEBUG-METRICS] Applying agent edit');
+						// #endregion
+						const projectId = await metricsService.getProjectIdAsync();
+						metricsService.trackEditApplied({
+							editId: generateUuid(),
+							type: 'agent',
+							sizeChars: textEdits.reduce((sum, edit) => sum + edit.text.length, 0),
+							sizeLines: textEdits.length,
+							sessionId: response.session.sessionId,
+							projectId,
+						});
+						// #region agent log
+						console.log('[DEBUG-METRICS] Edit applied tracked', { projectId, sessionId: response.session.sessionId });
+						// #endregion
+					}
+				} catch (error) {
+					// Metrics service may not be available, ignore
+					// #region agent log
+					console.log('[DEBUG-METRICS] Edit applied tracking error', { error: String(error) });
+					// #endregion
+				}
+
 				return true;
 			}
 			return false;
@@ -697,6 +727,25 @@ export function registerChatCodeCompareBlockActions() {
 			const instaService = accessor.get(IInstantiationService);
 			const editor = instaService.createInstance(DefaultChatTextEditor);
 			editor.discard(context.element, context.edit);
+
+			// Track edit reverted for metrics
+			try {
+				const metricsService = accessor.get(IMetricsService);
+				if (metricsService) {
+					// #region agent log
+					console.log('[DEBUG-METRICS] Reverting agent edit');
+					// #endregion
+					metricsService.trackEditReverted(generateUuid(), 'agent', context.element.session.sessionId);
+					// #region agent log
+					console.log('[DEBUG-METRICS] Edit reverted tracked', { sessionId: context.element.session.sessionId });
+					// #endregion
+				}
+			} catch (error) {
+				// Metrics service may not be available, ignore
+				// #region agent log
+				console.log('[DEBUG-METRICS] Edit reverted tracking error', { error: String(error) });
+				// #endregion
+			}
 		}
 	});
 }

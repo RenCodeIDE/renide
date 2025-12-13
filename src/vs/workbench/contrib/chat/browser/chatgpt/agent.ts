@@ -61,6 +61,7 @@ import { IWorkspaceContextService } from "../../../../../platform/workspace/comm
 import { IFileService } from "../../../../../platform/files/common/files.js";
 import { URI } from "../../../../../base/common/uri.js";
 import { ChatModeKind } from "../../common/constants.js";
+import { IMetricsService } from "../../../../services/metrics/common/metricsService.js";
 
 export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 	/**
@@ -121,7 +122,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		private readonly dependencyGraphService?: IDependencyGraphService,
 		private readonly workspaceService?: IWorkspaceContextService,
 		private readonly fileService?: IFileService,
-		languageFeaturesService?: ILanguageFeaturesService
+		languageFeaturesService?: ILanguageFeaturesService,
+		private readonly metricsService?: IMetricsService
 	) {
 		this.contextBuilder = new ContextBuilder(
 			textModelService,
@@ -413,6 +415,11 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				this.logService.info(
 					`[ChatGPTAgent] invoke: calling performRequest with modelToUse="${modelToUse}" (modelName will be sent as "${modelToUse}")`
 				);
+				// Get project ID asynchronously to ensure it's initialized
+				const projectId = await this.metricsService?.getProjectIdAsync();
+				// #region agent log
+				console.log('[DEBUG-METRICS] ChatGPTAgent projectId for request', { projectId, hasMetricsService: !!this.metricsService });
+				// #endregion
 				const streamingResponse = await this.performRequest(
 					messages,
 					toolConfigs,
@@ -420,7 +427,9 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					modelToUse,
 					contextString,
 					toolResultsForServer,
-					request.chatMode
+					request.chatMode,
+					request.sessionId, // Pass sessionId for metrics tracking
+					projectId // Pass projectId for metrics tracking
 				);
 				let streamedText = false;
 
@@ -1317,7 +1326,9 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		model: string,
 		context?: string,
 		toolResults?: ServerToolResult[],
-		mode?: string
+		mode?: string,
+		sessionId?: string,
+		projectId?: string
 	): Promise<ChatGPTStreamingResponse> {
 		const toolNames = tools.map((f) => f.function.name);
 		this.logService.info(
@@ -1425,6 +1436,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			tools: serverTools,
 			toolResults: hasToolResults ? toolResults : undefined,
 			mode,
+			sessionId,
+			projectId,
 		};
 		this.logService.info(
 			`[ChatGPTAgent] performRequest: sending request with modelName="${

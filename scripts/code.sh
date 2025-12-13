@@ -56,6 +56,8 @@ function code() {
 	export VSCODE_CLI=1
 	export ELECTRON_ENABLE_STACK_DUMPING=1
 	export ELECTRON_ENABLE_LOGGING=1
+	# Server address for dev mode - points to local server
+	export SERVER_ADDRESS=http://localhost:8787
 
 	DISABLE_TEST_EXTENSION="--disable-extension=vscode.vscode-api-tests"
 	if [[ "$@" == *"--extensionTestsPath"* ]]; then

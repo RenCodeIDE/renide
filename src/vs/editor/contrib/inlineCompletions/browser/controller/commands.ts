@@ -24,6 +24,8 @@ import { Context as SuggestContext } from '../../../suggest/browser/suggest.js';
 import { hideInlineCompletionId, inlineSuggestCommitId, jumpToNextInlineEditId, showNextInlineSuggestionActionId, showPreviousInlineSuggestionActionId, toggleShowCollapsedId } from './commandIds.js';
 import { InlineCompletionContextKeys } from './inlineCompletionContextKeys.js';
 import { InlineCompletionsController } from './inlineCompletionsController.js';
+import { IMetricsService } from '../../../../../workbench/services/metrics/common/metricsService.js';
+import { generateUuid } from '../../../../../base/common/uuid.js';
 
 export class ShowNextInlineSuggestionAction extends EditorAction {
 	public static ID = showNextInlineSuggestionActionId;
@@ -233,6 +235,19 @@ export class AcceptInlineCompletion extends EditorAction {
 		if (controller) {
 			controller.model.get()?.accept(controller.editor);
 			controller.editor.focus();
+
+			// Track suggestion acceptance for metrics
+			try {
+				const metricsService = accessor.get(IMetricsService);
+				if (metricsService) {
+					metricsService.trackEditApplied({
+						editId: generateUuid(),
+						type: 'inline',
+					});
+				}
+			} catch {
+				// Metrics service may not be available, ignore
+			}
 		}
 	}
 }

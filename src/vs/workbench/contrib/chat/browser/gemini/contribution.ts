@@ -45,6 +45,7 @@ import { reduceMessageParts } from './conversion.js';
 import { sendChatGPTRequest } from '../chatgpt/request.js';
 // @ts-ignore - Module resolution error is false positive, files exist
 import { validateIDEFormatStatic } from '../chatgpt/validation.js';
+import { IMetricsService } from '../../../../services/metrics/common/metricsService.js';
 
 class GeminiAgentContribution
 	extends Disposable
@@ -111,6 +112,14 @@ class GeminiAgentContribution
 			// Service not available
 		}
 
+		// Get metrics service for project tracking
+		let metricsService: IMetricsService | undefined;
+		try {
+			metricsService = this.instantiationService.invokeFunction(accessor => accessor.get(IMetricsService));
+		} catch {
+			// Service not available
+		}
+
 		const implementation = new GeminiAgentImplementation(
 			this.requestService,
 			serverAddress,
@@ -122,6 +131,7 @@ class GeminiAgentContribution
 			this.chatAgentService,
 			this.configurationService,
 			languageFeaturesService,
+			metricsService,
 		);
 		this._register(this.chatAgentService.registerAgentImplementation(agentId, implementation));
 

@@ -67,6 +67,7 @@ import { GroupsOrder, IEditorGroup, IEditorGroupsService, preferredSideBySideGro
 import { IExtensionService } from '../../../services/extensions/common/extensions.js';
 import { IHostService } from '../../../services/host/browser/host.js';
 import { IWorkbenchThemeService } from '../../../services/themes/common/workbenchThemeService.js';
+import { IRenAuthService } from '../../../services/renAuth/common/renAuth.js';
 import { GettingStartedIndexList } from './gettingStartedList.js';
 import { AccessibilityVerbositySettingId } from '../../accessibility/browser/accessibilityConfiguration.js';
 import { AccessibleViewAction } from '../../accessibility/browser/accessibleViewActions.js';
@@ -162,6 +163,8 @@ export class GettingStartedPage extends EditorPane {
 
 	private readonly categoriesSlideDisposables: DisposableStore;
 	private showFeaturedWalkthrough = true;
+	private onboardingOverlay?: HTMLElement;
+	private readonly onboardingDismissedKey = 'ren.onboarding.dismissed';
 
 	get editorInput(): GettingStartedInput {
 		return this._input as GettingStartedInput;
@@ -180,6 +183,7 @@ export class GettingStartedPage extends EditorPane {
 		@IOpenerService private readonly openerService: IOpenerService,
 		@IWorkbenchThemeService protected override readonly themeService: IWorkbenchThemeService,
 		@IStorageService private storageService: IStorageService,
+		@IRenAuthService private readonly renAuthService: IRenAuthService,
 		@IExtensionService private readonly extensionService: IExtensionService,
 		@IInstantiationService private readonly instantiationService: IInstantiationService,
 		@INotificationService private readonly notificationService: INotificationService,
@@ -981,6 +985,65 @@ export class GettingStartedPage extends EditorPane {
 		}
 
 		this.setSlide('categories');
+
+		this.showOnboardingIfNeeded();
+	}
+
+	private showOnboardingIfNeeded(): void {
+		const dismissed = this.storageService.getBoolean(this.onboardingDismissedKey, StorageScope.APPLICATION, false);
+		if (dismissed || this.renAuthService.isAuthenticated || !this.categoriesSlide) {
+			return;
+		}
+
+		if (this.onboardingOverlay) {
+			return;
+		}
+
+		const dismiss = (persist: boolean) => {
+			if (persist) {
+				this.storageService.store(this.onboardingDismissedKey, true, StorageScope.APPLICATION, StorageTarget.USER);
+			}
+			this.onboardingOverlay?.remove();
+			this.onboardingOverlay = undefined;
+			this.container.classList.remove('with-onboarding');
+			this.categoriesSlide.classList.remove('with-onboarding');
+		};
+
+		const overlay = this.onboardingOverlay = $('.onboarding-overlay', {},
+			$('.onboarding-card', {},
+				$('h2', {}, localize('ren.onboarding.title', "Welcome to Ren IDE")),
+				$('p', {}, localize('ren.onboarding.subtitle', "Sign in to sync settings, devices, and get personalized help.")),
+				$('.onboarding-actions', {},
+					$('button.monaco-button', {
+						class: 'cta primary',
+					}, localize('ren.onboarding.signIn', "Sign in")),
+					$('button.monaco-button', {
+						class: 'cta secondary',
+					}, localize('ren.onboarding.skip', "Maybe later")),
+				)
+			)
+		);
+
+		const primary = overlay.querySelector<HTMLButtonElement>('button.primary');
+		const secondary = overlay.querySelector<HTMLButtonElement>('button.secondary');
+
+		primary?.addEventListener('click', () => {
+			void this.commandService.executeCommand('ren.auth.login');
+		});
+
+		secondary?.addEventListener('click', () => {
+			dismiss(true);
+		});
+
+		this.container.classList.add('with-onboarding');
+		this.categoriesSlide.classList.add('with-onboarding');
+		this.categoriesSlide.appendChild(overlay);
+
+		this.categoriesSlideDisposables.add(this.renAuthService.onDidChangeAuthStatus(authenticated => {
+			if (authenticated) {
+				dismiss(false);
+			}
+		}));
 	}
 
 	private buildRecentlyOpenedList(): GettingStartedIndexList<RecentEntry> {

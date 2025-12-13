@@ -457,8 +457,13 @@ class CodeMain {
 
 		const instanceEnvironment: IProcessEnvironment = {
 			VSCODE_IPC_HOOK: environmentMainService.mainIPCHandle,
-			...envVarsFromFile, // Include .env variables so they're passed to renderer processes
-			...product.environmentVariables, // Include environment variables from product.json
+			...product.environmentVariables, // Defaults from product.json (lowest priority)
+			...envVarsFromFile, // .env file overrides product.json
+			...Object.fromEntries( // Shell environment variables override everything (highest priority)
+				Object.entries(process.env).filter(([key]) =>
+					['SERVER_ADDRESS', 'API_BASE_URL', 'NODE_ENV', 'VSCODE_DEV'].includes(key) && process.env[key]
+				)
+			),
 		};
 
 		["VSCODE_NLS_CONFIG", "VSCODE_PORTABLE"].forEach((key) => {

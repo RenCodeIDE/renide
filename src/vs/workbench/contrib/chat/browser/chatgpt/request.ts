@@ -339,13 +339,22 @@ export async function sendChatGPTRequest(
 				`[chatgpt-server] Starting fetch request, beginning SSE stream parsing`
 			);
 
+			// Build headers with optional metrics tracking
+			const headers: Record<string, string> = {
+				"Content-Type": "application/json",
+				Authorization: `Bearer ${accessToken}`,
+				Accept: "text/event-stream",
+			};
+			if (options?.sessionId) {
+				headers["x-session-id"] = options.sessionId;
+			}
+			if (options?.projectId) {
+				headers["x-project-id"] = options.projectId;
+			}
+
 			const response = await fetch(url, {
 				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					Authorization: `Bearer ${accessToken}`,
-					Accept: "text/event-stream",
-				},
+				headers,
 				body: body,
 				signal: abortController.signal,
 			});
