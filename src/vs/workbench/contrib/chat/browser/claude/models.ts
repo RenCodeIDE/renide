@@ -24,8 +24,8 @@ export const CLAUDE_MODELS: ClaudeModelConfig[] = [
 		isDefault: true
 	},
 	{
-		id: 'claude-3-5-sonnet-20241022',
-		identifier: 'anthropic/claude-3-5-sonnet-20241022',
+		id: 'claude-3-5-sonnet-latest',
+		identifier: 'anthropic/claude-3-5-sonnet-latest',
 		name: 'Claude 3.5 Sonnet',
 		description: 'Anthropic Claude 3.5 Sonnet - balanced performance.',
 		maxInputTokens: 200000,

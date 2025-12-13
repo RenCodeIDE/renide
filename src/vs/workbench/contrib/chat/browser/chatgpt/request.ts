@@ -33,7 +33,7 @@ export async function sendChatGPTRequest(
 	token: CancellationToken,
 	options?: ServerRequestOptions,
 	logService?: ILogService,
-	modelType: "openai" | "gemini" | "claude" = "openai"
+	modelType: "openai" | "gemini" | "claude" | "deepseek" = "openai"
 ): Promise<ChatGPTStreamingResponse> {
 	// Normalize serverAddress (remove trailing slashes)
 	const normalizedServerAddress = serverAddress.trim().replace(/\/+$/, "");
@@ -110,10 +110,8 @@ export async function sendChatGPTRequest(
 
 	logService?.info(`[chatgpt-server] Sending request to ${url}`);
 	logService?.info(
-		`[chatgpt-server] Request payload: model="${payload.model}", modelName="${
-			payload.modelName || "undefined"
-		}", messages=${messages.length}, tools=${
-			options?.tools?.length || 0
+		`[chatgpt-server] Request payload: model="${payload.model}", modelName="${payload.modelName || "undefined"
+		}", messages=${messages.length}, tools=${options?.tools?.length || 0
 		}, toolResults=${options?.toolResults?.length || 0}`
 	);
 	logService?.debug(
@@ -249,13 +247,11 @@ export async function sendChatGPTRequest(
 			);
 		} catch (error) {
 			logService?.error(
-				`[Stream] [${timestamp}] SSE chunk parse failure: ${
-					error instanceof Error ? error.message : String(error)
+				`[Stream] [${timestamp}] SSE chunk parse failure: ${error instanceof Error ? error.message : String(error)
 				}`
 			);
 			const err = new Error(
-				`Streaming chunk parse failure: ${
-					error instanceof Error ? error.message : String(error)
+				`Streaming chunk parse failure: ${error instanceof Error ? error.message : String(error)
 				}`
 			);
 			finalizeError(err);
@@ -270,6 +266,12 @@ export async function sendChatGPTRequest(
 					if (part.value !== undefined && part.value.length > 0) {
 						textAccumulator.push(part.value);
 						newParts.push({ text: part.value });
+					}
+					break;
+
+				case "thinking":
+					if (part.value !== undefined && part.value.length > 0) {
+						newParts.push({ thinking: part.value });
 					}
 					break;
 
@@ -296,8 +298,7 @@ export async function sendChatGPTRequest(
 
 				case "error": {
 					logService?.error(
-						`[chatgpt-server] Received error part: ${
-							part.message || "Unknown error"
+						`[chatgpt-server] Received error part: ${part.message || "Unknown error"
 						}`
 					);
 					const err = new Error(part.message || "Streaming error");
@@ -307,8 +308,7 @@ export async function sendChatGPTRequest(
 
 				default:
 					logService?.warn(
-						`[chatgpt-server] Unknown part type: ${
-							(part as IDEStreamPart).type
+						`[chatgpt-server] Unknown part type: ${(part as IDEStreamPart).type
 						}`
 					);
 					break;

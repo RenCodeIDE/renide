@@ -97,8 +97,7 @@ export class ClaudeAgentImplementation implements IChatAgentImplementation {
 			return token ?? undefined;
 		} catch (error) {
 			this.logService.error(
-				`[claude-server] Error retrieving access token: ${
-					error instanceof Error ? error.message : String(error)
+				`[claude-server] Error retrieving access token: ${error instanceof Error ? error.message : String(error)
 				}`
 			);
 			return undefined;
@@ -115,7 +114,7 @@ export class ClaudeAgentImplementation implements IChatAgentImplementation {
 			}
 		}
 		const defaultModel = CLAUDE_MODELS.find((m) => m.isDefault);
-		return defaultModel?.id || "claude-3-5-sonnet-20241022";
+		return defaultModel?.id || "claude-3-5-sonnet-latest";
 	}
 
 	async invoke(
@@ -161,6 +160,19 @@ export class ClaudeAgentImplementation implements IChatAgentImplementation {
 						token
 					);
 				}
+				// If the selected model is DeepSeek, route through the DeepSeek agent so tools execute
+				if (
+					selectedModelMetadata.vendor === "deepseek" ||
+					request.userSelectedModelId.startsWith("deepseek/")
+				) {
+					return this.chatAgentService.invokeAgent(
+						"deepseek.local",
+						request,
+						progress,
+						history,
+						token
+					);
+				}
 				// Otherwise, delegate to language models service for cross-vendor model
 				return this.invokeViaLanguageModelsService(
 					request,
@@ -180,8 +192,7 @@ export class ClaudeAgentImplementation implements IChatAgentImplementation {
 		// Read tools from request object first (setRequestTools() may not be called for initial value)
 		if (request.userSelectedTools) {
 			this.logService.debug(
-				`[claude] reading tools from request object for request ${
-					request.requestId
+				`[claude] reading tools from request object for request ${request.requestId
 				}: ${JSON.stringify(request.userSelectedTools)}`
 			);
 			this.requestTools.set(request.requestId, request.userSelectedTools);
@@ -379,11 +390,11 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				const assistantContent: Array<
 					| { type: "text"; value: string }
 					| {
-							type: "tool_use";
-							name: string;
-							toolCallId: string;
-							parameters: Record<string, unknown>;
-					  }
+						type: "tool_use";
+						name: string;
+						toolCallId: string;
+						parameters: Record<string, unknown>;
+					}
 				> = [];
 
 				// Add text content if present
@@ -577,8 +588,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 									textOutput.trim().length > 0
 										? textOutput
 										: (result as any).toolResultError
-										? `Error: ${(result as any).toolResultError}`
-										: "Tool executed successfully but returned no output.";
+											? `Error: ${(result as any).toolResultError}`
+											: "Tool executed successfully but returned no output.";
 								return {
 									toolCallId: callId,
 									content: [{ type: "text" as const, value: finalOutput }],
@@ -630,10 +641,10 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				const parallelExecutionTime = Date.now() - parallelExecutionStartTime;
 				this.logService.info(
 					`[claude-server] Completed parallel execution of ${tasks.length} tool call(s) in ${parallelExecutionTime}ms ` +
-						`(avg: ${(parallelExecutionTime / tasks.length).toFixed(
-							2
-						)}ms per call, ` +
-						`concurrency: ${maxConcurrency})`
+					`(avg: ${(parallelExecutionTime / tasks.length).toFixed(
+						2
+					)}ms per call, ` +
+					`concurrency: ${maxConcurrency})`
 				);
 
 				for (let i = 0; i < resultsBuffer.length; i++) {
@@ -930,8 +941,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		}
 
 		this.logService.debug(
-			`[claude] resolved ${
-				allowedTools.length
+			`[claude] resolved ${allowedTools.length
 			} tools for request ${requestId}: ${allowedTools
 				.map((tool) => tool.id)
 				.join(", ")}`
@@ -950,8 +960,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		const allowedTools = this.getAllowedToolData(requestId, chatMode);
 		if (!allowedTools.length) {
 			this.logService.warn(
-				`[claude] buildClaudeToolDeclarations: No tools available for request ${requestId} in mode ${
-					chatMode || "unknown"
+				`[claude] buildClaudeToolDeclarations: No tools available for request ${requestId} in mode ${chatMode || "unknown"
 				}. This will prevent tool calls.`
 			);
 			return { tools: [], nameToToolId: new Map(), summaries: [] };
@@ -1111,10 +1120,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 	): Promise<ChatGPTStreamingResponse> {
 		const toolNames = tools.map((t) => t.name || "<unnamed>");
 		this.logService.info(
-			`[claude-server] performRequest: model=${model}, messages=${
-				messages.length
-			}, tools=${toolNames.join(", ") || "none"}, toolResults=${
-				toolResults?.length || 0
+			`[claude-server] performRequest: model=${model}, messages=${messages.length
+			}, tools=${toolNames.join(", ") || "none"}, toolResults=${toolResults?.length || 0
 			}, mode=${mode || "unknown"}`
 		);
 
@@ -1143,8 +1150,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		const maxOutputTokens = modelConfig?.maxOutputTokens ?? 8192;
 
 		this.logService.info(
-			`[claude-server] Using endpoint: ${endpoint} (tools=${
-				tools.length
+			`[claude-server] Using endpoint: ${endpoint} (tools=${tools.length
 			}, toolResults=${toolResults?.length || 0}, maxOutputTokens=${maxOutputTokens})`
 		);
 
@@ -1181,15 +1187,13 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				finishReason?: string | null;
 			}) => {
 				this.logService.info(
-					`[claude-server] Request completed: ${
-						result.parts.length
+					`[claude-server] Request completed: ${result.parts.length
 					} parts, finishReason=${result.finishReason || "none"}`
 				);
 			},
 			(error: unknown) => {
 				this.logService.error(
-					`[claude-server] Streaming request failed: ${
-						error instanceof Error ? error.message : String(error)
+					`[claude-server] Streaming request failed: ${error instanceof Error ? error.message : String(error)
 					}`
 				);
 			}

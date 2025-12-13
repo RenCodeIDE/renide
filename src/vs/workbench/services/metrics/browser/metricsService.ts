@@ -44,7 +44,6 @@ export class MetricsService extends Disposable implements IMetricsService {
 		@IConfigurationService private readonly configurationService: IConfigurationService
 	) {
 		super();
-		// #region agent log
 		// Get server address from configuration, with dev mode detection
 		const configuredAddress = this.configurationService.getValue<string>('renide.server.address');
 		const isDevMode = mainWindow.location.hostname === 'localhost' ||

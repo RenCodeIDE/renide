@@ -243,6 +243,19 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						token
 					);
 				}
+				// If the selected model is DeepSeek, route through the DeepSeek agent so tools execute
+				if (
+					selectedModelMetadata.vendor === "deepseek" ||
+					request.userSelectedModelId.startsWith("deepseek/")
+				) {
+					return this.chatAgentService.invokeAgent(
+						"deepseek.local",
+						request,
+						progress,
+						history,
+						token
+					);
+				}
 				// Otherwise, delegate to language models service for cross-vendor model
 				return this.invokeViaLanguageModelsService(
 					request,

@@ -189,6 +189,7 @@ import './contrib/inlineChat/electron-browser/inlineChat.contribution.js';
 import './contrib/chat/browser/gemini.contribution.js';
 import './contrib/chat/browser/chatgpt.contribution.js';
 import './contrib/chat/browser/claude.contribution.js';
+import './contrib/chat/browser/deepseek.contribution.js';
 // Encryption
 import './contrib/encryption/electron-browser/encryption.contribution.js';
 

@@ -36,6 +36,7 @@ export interface OpenAIFunction {
 
 export interface ChatGPTContentPart {
 	readonly text?: string;
+	readonly thinking?: string;
 	readonly toolCall?: {
 		readonly id: string;
 		readonly name: string;
@@ -111,7 +112,7 @@ export interface ServerRequestOptions {
 }
 
 export interface IDEStreamPart {
-	readonly type: 'text' | 'finish' | 'tool_use' | 'error';
+	readonly type: 'text' | 'finish' | 'tool_use' | 'error' | 'thinking';
 	readonly value?: string;
 	readonly finishReason?: string;
 	readonly name?: string;

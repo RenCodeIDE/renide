@@ -35,7 +35,7 @@ import { IRequestService } from "../../../../../platform/request/common/request.
 import { ISecretStorageService } from "../../../../../platform/secrets/common/secrets.js";
 import { ITextModelService } from "../../../../../editor/common/services/resolverService.js";
 import { hasKey } from "../../../../../base/common/types.js";
-import { GEMINI_MODELS } from "./models.js";
+import { DEEPSEEK_MODELS } from "./models.js";
 // @ts-ignore - Module resolution error is false positive, files exist
 import type {
 	ServerToolResult,
@@ -50,12 +50,11 @@ import {
 	ContextBuilder,
 	type IContextBlockMetadata,
 } from "../../common/contextBuilder.js";
-import type { GeminiContentPart } from "./types.js";
 import { IConfigurationService } from "../../../../../platform/configuration/common/configuration.js";
 import { ILanguageFeaturesService } from "../../../../../editor/common/services/languageFeatures.js";
 import { IMetricsService } from "../../../../services/metrics/common/metricsService.js";
 
-export class GeminiAgentImplementation implements IChatAgentImplementation {
+export class DeepSeekAgentImplementation implements IChatAgentImplementation {
 	private readonly requestTools = new Map<string, UserSelectedTools>();
 	private readonly fallbackCountTokens: CountTokensCallback = async (
 		input: string,
@@ -88,18 +87,17 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 			const token = await this.secretStorageService.get("ren.auth.accessToken");
 			if (token) {
 				this.logService.debug(
-					`[gemini-server] Access token retrieved successfully (length: ${token.length})`
+					`[deepseek-server] Access token retrieved successfully (length: ${token.length})`
 				);
 			} else {
 				this.logService.warn(
-					`[gemini-server] No access token found in secret storage. User needs to authenticate.`
+					`[deepseek-server] No access token found in secret storage. User needs to authenticate.`
 				);
 			}
 			return token ?? undefined;
 		} catch (error) {
 			this.logService.error(
-				`[gemini-server] Error retrieving access token: ${
-					error instanceof Error ? error.message : String(error)
+				`[deepseek-server] Error retrieving access token: ${error instanceof Error ? error.message : String(error)
 				}`
 			);
 			return undefined;
@@ -108,15 +106,15 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 
 	private resolveModelFromRequest(userSelectedModelId?: string): string {
 		if (userSelectedModelId) {
-			const selectedModelConfig = GEMINI_MODELS.find(
+			const selectedModelConfig = DEEPSEEK_MODELS.find(
 				(m) => m.identifier === userSelectedModelId
 			);
 			if (selectedModelConfig) {
 				return selectedModelConfig.id;
 			}
 		}
-		const defaultModel = GEMINI_MODELS.find((m) => m.isDefault);
-		return defaultModel?.id || "gemini-2.5-flash";
+		const defaultModel = DEEPSEEK_MODELS.find((m) => m.isDefault);
+		return defaultModel?.id || "deepseek-chat";
 	}
 
 	async invoke(
@@ -135,8 +133,12 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 				this.languageModelsService.lookupLanguageModel(
 					request.userSelectedModelId
 				);
-			if (selectedModelMetadata && selectedModelMetadata.vendor !== "google") {
-				// If the selected model is OpenAI, route through the ChatGPT agent so tools execute
+			// If the model ID contains "deepseek", handle it locally regardless of vendor metadata
+			if (request.userSelectedModelId.includes('deepseek')) {
+				// This is a DeepSeek model, handle it locally
+				this.logService.info(`[deepseek-server] Handling DeepSeek model locally: ${request.userSelectedModelId}`);
+			} else if (selectedModelMetadata && selectedModelMetadata.vendor !== "deepseek") {
+				// Route to appropriate agent based on vendor
 				if (
 					selectedModelMetadata.vendor === "openai" ||
 					request.userSelectedModelId.startsWith("openai/")
@@ -149,7 +151,6 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 						token
 					);
 				}
-				// If the selected model is Anthropic/Claude, route through the Claude agent so tools execute
 				if (
 					selectedModelMetadata.vendor === "anthropic" ||
 					request.userSelectedModelId.startsWith("anthropic/")
@@ -162,13 +163,12 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 						token
 					);
 				}
-				// If the selected model is DeepSeek, route through the DeepSeek agent so tools execute
 				if (
-					selectedModelMetadata.vendor === "deepseek" ||
-					request.userSelectedModelId.startsWith("deepseek/")
+					selectedModelMetadata.vendor === "google" ||
+					request.userSelectedModelId.startsWith("google/")
 				) {
 					return this.chatAgentService.invokeAgent(
-						"deepseek.local",
+						"gemini.local",
 						request,
 						progress,
 						history,
@@ -191,11 +191,10 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 			request.userSelectedModelId
 		);
 
-		// Read tools from request object first (setRequestTools() may not be called for initial value)
+		// Read tools from request object first
 		if (request.userSelectedTools) {
 			this.logService.debug(
-				`[gemini] reading tools from request object for request ${
-					request.requestId
+				`[deepseek] reading tools from request object for request ${request.requestId
 				}: ${JSON.stringify(request.userSelectedTools)}`
 			);
 			this.requestTools.set(request.requestId, request.userSelectedTools);
@@ -210,9 +209,9 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 			tools: toolConfigs,
 			nameToToolId,
 			summaries,
-		} = this.buildGeminiToolDeclarations(request.requestId, request.chatMode);
+		} = this.buildToolDeclarations(request.requestId, request.chatMode);
 
-		// Inject Plan mode instructions BEFORE tool summaries for better visibility
+		// Inject Plan mode instructions
 		if (request.chatMode === ChatModeKind.Plan) {
 			const instructions = ChatMode.Plan.modeInstructions?.get();
 			if (instructions) {
@@ -243,8 +242,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				],
 			});
 		}
-		// Remove upper limit on iterations - allow unlimited tool call iterations
-		// This can be configured via chat.agent.maxIterations if needed, but defaults to unlimited
+
 		const maxIterations =
 			this.configurationService.getValue<number>("chat.agent.maxIterations") ??
 			Number.MAX_SAFE_INTEGER;
@@ -259,6 +257,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 					return { details: "cancelled" };
 				}
 
+
 				if (pendingToolResults && pendingToolResults.length > 0) {
 					for (const result of pendingToolResults) {
 						conversationToolResults.set(result.toolCallId, result);
@@ -267,7 +266,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 						.map((result) => result.toolCallId)
 						.join(", ");
 					this.logService.info(
-						`[gemini-server] Added ${pendingToolResults.length} tool result(s) to conversation history: ${ids}`
+						`[deepseek-server] Added ${pendingToolResults.length} tool result(s) to conversation history: ${ids}`
 					);
 					pendingToolResults = undefined;
 				}
@@ -277,31 +276,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 						.map((result) => result.toolCallId)
 						.join(", ");
 					this.logService.info(
-						`[gemini-server] Forwarding ${conversationToolResults.size} total tool result(s) to server: ${ids}`
-					);
-				} else {
-					this.logService.info(
-						"[gemini-server] No pending tool results to forward for this iteration"
-					);
-				}
-				const lastAssistantWithTools = [...messages]
-					.reverse()
-					.find(
-						(message) =>
-							message.role === ChatMessageRole.Assistant &&
-							message.content.some((part) => part.type === "tool_use")
-					);
-				if (lastAssistantWithTools) {
-					const ids = lastAssistantWithTools.content
-						.filter((part) => part.type === "tool_use")
-						.map((part) => part.toolCallId)
-						.join(", ");
-					this.logService.info(
-						`[gemini-server] Last assistant message before request contains tool_use parts: ${ids}`
-					);
-				} else {
-					this.logService.warn(
-						"[gemini-server] No assistant message with tool_use parts found before request"
+						`[deepseek-server] Forwarding ${conversationToolResults.size} total tool result(s) to server: ${ids}`
 					);
 				}
 
@@ -309,7 +284,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 					conversationToolResults.size > 0
 						? Array.from(conversationToolResults.values())
 						: undefined;
-				// Get project ID asynchronously to ensure it's initialized
+
+
 				const projectId = await this.metricsService?.getProjectIdAsync();
 				const streamingResponse = await this.performRequest(
 					messages,
@@ -318,8 +294,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 					modelToUse,
 					toolResultsForServer,
 					request.chatMode,
-					request.sessionId, // Pass sessionId for metrics tracking
-					projectId // Pass projectId for metrics tracking
+					request.sessionId,
+					projectId
 				);
 				let streamedText = false;
 
@@ -328,8 +304,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 						if (token.isCancellationRequested) {
 							break;
 						}
-						// Convert ChatGPTContentPart[] to GeminiContentPart[] for display
-						const geminiParts: GeminiContentPart[] = chunk
+						const deepseekParts: Array<{ text?: string; functionCall?: { name: string; args: Record<string, unknown> } }> = chunk
 							.map(
 								(part: {
 									text?: string;
@@ -352,11 +327,11 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 									return { text: "" };
 								}
 							)
-							.filter((part: GeminiContentPart) =>
-								hasKey(part, { text: true }) ? part.text.length > 0 : true
+							.filter((part) =>
+								hasKey(part, { text: true }) ? part.text!.length > 0 : true
 							);
 
-						const delta = extractTextFromParts(geminiParts, false);
+						const delta = extractTextFromParts(deepseekParts, false);
 						if (delta.length) {
 							const markdownChunk = new MarkdownString(delta);
 							markdownChunk.supportThemeIcons = true;
@@ -377,9 +352,6 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				const responseData = await streamingResponse.result;
 				const responseParts = responseData.parts;
 
-				// Note: For Gemini path we do not mutate prior tool results into messages here;
-				// the server-side transformer handles tool result placement for the current request only.
-
 				// Add assistant message with both text and tool_use parts if present
 				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 				const toolCallParts = responseParts.filter(
@@ -393,14 +365,13 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				const assistantContent: Array<
 					| { type: "text"; value: string }
 					| {
-							type: "tool_use";
-							name: string;
-							toolCallId: string;
-							parameters: Record<string, unknown>;
-					  }
+						type: "tool_use";
+						name: string;
+						toolCallId: string;
+						parameters: Record<string, unknown>;
+					}
 				> = [];
 
-				// Add text content if present
 				if (textParts.length > 0) {
 					// eslint-disable-next-line @typescript-eslint/no-explicit-any
 					const textContent = textParts
@@ -411,7 +382,6 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 					}
 				}
 
-				// Add tool_use parts if present
 				if (toolCallParts.length > 0) {
 					// eslint-disable-next-line @typescript-eslint/no-explicit-any
 					const toolUseParts = toolCallParts.map((part: any) => {
@@ -426,7 +396,6 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 					assistantContent.push(...toolUseParts);
 				}
 
-				// Add assistant message if there's any content
 				if (assistantContent.length > 0) {
 					messages.push({
 						role: ChatMessageRole.Assistant,
@@ -441,8 +410,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 							.map((part: { text?: string }) => part.text || "")
 							.join("") ||
 						localize(
-							"gemini.emptyTextResponse",
-							"Gemini did not return any text."
+							"deepseek.emptyTextResponse",
+							"DeepSeek did not return any text."
 						);
 
 					await this.contextBuilder.tryAutoApplyEdits(
@@ -459,15 +428,15 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 					}
 
 					return {
-						details: "gemini-response",
+						details: "deepseek-response",
 						metadata: { model: modelToUse },
 					};
 				}
 
 				if (!toolConfigs.length) {
 					const errorMessage = localize(
-						"gemini.toolsNotAuthorized",
-						"Gemini requested tool calls but none were authorized for this request."
+						"deepseek.toolsNotAuthorized",
+						"DeepSeek requested tool calls but none were authorized for this request."
 					);
 					progress([
 						{
@@ -486,8 +455,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 
 				const toolResultsForNextRequest: ServerToolResult[] = [];
 
-				// Bounded-parallel execution with per-call timeout
-				// Increased default from 3 to 10 for better performance with multiple tool calls
+				// Parallel tool execution
 				const maxConcurrency =
 					this.configurationService.getValue<number>(
 						"chat.toolCalls.maxConcurrency"
@@ -499,7 +467,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 
 				const parallelExecutionStartTime = Date.now();
 				this.logService.info(
-					`[gemini-server] Starting parallel execution of ${toolCallParts.length} tool call(s) with maxConcurrency=${maxConcurrency}`
+					`[deepseek-server] Starting parallel execution of ${toolCallParts.length} tool call(s) with maxConcurrency=${maxConcurrency}`
 				);
 
 				interface ToolTask {
@@ -542,7 +510,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 
 					if (!toolId) {
 						this.logService.error(
-							`[gemini-server] model requested unknown tool name '${toolName}'. Available names: ${Array.from(
+							`[deepseek-server] model requested unknown tool name '${toolName}'. Available names: ${Array.from(
 								nameToToolId.keys()
 							).join(", ")}`
 						);
@@ -552,8 +520,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 								{
 									type: "text",
 									value: localize(
-										"gemini.unknownToolCall",
-										"Gemini requested unknown tool {0}.",
+										"deepseek.unknownToolCall",
+										"DeepSeek requested unknown tool {0}.",
 										toolName
 									),
 								},
@@ -591,8 +559,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 									textOutput.trim().length > 0
 										? textOutput
 										: (result as any).toolResultError
-										? `Error: ${(result as any).toolResultError}`
-										: "Tool executed successfully but returned no output.";
+											? `Error: ${(result as any).toolResultError}`
+											: "Tool executed successfully but returned no output.";
 								return {
 									toolCallId: callId,
 									content: [{ type: "text" as const, value: finalOutput }],
@@ -606,14 +574,14 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 						resultsBuffer[index] = await runWithTimeout();
 						const taskTime = Date.now() - taskStartTime;
 						this.logService.debug(
-							`[gemini-server] Finished tool ${toolName} (callId: ${callId}) in ${taskTime}ms`
+							`[deepseek-server] Finished tool ${toolName} (callId: ${callId}) in ${taskTime}ms`
 						);
 					} catch (error) {
 						const taskTime = Date.now() - taskStartTime;
 						const message =
 							error instanceof Error ? error.message : String(error);
 						this.logService.error(
-							`[gemini-server] tool ${toolId} (callId: ${callId}) failed after ${taskTime}ms: ${message}`
+							`[deepseek-server] tool ${toolId} (callId: ${callId}) failed after ${taskTime}ms: ${message}`
 						);
 						resultsBuffer[index] = {
 							toolCallId: callId,
@@ -643,11 +611,11 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 
 				const parallelExecutionTime = Date.now() - parallelExecutionStartTime;
 				this.logService.info(
-					`[gemini-server] Completed parallel execution of ${tasks.length} tool call(s) in ${parallelExecutionTime}ms ` +
-						`(avg: ${(parallelExecutionTime / tasks.length).toFixed(
-							2
-						)}ms per call, ` +
-						`concurrency: ${maxConcurrency})`
+					`[deepseek-server] Completed parallel execution of ${tasks.length} tool call(s) in ${parallelExecutionTime}ms ` +
+					`(avg: ${(parallelExecutionTime / tasks.length).toFixed(
+						2
+					)}ms per call, ` +
+					`concurrency: ${maxConcurrency})`
 				);
 
 				for (let i = 0; i < resultsBuffer.length; i++) {
@@ -660,36 +628,36 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				if (toolResultsForNextRequest.length === 0) {
 					throw new Error(
 						localize(
-							"gemini.noToolResponses",
-							"Gemini requested tool calls but no responses were produced."
+							"deepseek.noToolResponses",
+							"DeepSeek requested tool calls but no responses were produced."
 						)
 					);
 				}
 
 				pendingToolResults = toolResultsForNextRequest;
 				this.logService.info(
-					`[gemini-server] Collected ${toolResultsForNextRequest.length} tool results for next request`
+					`[deepseek-server] Collected ${toolResultsForNextRequest.length} tool results for next request`
 				);
 				iteration++;
 			}
 
 			const totalRequestTime = Date.now() - requestStartTime;
 			this.logService.warn(
-				`[gemini-server] Reached maxIterations limit (${maxIterations}) after ${totalRequestTime}ms and ${iteration} iterations`
+				`[deepseek-server] Reached maxIterations limit (${maxIterations}) after ${totalRequestTime}ms and ${iteration} iterations`
 			);
 			throw new Error(
 				localize(
-					"gemini.maxToolIterations",
+					"deepseek.maxToolIterations",
 					"Reached the maximum number of tool call iterations ({0}) without producing an answer.",
 					maxIterations
 				)
 			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			this.logService.error(`[gemini] ${message}`);
+			this.logService.error(`[deepseek] ${message}`);
 
 			const markdown = new MarkdownString(
-				localize("gemini.error", "Gemini request failed: {0}", message)
+				localize("deepseek.error", "DeepSeek request failed: {0}", message)
 			);
 			markdown.isTrusted = true;
 			progress([{ kind: "markdownContent", content: markdown }]);
@@ -717,12 +685,11 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		modelId: string
 	): Promise<IChatAgentResult> {
 		this.logService.info(
-			`[gemini] Delegating request to language models service for model ${modelId} (cross-vendor)`
+			`[deepseek] Delegating request to language models service for model ${modelId} (cross-vendor)`
 		);
 
 		const messages: IChatMessage[] = [];
 
-		// Add context prompt if available
 		const contextPrompt = await this.contextBuilder.buildContextPrompt(
 			request,
 			token
@@ -734,7 +701,6 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			});
 		}
 
-		// Convert history
 		for (const entry of history) {
 			if (!entry) {
 				continue;
@@ -761,7 +727,6 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			}
 		}
 
-		// Add current request
 		messages.push({
 			role: ChatMessageRole.User,
 			content: [{ type: "text", value: request.message }],
@@ -770,7 +735,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		try {
 			const response = await this.languageModelsService.sendChatRequest(
 				modelId,
-				new ExtensionIdentifier("core.gemini"),
+				new ExtensionIdentifier("core.deepseek"),
 				messages,
 				{},
 				token
@@ -793,17 +758,17 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			await response.result;
 
 			return {
-				details: "gemini-response",
+				details: "deepseek-response",
 				metadata: { model: modelId, delegated: true },
 			};
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			this.logService.error(
-				`[gemini] Error in delegated request for model ${modelId}:`,
+				`[deepseek] Error in delegated request for model ${modelId}:`,
 				error
 			);
 			const markdown = new MarkdownString(
-				localize("gemini.error", "Gemini request failed: {0}", message)
+				localize("deepseek.error", "DeepSeek request failed: {0}", message)
 			);
 			markdown.isTrusted = true;
 			progress([{ kind: "markdownContent", content: markdown }]);
@@ -820,23 +785,19 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 	setRequestTools(requestId: string, tools: UserSelectedTools): void {
 		if (!tools) {
 			this.logService.debug(
-				`[gemini] clearing tool selection for request ${requestId}`
+				`[deepseek] clearing tool selection for request ${requestId}`
 			);
 			this.requestTools.delete(requestId);
 			return;
 		}
 		this.logService.debug(
-			`[gemini] received tool selection for request ${requestId}: ${JSON.stringify(
+			`[deepseek] received tool selection for request ${requestId}: ${JSON.stringify(
 				tools
 			)}`
 		);
 		this.requestTools.set(requestId, tools);
 	}
 
-	/**
-	 * List of tool IDs that are blocked in Ask mode.
-	 * These are tools that modify files or system state.
-	 */
 	private static readonly ASK_MODE_BLOCKED_TOOLS = [
 		"vscode_editFile",
 		"edit_file",
@@ -856,16 +817,12 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		"createPlanFile",
 	];
 
-	/**
-	 * Filters tools to only include those allowed in Ask mode.
-	 * Blocks edit/write tools that could modify the codebase.
-	 */
 	private filterAskModeTools(tools: IToolData[]): IToolData[] {
 		return tools.filter((tool) => {
 			const isBlocked =
-				GeminiAgentImplementation.ASK_MODE_BLOCKED_TOOLS.includes(tool.id);
+				DeepSeekAgentImplementation.ASK_MODE_BLOCKED_TOOLS.includes(tool.id);
 			if (isBlocked) {
-				this.logService.debug(`[gemini] Ask mode: blocking tool ${tool.id}`);
+				this.logService.debug(`[deepseek] Ask mode: blocking tool ${tool.id}`);
 			}
 			return !isBlocked;
 		});
@@ -878,14 +835,12 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		const selected = this.requestTools.get(requestId);
 		if (!selected) {
 			this.logService.debug(
-				`[gemini] no tools selected for request ${requestId}, defaulting to all available tools`
+				`[deepseek] no tools selected for request ${requestId}, defaulting to all available tools`
 			);
 			const allTools = Array.from(this.languageModelToolsService.getTools());
-			// In Plan mode, filter out create_file even when no tools are explicitly selected
 			if (chatMode === ChatModeKind.Plan) {
 				return allTools.filter((tool) => tool.id !== "create_file");
 			}
-			// In Ask mode, filter out all edit/write tools
 			if (chatMode === ChatModeKind.Ask) {
 				return this.filterAskModeTools(allTools);
 			}
@@ -895,9 +850,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			(id) => selected[id] === true
 		);
 		if (!allowedIds.length) {
-			// Empty selection - fall back to default behavior
 			this.logService.debug(
-				`[gemini] tool selection for request ${requestId} contained no enabled entries, falling back to default`
+				`[deepseek] tool selection for request ${requestId} contained no enabled entries, falling back to default`
 			);
 			const allTools = Array.from(this.languageModelToolsService.getTools());
 			if (chatMode === ChatModeKind.Plan) {
@@ -916,11 +870,9 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			}
 		}
 
-		// CRITICAL FIX: If filtering resulted in zero tools, fall back to default
-		// This prevents empty tool arrays from being sent to Gemini, which would prevent tool calls
 		if (allowedTools.length === 0) {
 			this.logService.warn(
-				`[gemini] Tool filtering for request ${requestId} resulted in zero tools (selected IDs: ${allowedIds.join(
+				`[deepseek] Tool filtering for request ${requestId} resulted in zero tools (selected IDs: ${allowedIds.join(
 					", "
 				)}), falling back to default behavior`
 			);
@@ -934,18 +886,16 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			return allTools;
 		}
 
-		// Apply Ask mode filtering even for user-selected tools
 		if (chatMode === ChatModeKind.Ask) {
 			const filteredTools = this.filterAskModeTools(allowedTools);
 			this.logService.debug(
-				`[gemini] Ask mode: filtered ${allowedTools.length} user-selected tools to ${filteredTools.length} allowed tools`
+				`[deepseek] Ask mode: filtered ${allowedTools.length} user-selected tools to ${filteredTools.length} allowed tools`
 			);
 			return filteredTools;
 		}
 
 		this.logService.debug(
-			`[gemini] resolved ${
-				allowedTools.length
+			`[deepseek] resolved ${allowedTools.length
 			} tools for request ${requestId}: ${allowedTools
 				.map((tool) => tool.id)
 				.join(", ")}`
@@ -953,7 +903,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		return allowedTools;
 	}
 
-	private buildGeminiToolDeclarations(
+	private buildToolDeclarations(
 		requestId: string,
 		chatMode?: string
 	): {
@@ -964,8 +914,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		const allowedTools = this.getAllowedToolData(requestId, chatMode);
 		if (!allowedTools.length) {
 			this.logService.warn(
-				`[gemini] buildGeminiToolDeclarations: No tools available for request ${requestId} in mode ${
-					chatMode || "unknown"
+				`[deepseek] buildToolDeclarations: No tools available for request ${requestId} in mode ${chatMode || "unknown"
 				}. This will prevent tool calls.`
 			);
 			return { tools: [], nameToToolId: new Map(), summaries: [] };
@@ -999,9 +948,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 
 			const description = descriptionParts.length
 				? descriptionParts.join(" ")
-				: undefined;
+				: tool.toolReferenceName ?? tool.id ?? "";
 
-			// Apply same parameters validation as ChatGPT
 			let parameters: Record<string, unknown> & {
 				type?: string;
 				properties?: Record<string, unknown>;
@@ -1015,20 +963,13 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			) {
 				parameters = { type: "object", properties: {} };
 			} else {
-				// Cast to object type for type narrowing
 				parameters = rawParameters as Record<string, unknown> & {
 					type?: string;
 					properties?: Record<string, unknown>;
 				};
-				// Ensure type: "object"
-				// Note: Using 'in' operator here matches ChatGPT agent pattern (see chatgpt/agent.ts:639, 643)
-				// The linter warning is acceptable as this matches the established pattern
 				if (!("type" in parameters) || parameters.type !== "object") {
 					parameters = { ...parameters, type: "object" };
 				}
-				// Ensure properties exist
-				// Note: Using 'in' operator here matches ChatGPT agent pattern (see chatgpt/agent.ts:639, 643)
-				// The linter warning is acceptable as this matches the established pattern
 				if (
 					!("properties" in parameters) ||
 					typeof parameters.properties !== "object" ||
@@ -1037,7 +978,6 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				) {
 					parameters = { ...parameters, properties: {} };
 				}
-				// Ensure all properties have both type and description (required by server schema)
 				if (parameters.properties) {
 					// eslint-disable-next-line @typescript-eslint/no-explicit-any
 					const props = parameters.properties as Record<string, any>;
@@ -1049,15 +989,9 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 							!Array.isArray(props[key])
 						) {
 							const prop = props[key];
-							// Ensure type exists (default to 'string' if missing)
-							// Note: Using 'in' operator here matches ChatGPT agent pattern (see chatgpt/agent.ts:653)
-							// The linter warning is acceptable as this matches the established pattern
 							if (!("type" in prop) || typeof prop.type !== "string") {
 								props[key] = { ...prop, type: "string" };
 							}
-							// Ensure description exists (default to empty string if missing)
-							// Note: Using 'in' operator here matches ChatGPT agent pattern (see chatgpt/agent.ts:657)
-							// The linter warning is acceptable as this matches the established pattern
 							if (!("description" in props[key])) {
 								props[key] = { ...props[key], description: "" };
 							}
@@ -1125,10 +1059,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 	): Promise<ChatGPTStreamingResponse> {
 		const toolNames = tools.map((t) => t.name || "<unnamed>");
 		this.logService.info(
-			`[gemini-server] performRequest: model=${model}, messages=${
-				messages.length
-			}, tools=${toolNames.join(", ") || "none"}, toolResults=${
-				toolResults?.length || 0
+			`[deepseek-server] performRequest: model=${model}, messages=${messages.length
+			}, tools=${toolNames.join(", ") || "none"}, toolResults=${toolResults?.length || 0
 			}, mode=${mode || "unknown"}`
 		);
 
@@ -1136,26 +1068,27 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		if (!accessToken) {
 			throw new Error(
 				localize(
-					"gemini.noAuthToken",
-					"Authentication token is missing. Please sign in to use Gemini."
+					"deepseek.noAuthToken",
+					"Authentication token is missing. Please sign in to use DeepSeek."
 				)
 			);
 		}
 
 		validateIDEFormat(messages);
 		this.logService.debug(
-			`[gemini-server] Message format validation passed: ${messages.length} messages in IDE format`
+			`[deepseek-server] Message format validation passed: ${messages.length} messages in IDE format`
 		);
 
-		// Use /api/agent/ask endpoint for Ask mode, /api/agent/tools for other modes
-		const endpoint: "/api/agent/tools" | "/api/agent/ask" =
-			mode === ChatModeKind.Ask ? "/api/agent/ask" : "/api/agent/tools";
+		// Always use /api/agent/tools endpoint (ask endpoint doesn't exist on server)
+		const endpoint: "/api/agent/tools" = "/api/agent/tools";
 		const hasToolResults = toolResults && toolResults.length > 0;
 
+		const modelConfig = DEEPSEEK_MODELS.find((m) => m.id === model);
+		const maxOutputTokens = modelConfig?.maxOutputTokens ?? 8192;
+
 		this.logService.info(
-			`[gemini-server] Using endpoint: ${endpoint} (tools=${
-				tools.length
-			}, toolResults=${toolResults?.length || 0})`
+			`[deepseek-server] Using endpoint: ${endpoint} (tools=${tools.length
+			}, toolResults=${toolResults?.length || 0}, maxOutputTokens=${maxOutputTokens})`
 		);
 
 		const response = await sendChatGPTRequest(
@@ -1170,11 +1103,12 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				tools: tools,
 				toolResults: hasToolResults ? toolResults : undefined,
 				mode: mode,
+				maxOutputTokens,
 				sessionId,
 				projectId,
 			},
 			this.logService,
-			"gemini"
+			"deepseek"
 		);
 
 		response.result.then(
@@ -1190,16 +1124,13 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				finishReason?: string | null;
 			}) => {
 				this.logService.info(
-					`[gemini-server] Request completed: ${
-						result.parts.length
+					`[deepseek-server] Request completed: ${result.parts.length
 					} parts, finishReason=${result.finishReason || "none"}`
 				);
 			},
 			(error: unknown) => {
 				this.logService.error(
-					`[gemini-server] Streaming request failed: ${
-						error instanceof Error ? error.message : String(error)
-					}`
+					`[deepseek-server] Streaming request failed: ${error instanceof Error ? error.message : String(error)}`
 				);
 			}
 		);
@@ -1242,9 +1173,6 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			});
 		}
 
-		// Note: Plan mode instructions are injected after buildMessages completes,
-		// right before tool summaries, to ensure they are prominent and not buried
-
 		for (const entry of history) {
 			if (!entry) {
 				continue;
@@ -1279,3 +1207,4 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		return { messages, contextEntries };
 	}
 }
+
