@@ -448,7 +448,6 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					<option value="file">File</option>
 					<option value="folder">Folder</option>
 					<option value="workspace">Workspace</option>
-					<option value="architecture">Architecture</option>
 					<option value="gitHeatmap" selected>Git Heatmap</option>
 				</select>
 			</label>

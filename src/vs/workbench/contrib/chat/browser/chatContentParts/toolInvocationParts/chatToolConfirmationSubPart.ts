@@ -85,6 +85,33 @@ export class ToolConfirmationSubPart extends AbstractToolConfirmationSubPart {
 
 	protected override additionalPrimaryActions() {
 		const actions = super.additionalPrimaryActions();
+		
+		// Add custom actions from terminalCustomActions (used by askConfirmation tool)
+		// These become clickable response buttons in the chat
+		const customActions = this.toolInvocation.confirmationMessages?.terminalCustomActions;
+		if (customActions && customActions.length > 0) {
+			for (const action of customActions) {
+				if (!(action instanceof Separator)) {
+					actions.push({
+						label: action.label,
+						tooltip: action.tooltip,
+						data: () => {
+							// Store the user's response in toolSpecificData
+							if (this.toolInvocation.toolSpecificData?.kind === 'input') {
+								this.toolInvocation.toolSpecificData.rawInput = { answer: action.data };
+							} else {
+								(this.toolInvocation as any).toolSpecificData = {
+									kind: 'input',
+									rawInput: { answer: action.data }
+								};
+							}
+							this.confirmWith(this.toolInvocation, { type: ToolConfirmKind.UserAction });
+						}
+					});
+				}
+			}
+		}
+		
 		if (this.toolInvocation.confirmationMessages?.allowAutoConfirm !== false) {
 			actions.push(
 				{ label: localize('allowSession', 'Allow in this Session'), data: ConfirmationOutcome.AllowSession, tooltip: localize('allowSesssionTooltip', 'Allow this tool to run in this session without confirmation.') },

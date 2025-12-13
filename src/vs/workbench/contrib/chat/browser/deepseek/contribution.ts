@@ -224,8 +224,7 @@ class DeepSeekAgentContribution
 							} else if (part.thinking !== undefined) {
 								chatParts.push({ type: 'thinking', value: part.thinking });
 							} else if (part.toolCall) {
-								functionCallName = part.toolCall.name;
-								logServiceInstance.warn(`[deepseek-provider] Received tool call ${part.toolCall.name} in non-agent mode`);
+								chatParts.push({ type: 'tool_use', name: part.toolCall.name, toolCallId: part.toolCall.id, parameters: part.toolCall.args });
 							}
 						}
 						if (chatParts.length === 1) {

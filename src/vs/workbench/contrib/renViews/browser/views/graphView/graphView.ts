@@ -285,7 +285,7 @@ export class GraphView extends Disposable implements IRenView {
 		const modeSelect = document.createElement('select');
 		modeSelect.id = 'renGraphModeSelect';
 		modeSelect.className = 'ren-graph-toolbar-select';
-		(['file', 'folder', 'workspace', 'architecture', 'gitHeatmap', 'dataFlow'] as GraphMode[]).forEach(mode => {
+		(['file', 'folder', 'workspace', 'gitHeatmap', 'dataFlow'] as GraphMode[]).forEach(mode => {
 			const option = document.createElement('option');
 			option.value = mode;
 			option.textContent = this.getModeLabel(mode);
@@ -409,10 +409,6 @@ export class GraphView extends Disposable implements IRenView {
 						: 'Select source';
 					this._targetButton.title = 'Choose a folder to visualize';
 					break;
-				case 'architecture':
-					this._targetButton.textContent = 'Analyze Architecture';
-					this._targetButton.title = 'Inspect the project to build an architecture graph';
-					break;
 				case 'gitHeatmap':
 					this._targetButton.textContent = 'Refresh Heatmap';
 					this._targetButton.title = 'Rebuild module co-change heatmap from Git history';
@@ -465,7 +461,8 @@ export class GraphView extends Disposable implements IRenView {
 		}
 		this.updateToolbarUI();
 		void this.sendStatus(this.getReadyMessage(), 'info');
-		if (this._graphReady && (this._mode === 'workspace' || this._mode === 'architecture' || this._mode === 'gitHeatmap' || this._mode === 'dataFlow')) {
+		// Auto-render for modes that don't require user selection
+		if (this._graphReady && (this._mode === 'workspace' || this._mode === 'gitHeatmap' || this._mode === 'dataFlow' || this._mode === 'architecture')) {
 			void this.promptForTargetAndRender();
 		}
 	}
@@ -588,11 +585,11 @@ export class GraphView extends Disposable implements IRenView {
 					await this.renderFolderGraph(folder, requestId);
 					break;
 				}
-				case 'architecture':
-					await this.renderArchitectureGraph(requestId);
-					break;
 				case 'gitHeatmap':
 					await this.renderGitHeatmap(requestId);
+					break;
+				case 'architecture':
+					await this.renderArchitectureGraph(requestId);
 					break;
 				case 'dataFlow': {
 					// Use existing file if available, otherwise prompt for file
@@ -892,6 +889,137 @@ export class GraphView extends Disposable implements IRenView {
 			payload: {}
 		});
 	}
+
+	// ========== Programmatic APIs for AI Tool Control ==========
+	// These methods bypass file pickers and render graphs directly.
+	// Used by graphControlTool and other AI-driven tools.
+
+	/**
+	 * Programmatically set the graph mode without triggering file picker.
+	 * Used by AI tools to control the graph view directly.
+	 */
+	public setModeProgrammatically(mode: GraphMode): void {
+		if (mode === this._mode) {
+			return;
+		}
+		this._mode = mode;
+		if (this._mode !== 'file' && this._mode !== 'dataFlow') {
+			this._selectedFile = undefined;
+		}
+		if (this._mode !== 'folder') {
+			this._selectedFolder = undefined;
+		}
+		if (this._mode !== 'dataFlow') {
+			this._selectedFunction = undefined;
+		}
+		this.updateToolbarUI();
+	}
+
+	/**
+	 * Programmatically set target file and render file graph.
+	 * Bypasses file picker - used by AI tools.
+	 */
+	public async renderFileGraphProgrammatically(fileUri: URI): Promise<void> {
+		if (!this._webview || !this._graphReady) {
+			this.logService.warn('[GraphView] Cannot render file graph: webview not ready');
+			return;
+		}
+		this._mode = 'file';
+		this._selectedFile = fileUri;
+		this.updateToolbarUI();
+		const requestId = ++this._renderRequestId;
+		this._promptInFlight = true;
+		try {
+			await this.renderFileGraph(fileUri, requestId);
+		} finally {
+			if (requestId === this._renderRequestId) {
+				this._promptInFlight = false;
+			}
+		}
+	}
+
+	/**
+	 * Programmatically set target folder and render folder graph.
+	 * Bypasses folder picker - used by AI tools.
+	 */
+	public async renderFolderGraphProgrammatically(folderUri: URI): Promise<void> {
+		if (!this._webview || !this._graphReady) {
+			this.logService.warn('[GraphView] Cannot render folder graph: webview not ready');
+			return;
+		}
+		this._mode = 'folder';
+		this._selectedFolder = folderUri;
+		this.updateToolbarUI();
+		const requestId = ++this._renderRequestId;
+		this._promptInFlight = true;
+		try {
+			await this.renderFolderGraph(folderUri, requestId);
+		} finally {
+			if (requestId === this._renderRequestId) {
+				this._promptInFlight = false;
+			}
+		}
+	}
+
+	/**
+	 * Programmatically render workspace graph.
+	 * Bypasses picker - used by AI tools.
+	 */
+	public async renderWorkspaceGraphProgrammatically(): Promise<void> {
+		if (!this._webview || !this._graphReady) {
+			this.logService.warn('[GraphView] Cannot render workspace graph: webview not ready');
+			return;
+		}
+		this._mode = 'workspace';
+		this.updateToolbarUI();
+		await this.renderWorkspaceGraph();
+	}
+
+	/**
+	 * Programmatically render git heatmap.
+	 * Bypasses picker - used by AI tools.
+	 */
+	public async renderGitHeatmapProgrammatically(): Promise<void> {
+		if (!this._webview || !this._graphReady) {
+			this.logService.warn('[GraphView] Cannot render git heatmap: webview not ready');
+			return;
+		}
+		this._mode = 'gitHeatmap';
+		this.updateToolbarUI();
+		const requestId = ++this._renderRequestId;
+		this._promptInFlight = true;
+		try {
+			await this.renderGitHeatmap(requestId);
+		} finally {
+			if (requestId === this._renderRequestId) {
+				this._promptInFlight = false;
+			}
+		}
+	}
+
+	/**
+	 * Programmatically render architecture graph.
+	 * Bypasses picker - used by AI tools.
+	 */
+	public async renderArchitectureGraphProgrammatically(): Promise<void> {
+		if (!this._webview || !this._graphReady) {
+			this.logService.warn('[GraphView] Cannot render architecture graph: webview not ready');
+			return;
+		}
+		this._mode = 'architecture';
+		this.updateToolbarUI();
+		const requestId = ++this._renderRequestId;
+		this._promptInFlight = true;
+		try {
+			await this.renderArchitectureGraph(requestId);
+		} finally {
+			if (requestId === this._renderRequestId) {
+				this._promptInFlight = false;
+			}
+		}
+	}
+
+	// ========== End Programmatic APIs ==========
 
 	private getResourceKeyFromNode(node: GraphNodePayload): string | undefined {
 		if (!node?.path) {
@@ -1443,8 +1571,6 @@ export class GraphView extends Disposable implements IRenView {
 				return 'Workspace';
 			case 'folder':
 				return 'Folder';
-			case 'architecture':
-				return 'Architecture';
 			case 'gitHeatmap':
 				return 'Git Heatmap';
 			case 'dataFlow':
@@ -1461,8 +1587,6 @@ export class GraphView extends Disposable implements IRenView {
 				return 'Rendering entire workspace import graph…';
 			case 'folder':
 				return 'Select a folder to visualize its imports.';
-			case 'architecture':
-				return 'Analyze the workspace to discover its architecture.';
 			case 'gitHeatmap':
 				return 'Generate a Git co-change heatmap for your workspace.';
 			case 'dataFlow':

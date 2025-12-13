@@ -188,6 +188,11 @@ export class NativeLocalProcessExtensionHost implements IExtensionHost {
 			this._shellEnvironmentService.getShellEnv(),
 		]);
 
+		if (this._terminating) {
+			this._extensionHostStarter.kill(extensionHostCreationResult.id);
+			throw new CancellationError();
+		}
+
 		this._extensionHostProcess = new ExtensionHostProcess(extensionHostCreationResult.id, this._extensionHostStarter);
 
 		const env = objects.mixin(processEnv, {
@@ -371,6 +376,10 @@ export class NativeLocalProcessExtensionHost implements IExtensionHost {
 			}, 60 * 1000);
 
 			portPromise.then((port) => {
+				if (this._terminating) {
+					port.close();
+					return;
+				}
 				this._toDispose.add(toDisposable(() => {
 					// Close the message port when the extension host is disposed
 					port.close();

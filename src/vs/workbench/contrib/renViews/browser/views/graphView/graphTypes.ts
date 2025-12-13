@@ -112,7 +112,35 @@ export interface ImportDescriptor {
 	isSideEffectOnly: boolean;
 }
 
-export type GraphMode = 'file' | 'folder' | 'workspace' | 'architecture' | 'gitHeatmap' | 'dataFlow';
+export type GraphMode = 'file' | 'folder' | 'workspace' | 'architecture' | 'gitHeatmap' | 'dataFlow' | 'evolution' | 'changeImpact';
+
+export interface TimelineEvent {
+	id: string;
+	timestamp: number;
+	label: string;
+	description?: string;
+	author: string;
+	type: 'commit';
+	affectedNodes: string[];
+	metadata: {
+		additions: number;
+		deletions: number;
+	};
+}
+
+export interface GraphTimelinePayload {
+	events: TimelineEvent[];
+	windowDays: number;
+	nodeStates: Map<string, { [timestamp: number]: { weight: number; status: GraphStatusLevel } }>;
+}
+
+export interface ImpactPayload {
+	draftId: string;
+	affectedNodes: string[];
+	impactedNodes: string[];
+	deprecatedDocs: string[];
+	breakingChangesScore: number;
+}
 
 export type GraphStatusLevel = 'info' | 'warning' | 'error' | 'loading' | 'success';
 

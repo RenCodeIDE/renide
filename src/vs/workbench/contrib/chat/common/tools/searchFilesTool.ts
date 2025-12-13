@@ -1,8 +1,3 @@
-/*---------------------------------------------------------------------------------------------
- *  Copyright (c) Microsoft Corporation. All rights reserved.
- *  Licensed under the MIT License. See License.txt in the project root for license information.
- *--------------------------------------------------------------------------------------------*/
-
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
 import { isWindows } from '../../../../../base/common/platform.js';
 import { localize } from '../../../../../nls.js';
@@ -82,6 +77,24 @@ export class SearchFilesTool implements IToolImpl {
 
 	async invoke(invocation: IToolInvocation, _countTokens: CountTokensCallback, _progress: ToolProgress, token: CancellationToken): Promise<IToolResult> {
 		const args = invocation.parameters as ISearchFilesToolInput;
+		console.log('[SearchFilesTool] invoke called with args:', JSON.stringify(args));
+
+		if (!args) {
+			return {
+				content: [{ innerText: localize('searchFilesTool.noArgs', 'No arguments provided') }],
+				toolResultMessage: localize('searchFilesTool.noArgs', 'No arguments provided')
+			} as any;
+		}
+
+		if (!args.pattern || typeof args.pattern !== 'string') {
+			return {
+				content: [{
+					kind: 'text',
+					value: localize('searchFilesTool.invalidPattern', 'Invalid or missing "pattern" argument. It must be a non-empty string.')
+				}],
+				toolResultMessage: localize('searchFilesTool.invalidPattern', 'Invalid or missing "pattern" argument.')
+			};
+		}
 
 		try {
 			// Determine workspace folders to search
@@ -120,13 +133,18 @@ export class SearchFilesTool implements IToolImpl {
 			};
 
 			// Parse include/exclude patterns
-			const includePattern: IExpression | undefined = args.includePattern ? this.parseGlobPattern(args.includePattern) : undefined;
-			const excludePattern: ExcludeGlobPattern<URI>[] | undefined = args.excludePattern
-				? folders.map(folder => ({
+			let includePattern: IExpression | undefined;
+			if (args.includePattern && typeof args.includePattern === 'string') {
+				includePattern = this.parseGlobPattern(args.includePattern);
+			}
+
+			let excludePattern: ExcludeGlobPattern<URI>[] | undefined;
+			if (args.excludePattern && typeof args.excludePattern === 'string') {
+				excludePattern = folders.map(folder => ({
 					folder,
 					pattern: this.parseGlobPattern(args.excludePattern!)
-				}))
-				: undefined;
+				}));
+			}
 
 			const query: ITextQuery = {
 				type: QueryType.Text,

@@ -86,6 +86,7 @@ import { IGraphService, GraphService } from "./services/graphService.js";
 import { GraphToolsContribution } from "./tools/graphToolsContribution.js";
 import { MonitorXChangelogToolsContribution } from "./monitorXChangelogToolsContribution.js";
 import { MonitorXViewPane } from "./views/monitorXView/monitorXViewPane.js";
+import { AskModeToolsContribution } from "../../chat/common/tools/askModeToolsContribution.js";
 
 if (isWeb) {
 	registerSingleton(
@@ -239,6 +240,10 @@ workbenchRegistry.registerWorkbenchContribution(
 );
 workbenchRegistry.registerWorkbenchContribution(
 	MonitorXChangelogToolsContribution,
+	LifecyclePhase.Restored
+);
+workbenchRegistry.registerWorkbenchContribution(
+	AskModeToolsContribution,
 	LifecyclePhase.Restored
 );
 

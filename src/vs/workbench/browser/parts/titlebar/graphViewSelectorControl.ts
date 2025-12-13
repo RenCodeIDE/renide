@@ -5,8 +5,7 @@
 
 import { getWindow } from '../../../../base/browser/dom.js';
 import { DisposableStore, IDisposable } from '../../../../base/common/lifecycle.js';
-
-export type GraphMode = 'file' | 'folder' | 'workspace' | 'architecture';
+import { GraphMode } from '../../../contrib/renViews/browser/views/graphView/graphTypes.js';
 
 export class GraphViewSelectorControl implements IDisposable {
 	private readonly _disposables = new DisposableStore();
@@ -53,12 +52,14 @@ export class GraphViewSelectorControl implements IDisposable {
 		modeSelect.style.flex = '1';
 		modeSelect.style.minWidth = '0';
 
-		const modes: GraphMode[] = ['file', 'folder', 'workspace', 'architecture'];
-		const modeLabels: Record<GraphMode, string> = {
+		// Only these modes are shown in the UI selector - other modes (architecture, gitHeatmap, etc.)
+		// can be set programmatically via tools
+		type SelectableMode = 'file' | 'folder' | 'workspace';
+		const modes: SelectableMode[] = ['file', 'folder', 'workspace'];
+		const modeLabels: Record<SelectableMode, string> = {
 			file: 'File',
 			folder: 'Folder',
-			workspace: 'Workspace',
-			architecture: 'Architecture'
+			workspace: 'Workspace'
 		};
 
 		modes.forEach(mode => {
@@ -76,6 +77,7 @@ export class GraphViewSelectorControl implements IDisposable {
 			if (this._isUpdatingProgrammatically) {
 				return;
 			}
+			// Dropdown only contains selectable modes (file, folder, workspace)
 			const selectedMode = modeSelect.value as GraphMode;
 			if (this._currentGraphMode !== selectedMode) {
 				this._currentGraphMode = selectedMode;
@@ -120,8 +122,12 @@ export class GraphViewSelectorControl implements IDisposable {
 		if (this._currentGraphMode === mode) {
 			return;
 		}
+		// Store the mode internally (can be any GraphMode set by tools)
 		this._currentGraphMode = mode;
-		if (this._graphModeSelect) {
+		
+		// Only update the dropdown UI if the mode is one that's shown in the selector
+		const selectableModes: GraphMode[] = ['file', 'folder', 'workspace'];
+		if (this._graphModeSelect && selectableModes.includes(mode)) {
 			this._isUpdatingProgrammatically = true;
 			try {
 				this._graphModeSelect.value = mode;
