@@ -144,7 +144,7 @@ class ClaudeAgentContribution
 			extensionRegisteredKey.reset();
 		}));
 
-		const vendor = 'anthropic';
+		const vendor = 'claude';
 		const requestServiceInstance = this.requestService; // Capture for use in provider
 		const secretStorageInstance = this.secretStorageService; // Capture for use in provider
 		const serverAddressInstance = serverAddress; // Capture for use in provider

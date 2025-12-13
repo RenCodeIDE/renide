@@ -18,6 +18,19 @@ export function extractResponseContent(part: IChatProgressHistoryResponseContent
 	}
 }
 
+export function extractThinkingContent(part: IChatProgressHistoryResponseContent | IChatTaskDto): string | undefined {
+	if (part.kind === 'thinking') {
+		// thinking parts have 'value' which can be string or array
+		const thinkingPart = part as { kind: 'thinking'; value?: string | string[] };
+		if (typeof thinkingPart.value === 'string') {
+			return thinkingPart.value;
+		} else if (Array.isArray(thinkingPart.value)) {
+			return thinkingPart.value.join('\n');
+		}
+	}
+	return undefined;
+}
+
 interface ContentPart {
 	text?: string;
 	functionCall?: {

@@ -1,0 +1,1208 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import { CancellationToken } from "../../../../base/common/cancellation.js";
+import { MarkdownString } from "../../../../base/common/htmlContent.js";
+import { localize } from "../../../../nls.js";
+import { ILogService } from "../../../../platform/log/common/log.js";
+import { ExtensionIdentifier } from "../../../../platform/extensions/common/extensions.js";
+import {
+	IChatAgentImplementation,
+	IChatAgentHistoryEntry,
+	IChatAgentRequest,
+	IChatAgentResult,
+	UserSelectedTools,
+	IChatAgentService,
+} from "../common/chatAgents.js";
+import { ChatMode } from "../common/chatModes.js";
+import { ChatModeKind, validateChatMode } from "../common/constants.js";
+import { ChatErrorLevel, IChatProgress } from "../common/chatService.js";
+import {
+	ILanguageModelsService,
+	IChatMessage,
+	ChatMessageRole,
+} from "../common/languageModels.js";
+import {
+	ILanguageModelToolsService,
+	IToolData,
+	CountTokensCallback,
+	IToolInvocation,
+	IToolResultTextPart,
+} from "../common/languageModelToolsService.js";
+import { IRequestService } from "../../../../platform/request/common/request.js";
+import { ISecretStorageService } from "../../../../platform/secrets/common/secrets.js";
+import { ITextModelService } from "../../../../editor/common/services/resolverService.js";
+import { hasKey } from "../../../../base/common/types.js";
+// @ts-ignore - Module resolution error is false positive, files exist
+import type {
+	ServerToolResult,
+	ChatGPTStreamingResponse,
+} from "./chatgpt/types.js";
+// @ts-ignore - Module resolution error is false positive, files exist
+import { validateIDEFormat } from "./chatgpt/validation.js";
+// @ts-ignore - Module resolution error is false positive, files exist
+import { sendChatGPTRequest } from "./chatgpt/request.js";
+import { extractTextFromParts, extractResponseContent, extractThinkingContent } from "./deepseek/utils.js"; // Reuse existing utils or move to common? Reuse for now.
+import {
+	ContextBuilder,
+	type IContextBlockMetadata,
+} from "../common/contextBuilder.js";
+import { IConfigurationService } from "../../../../platform/configuration/common/configuration.js";
+import { ILanguageFeaturesService } from "../../../../editor/common/services/languageFeatures.js";
+import { IMetricsService } from "../../../services/metrics/common/metricsService.js";
+
+export interface IBaseAgentConfig {
+	vendorId: string; // e.g. "deepseek", "claude", "gemini"
+	logPrefix: string; // e.g. "[deepseek-server]"
+	defaultModelId?: string; // e.g. "deepseek-chat"
+}
+
+export abstract class BaseAgentImplementation implements IChatAgentImplementation {
+	private readonly requestTools = new Map<string, UserSelectedTools>();
+	protected readonly fallbackCountTokens: CountTokensCallback = async (
+		input: string,
+		_token: CancellationToken
+	) => input.length;
+	protected readonly contextBuilder: ContextBuilder;
+
+	constructor(
+		protected readonly config: IBaseAgentConfig,
+		protected readonly requestService: IRequestService,
+		protected readonly serverAddress: string,
+		protected readonly secretStorageService: ISecretStorageService,
+		protected readonly logService: ILogService,
+		textModelService: ITextModelService,
+		protected readonly languageModelToolsService: ILanguageModelToolsService,
+		protected readonly languageModelsService: ILanguageModelsService,
+		protected readonly chatAgentService: IChatAgentService,
+		protected readonly configurationService: IConfigurationService,
+		languageFeaturesService?: ILanguageFeaturesService,
+		protected readonly metricsService?: IMetricsService
+	) {
+		this.contextBuilder = new ContextBuilder(
+			textModelService,
+			logService,
+			languageFeaturesService
+		);
+	}
+
+	protected abstract getModels(): Array<{ id: string; identifier: string; isDefault?: boolean; maxOutputTokens?: number }>;
+
+	protected async getAccessToken(): Promise<string | undefined> {
+		try {
+			const token = await this.secretStorageService.get("ren.auth.accessToken");
+			if (token) {
+				this.logService.debug(
+					`${this.config.logPrefix} Access token retrieved successfully (length: ${token.length})`
+				);
+			} else {
+				this.logService.warn(
+					`${this.config.logPrefix} No access token found in secret storage. User needs to authenticate.`
+				);
+			}
+			return token ?? undefined;
+		} catch (error) {
+			this.logService.error(
+				`${this.config.logPrefix} Error retrieving access token: ${error instanceof Error ? error.message : String(error)
+				}`
+			);
+			return undefined;
+		}
+	}
+
+	protected resolveModelFromRequest(userSelectedModelId?: string): string {
+		const models = this.getModels();
+		if (userSelectedModelId) {
+			const selectedModelConfig = models.find(
+				(m) => m.identifier === userSelectedModelId
+			);
+			if (selectedModelConfig) {
+				return selectedModelConfig.id;
+			}
+		}
+		const defaultModel = models.find((m) => m.isDefault);
+		return defaultModel?.id || this.config.defaultModelId || models[0]?.id;
+	}
+
+	async invoke(
+		request: IChatAgentRequest,
+		progress: (parts: IChatProgress[]) => void,
+		history: IChatAgentHistoryEntry[],
+		token: CancellationToken
+	): Promise<IChatAgentResult> {
+		if (token.isCancellationRequested) {
+			return { details: "cancelled" };
+		}
+
+		// Check if user selected a model from a different vendor
+		if (request.userSelectedModelId) {
+			const selectedModelMetadata =
+				this.languageModelsService.lookupLanguageModel(
+					request.userSelectedModelId
+				);
+			// If the model ID contains vendorId, handle it locally regardless of vendor metadata
+			if (request.userSelectedModelId.includes(this.config.vendorId)) {
+				// This is a local model, handle it locally
+				this.logService.info(`${this.config.logPrefix} Handling model locally: ${request.userSelectedModelId}`);
+			} else if (selectedModelMetadata && selectedModelMetadata.vendor !== this.config.vendorId) {
+				// Route to appropriate agent based on vendor
+				if (
+					selectedModelMetadata.vendor === "openai" ||
+					request.userSelectedModelId.startsWith("openai/")
+				) {
+					return this.chatAgentService.invokeAgent(
+						"chatgpt.local",
+						request,
+						progress,
+						history,
+						token
+					);
+				}
+				if (
+					selectedModelMetadata.vendor === "claude" ||
+					request.userSelectedModelId.startsWith("anthropic/")
+				) {
+					return this.chatAgentService.invokeAgent(
+						"claude.local",
+						request,
+						progress,
+						history,
+						token
+					);
+				}
+				if (
+					selectedModelMetadata.vendor === "gemini" ||
+					request.userSelectedModelId.startsWith("google/")
+				) {
+					return this.chatAgentService.invokeAgent(
+						"gemini.local",
+						request,
+						progress,
+						history,
+						token
+					);
+				}
+				if (
+					selectedModelMetadata.vendor === "deepseek" ||
+					request.userSelectedModelId.startsWith("deepseek/")
+				) {
+					return this.chatAgentService.invokeAgent(
+						"deepseek.local",
+						request,
+						progress,
+						history,
+						token
+					);
+				}
+				// Otherwise, delegate to language models service for cross-vendor model
+				return this.invokeViaLanguageModelsService(
+					request,
+					progress,
+					history,
+					token,
+					request.userSelectedModelId
+				);
+			}
+		}
+
+		// Resolve the model to use from request
+		const modelToUse = this.resolveModelFromRequest(
+			request.userSelectedModelId
+		);
+
+		// Read tools from request object first
+		if (request.userSelectedTools) {
+			this.logService.debug(
+				`[${this.config.vendorId}] reading tools from request object for request ${request.requestId
+				}: ${JSON.stringify(request.userSelectedTools)}`
+			);
+			this.requestTools.set(request.requestId, request.userSelectedTools);
+		}
+
+		const { messages, contextEntries } = await this.buildMessages(
+			request,
+			history,
+			token
+		);
+		const {
+			tools: toolConfigs,
+			nameToToolId,
+			summaries,
+		} = this.buildToolDeclarations(request.requestId, validateChatMode(request.chatMode) || ChatModeKind.Agent);
+
+		// Inject Plan mode instructions
+		if (request.chatMode === ChatModeKind.Plan) {
+			const instructions = ChatMode.Plan.modeInstructions?.get();
+			if (instructions) {
+				messages.push({
+					role: ChatMessageRole.System,
+					content: [
+						{
+							type: "text",
+							value:
+								instructions.content +
+								"\n\nIMPORTANT: Never write plan content in chat messages. Always use the writePlan tool to create/update the .plan.md file. Reference the file path in chat instead of duplicating content.",
+						},
+					],
+				});
+			}
+		}
+
+		if (summaries.length) {
+			messages.push({
+				role: ChatMessageRole.System,
+				content: [
+					{
+						type: "text",
+						value: `You can call the following tools by name when they would help:
+${summaries.map((summary) => `- ${summary}`).join("\n")}
+Only call a tool if it is necessary; otherwise respond normally.`,
+					},
+				],
+			});
+		}
+
+		const maxIterations =
+			this.configurationService.getValue<number>("chat.agent.maxIterations") ??
+			Number.MAX_SAFE_INTEGER;
+		let iteration = 0;
+		let pendingToolResults: ServerToolResult[] | undefined = undefined;
+		const conversationToolResults = new Map<string, ServerToolResult>();
+		const requestStartTime = Date.now();
+
+		try {
+			while (iteration < maxIterations) {
+				if (token.isCancellationRequested) {
+					return { details: "cancelled" };
+				}
+
+				if (pendingToolResults && pendingToolResults.length > 0) {
+					for (const result of pendingToolResults) {
+						conversationToolResults.set(result.toolCallId, result);
+					}
+					const ids = pendingToolResults
+						.map((result) => result.toolCallId)
+						.join(", ");
+					this.logService.info(
+						`${this.config.logPrefix} Added ${pendingToolResults.length} tool result(s) to conversation history: ${ids}`
+					);
+					pendingToolResults = undefined;
+				}
+
+				if (conversationToolResults.size > 0) {
+					const ids = Array.from(conversationToolResults.values())
+						.map((result) => result.toolCallId)
+						.join(", ");
+					this.logService.info(
+						`${this.config.logPrefix} Forwarding ${conversationToolResults.size} total tool result(s) to server: ${ids}`
+					);
+				}
+
+				const toolResultsForServer =
+					conversationToolResults.size > 0
+						? Array.from(conversationToolResults.values())
+						: undefined;
+
+
+				const projectId = await this.metricsService?.getProjectIdAsync();
+				const streamingResponse = await this.performRequest(
+					messages,
+					toolConfigs,
+					token,
+					modelToUse,
+					toolResultsForServer,
+					request.chatMode,
+					request.sessionId,
+					projectId
+				);
+				let streamedText = false;
+
+				try {
+					for await (const chunk of streamingResponse.stream) {
+						if (token.isCancellationRequested) {
+							break;
+						}
+
+						// Handle streaming format differences if necessary
+						// DeepSeek, Claude, and Gemini agents all currently consume the same normalized IDEStreamPart format
+						// which is what sendChatGPTRequest returns (after transformers on server)
+						// However, the BaseAgent implementation below assumes the generic format:
+
+						// Map generic parts to something we can process
+						// Note: formatting might differ slightly per agent if they did custom processing
+						// But looking at the source, they all use very similar logic.
+
+						const responseParts: Array<{ text?: string; thinking?: string; functionCall?: { name: string; args: Record<string, unknown> } }> = chunk
+							.map(
+								(part: {
+									text?: string;
+									thinking?: string;
+									toolCall?: {
+										name: string;
+										id: string;
+										args: Record<string, unknown>;
+									};
+								}) => {
+									if (part.text !== undefined) {
+										return { text: part.text };
+									} else if (part.thinking !== undefined) {
+										return { thinking: part.thinking };
+									} else if (part.toolCall) {
+										return {
+											functionCall: {
+												name: part.toolCall.name,
+												args: part.toolCall.args,
+											},
+										};
+									}
+									return { text: "" };
+								}
+							)
+							.filter((part) =>
+								(hasKey(part, { text: true }) ? part.text!.length > 0 : false) ||
+								(hasKey(part, { thinking: true }) ? part.thinking!.length > 0 : false) ||
+								hasKey(part, "functionCall")
+							);
+
+						const delta = extractTextFromParts(responseParts, false); // This helper extracts text. We might need to handle thinking separately in UI.
+
+						// Handle thinking parts by emitting them as markdown (or specific UI element if supported)
+						// Currently extractTextFromParts only handles text.
+						// Let's modify the progress emission to handle thinking.
+
+						const thinkingParts = responseParts.filter(p => p.thinking).map(p => p.thinking).join("");
+						if (thinkingParts.length > 0) {
+							// Emit proper thinking part - UI handles accumulation
+							progress([{ kind: "thinking", value: thinkingParts }]);
+						}
+						if (delta.length) {
+							const markdownChunk = new MarkdownString(delta);
+							markdownChunk.supportThemeIcons = true;
+							progress([{ kind: "markdownContent", content: markdownChunk }]);
+							streamedText = true;
+						}
+					}
+				} catch (error) {
+					if (!token.isCancellationRequested) {
+						throw error;
+					}
+				}
+
+				if (token.isCancellationRequested) {
+					return { details: "cancelled" };
+				}
+
+				const responseData = await streamingResponse.result;
+				const responseParts = responseData.parts;
+
+				// Add assistant message with both text and tool_use parts if present
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				const toolCallParts = responseParts.filter(
+					(part: any) => part.toolCall !== undefined
+				);
+				// eslint-disable-next-line @typescript-eslint/no-explicit-any
+				const textParts = responseParts.filter(
+					(part: any) => part.text !== undefined
+				);
+
+				const thinkingParts = responseParts.filter(
+					(part: any) => part.thinking !== undefined
+				);
+
+				const assistantContent: Array<
+					| { type: "text"; value: string }
+					| { type: "thinking"; value: string }
+					| {
+						type: "tool_use";
+						name: string;
+						toolCallId: string;
+						parameters: Record<string, unknown>;
+					}
+				> = [];
+
+				if (thinkingParts.length > 0) {
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+					const thinkingContent = thinkingParts
+						.map((part: any) => part.thinking || "")
+						.join("");
+					if (thinkingContent.trim().length) {
+						assistantContent.push({ type: "thinking", value: thinkingContent });
+					}
+				}
+
+				if (textParts.length > 0) {
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+					const textContent = textParts
+						.map((part: any) => part.text || "")
+						.join("");
+					if (textContent.trim().length) {
+						assistantContent.push({ type: "text", value: textContent });
+					}
+				}
+
+				if (toolCallParts.length > 0) {
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+					const toolUseParts = toolCallParts.map((part: any) => {
+						const toolCall = part.toolCall;
+						return {
+							type: "tool_use" as const,
+							name: toolCall.name,
+							toolCallId: toolCall.id,
+							parameters: toolCall.args,
+						};
+					});
+					assistantContent.push(...toolUseParts);
+				}
+
+				if (assistantContent.length > 0) {
+					messages.push({
+						role: ChatMessageRole.Assistant,
+						content: assistantContent,
+					});
+				}
+
+				// Check if there are tool calls to process
+				if (!toolCallParts.length) {
+					const responseText =
+						textParts
+							.map((part: { text?: string }) => part.text || "")
+							.join("") ||
+						localize(
+							`${this.config.vendorId}.emptyTextResponse`,
+							`${this.config.vendorId} did not return any text.`
+						);
+
+					await this.contextBuilder.tryAutoApplyEdits(
+						responseText,
+						contextEntries,
+						progress,
+						token
+					);
+
+					if (!streamedText) {
+						const markdown = new MarkdownString(responseText);
+						markdown.supportThemeIcons = true;
+						progress([{ kind: "markdownContent", content: markdown }]);
+					}
+
+					return {
+						details: `${this.config.vendorId}-response`,
+						metadata: { model: modelToUse },
+					};
+				}
+
+				if (!toolConfigs.length) {
+					const errorMessage = localize(
+						`${this.config.vendorId}.toolsNotAuthorized`,
+						`${this.config.vendorId} requested tool calls but none were authorized for this request.`
+					);
+					progress([
+						{
+							kind: "markdownContent",
+							content: new MarkdownString(errorMessage),
+						},
+					]);
+					return {
+						errorDetails: {
+							message: errorMessage,
+							level: ChatErrorLevel.Error,
+						},
+						details: errorMessage,
+					};
+				}
+
+				const toolResultsForNextRequest: ServerToolResult[] = [];
+
+				// Parallel tool execution
+				const maxConcurrency =
+					this.configurationService.getValue<number>(
+						"chat.toolCalls.maxConcurrency"
+					) ?? 10;
+				const timeoutMs =
+					this.configurationService.getValue<number>(
+						"chat.toolCalls.timeoutMs"
+					) ?? 30000;
+
+				const parallelExecutionStartTime = Date.now();
+				this.logService.info(
+					`${this.config.logPrefix} Starting parallel execution of ${toolCallParts.length} tool call(s) with maxConcurrency=${maxConcurrency}`
+				);
+
+				interface ToolTask {
+					index: number;
+					callId: string;
+					toolName: string;
+					toolId?: string;
+					parameters: Record<string, unknown>;
+				}
+				const tasks: ToolTask[] = toolCallParts.map(
+					(part: any, index: number) => ({
+						index,
+						callId: part.toolCall!.id,
+						toolName: part.toolCall!.name,
+						toolId: nameToToolId.get(part.toolCall!.name),
+						parameters: part.toolCall!.args ?? {},
+					})
+				);
+
+				const resultsBuffer: (ServerToolResult | undefined)[] = new Array(
+					tasks.length
+				);
+
+				const runTask = async (task: ToolTask): Promise<void> => {
+					if (token.isCancellationRequested) {
+						return;
+					}
+					const { callId, toolName, toolId, parameters, index } = task;
+					const taskStartTime = Date.now();
+
+					if (!callId || callId.trim().length === 0) {
+						resultsBuffer[index] = {
+							toolCallId: callId || `invalid_call_id_${index}`,
+							content: [
+								{ type: "text", value: `Invalid callId for tool ${toolName}` },
+							],
+						};
+						return;
+					}
+
+					if (!toolId) {
+						this.logService.error(
+							`${this.config.logPrefix} model requested unknown tool name '${toolName}'. Available names: ${Array.from(
+								nameToToolId.keys()
+							).join(", ")}`
+						);
+						resultsBuffer[index] = {
+							toolCallId: callId,
+							content: [
+								{
+									type: "text",
+									value: localize(
+										`${this.config.vendorId}.unknownToolCall`,
+										`${this.config.vendorId} requested unknown tool {0}.`,
+										toolName
+									),
+								},
+							],
+						};
+						return;
+					}
+
+					const invocation = this.createToolInvocation(
+						callId,
+						toolId,
+						parameters,
+						request
+					);
+
+					const runWithTimeout = async (): Promise<ServerToolResult> => {
+						const timer = new Promise<never>((_, reject) => {
+							const id = setTimeout(() => {
+								clearTimeout(id);
+								reject(new Error(`Tool timed out after ${timeoutMs}ms`));
+							}, timeoutMs);
+						});
+
+						const exec = this.languageModelToolsService
+							.invokeTool(invocation, this.fallbackCountTokens, token)
+							.then((result) => {
+								const textOutput = (result.content ?? [])
+									.filter(
+										(part): part is IToolResultTextPart => part.kind === "text"
+									)
+									.map((part) => part.value)
+									.filter((v) => v && v.length > 0)
+									.join("\n");
+								const finalOutput =
+									textOutput.trim().length > 0
+										? textOutput
+										: (result as any).toolResultError
+											? `Error: ${(result as any).toolResultError}`
+											: "Tool executed successfully but returned no output.";
+								return {
+									toolCallId: callId,
+									content: [{ type: "text" as const, value: finalOutput }],
+								};
+							});
+
+						return Promise.race([exec, timer]);
+					};
+
+					try {
+						resultsBuffer[index] = await runWithTimeout();
+						const taskTime = Date.now() - taskStartTime;
+						this.logService.debug(
+							`${this.config.logPrefix} Finished tool ${toolName} (callId: ${callId}) in ${taskTime}ms`
+						);
+					} catch (error) {
+						const taskTime = Date.now() - taskStartTime;
+						const message =
+							error instanceof Error ? error.message : String(error);
+						this.logService.error(
+							`${this.config.logPrefix} tool ${toolId} (callId: ${callId}) failed after ${taskTime}ms: ${message}`
+						);
+						resultsBuffer[index] = {
+							toolCallId: callId,
+							content: [
+								{
+									type: "text" as const,
+									value: message || "Tool execution failed",
+								},
+							],
+						};
+					}
+				};
+
+				let next = 0;
+				const workers: Promise<void>[] = [];
+				const startWorker = (): Promise<void> => {
+					if (next >= tasks.length) {
+						return Promise.resolve();
+					}
+					const task = tasks[next++];
+					return runTask(task).then(() => startWorker());
+				};
+				for (let i = 0; i < Math.min(maxConcurrency, tasks.length); i++) {
+					workers.push(startWorker());
+				}
+				await Promise.all(workers);
+
+				const parallelExecutionTime = Date.now() - parallelExecutionStartTime;
+				this.logService.info(
+					`${this.config.logPrefix} Completed parallel execution of ${tasks.length} tool call(s) in ${parallelExecutionTime}ms ` +
+					`(avg: ${(parallelExecutionTime / tasks.length).toFixed(
+						2
+					)}ms per call, ` +
+					`concurrency: ${maxConcurrency})`
+				);
+
+				for (let i = 0; i < resultsBuffer.length; i++) {
+					const r = resultsBuffer[i];
+					if (r) {
+						toolResultsForNextRequest.push(r);
+					}
+				}
+
+				if (toolResultsForNextRequest.length === 0) {
+					throw new Error(
+						localize(
+							`${this.config.vendorId}.noToolResponses`,
+							`${this.config.vendorId} requested tool calls but no responses were produced.`
+						)
+					);
+				}
+
+				pendingToolResults = toolResultsForNextRequest;
+				this.logService.info(
+					`${this.config.logPrefix} Collected ${toolResultsForNextRequest.length} tool results for next request`
+				);
+				iteration++;
+			}
+
+			const totalRequestTime = Date.now() - requestStartTime;
+			this.logService.warn(
+				`${this.config.logPrefix} Reached maxIterations limit (${maxIterations}) after ${totalRequestTime}ms and ${iteration} iterations`
+			);
+			throw new Error(
+				localize(
+					`${this.config.vendorId}.maxToolIterations`,
+					"Reached the maximum number of tool call iterations ({0}) without producing an answer.",
+					maxIterations
+				)
+			);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.logService.error(`[${this.config.vendorId}] ${message}`);
+
+			const markdown = new MarkdownString(
+				localize(`${this.config.vendorId}.error`, "${this.config.vendorId} request failed: {0}", message)
+			);
+			markdown.isTrusted = true;
+			progress([{ kind: "markdownContent", content: markdown }]);
+
+			return {
+				errorDetails: {
+					message,
+					level: ChatErrorLevel.Error,
+				},
+				details: message,
+			};
+		} finally {
+			this.requestTools.delete(request.requestId);
+			this.languageModelToolsService.cancelToolCallsForRequest(
+				request.requestId
+			);
+		}
+	}
+
+	protected async invokeViaLanguageModelsService(
+		request: IChatAgentRequest,
+		progress: (parts: IChatProgress[]) => void,
+		history: IChatAgentHistoryEntry[],
+		token: CancellationToken,
+		modelId: string
+	): Promise<IChatAgentResult> {
+		this.logService.info(
+			`[${this.config.vendorId}] Delegating request to language models service for model ${modelId} (cross-vendor)`
+		);
+
+		const messages: IChatMessage[] = [];
+
+		const contextPrompt = await this.contextBuilder.buildContextPrompt(
+			request,
+			token
+		);
+		if (contextPrompt) {
+			messages.push({
+				role: ChatMessageRole.User,
+				content: [{ type: "text", value: contextPrompt.prompt }],
+			});
+		}
+
+		for (const entry of history) {
+			if (!entry) {
+				continue;
+			}
+			const userMessage = entry.request?.message;
+			if (userMessage) {
+				messages.push({
+					role: ChatMessageRole.User,
+					content: [{ type: "text", value: userMessage }],
+				});
+			}
+			const assistantText = entry.response
+				?.map((part) => extractResponseContent(part))
+				.filter(
+					(value): value is string =>
+						typeof value === "string" && value.length > 0
+				)
+				.join("\n");
+			if (assistantText) {
+				messages.push({
+					role: ChatMessageRole.Assistant,
+					content: [{ type: "text", value: assistantText }],
+				});
+			}
+		}
+
+		messages.push({
+			role: ChatMessageRole.User,
+			content: [{ type: "text", value: request.message }],
+		});
+
+		try {
+			const response = await this.languageModelsService.sendChatRequest(
+				modelId,
+				new ExtensionIdentifier(`core.${this.config.vendorId}`),
+				messages,
+				{},
+				token
+			);
+
+			for await (const chunk of response.stream) {
+				if (token.isCancellationRequested) {
+					break;
+				}
+				const parts = Array.isArray(chunk) ? chunk : [chunk];
+				for (const part of parts) {
+					if (part.type === "text") {
+						const markdownChunk = new MarkdownString(part.value);
+						markdownChunk.supportThemeIcons = true;
+						progress([{ kind: "markdownContent", content: markdownChunk }]);
+					}
+				}
+			}
+
+			await response.result;
+
+			return {
+				details: `${this.config.vendorId}-response`,
+				metadata: { model: modelId, delegated: true },
+			};
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.logService.error(
+				`[${this.config.vendorId}] Error in delegated request for model ${modelId}:`,
+				error
+			);
+			const markdown = new MarkdownString(
+				localize(`${this.config.vendorId}.error`, "${this.config.vendorId} request failed: {0}", message)
+			);
+			markdown.isTrusted = true;
+			progress([{ kind: "markdownContent", content: markdown }]);
+			return {
+				errorDetails: {
+					message,
+					level: ChatErrorLevel.Error,
+				},
+				details: message,
+			};
+		}
+	}
+
+	setRequestTools(requestId: string, tools: UserSelectedTools): void {
+		if (!tools) {
+			this.logService.debug(
+				`[${this.config.vendorId}] clearing tool selection for request ${requestId}`
+			);
+			this.requestTools.delete(requestId);
+			return;
+		}
+		this.logService.debug(
+			`[${this.config.vendorId}] received tool selection for request ${requestId}: ${JSON.stringify(
+				tools
+			)}`
+		);
+		this.requestTools.set(requestId, tools);
+	}
+
+	// Abstracted helper methods
+
+	private buildToolDeclarations(
+		requestId: string,
+		chatMode: ChatModeKind
+	): {
+		tools: Array<{ name: string; description?: string; parameters: unknown }>;
+		nameToToolId: Map<string, string>;
+		summaries: string[];
+	} {
+		const serverTools: Array<{
+			name: string;
+			description?: string;
+			parameters: unknown;
+		}> = [];
+		const nameToToolId = new Map<string, string>();
+		const summaries: string[] = [];
+		const usedToolNames = new Set<string>();
+
+		// Filter tools for the current mode
+		const tools = Array.from(this.languageModelToolsService.getTools());
+		const currentRequestTools = this.requestTools.get(requestId);
+		const toolUserSelection =
+			currentRequestTools === undefined || currentRequestTools === null
+				? true
+				: currentRequestTools;
+
+		// Skip tools mostly if it's not a tool-compatible mode, but keeping logic consistent with original
+		if (chatMode === ChatModeKind.Ask) {
+			// In Ask mode, we usually don't use tools unless specific ones; but original code still built them?
+			// Actually original deepseek agent uses tools for all modes but different endpoint?
+			// Claude/Gemini switch endpoint.
+			// We'll let `performRequest` decide if tools are sent.
+			// But we need to build them to pass to performRequest.
+		}
+
+		let toolIndex = 0;
+		for (const tool of tools) {
+			// Check if tool is allowed
+			if (typeof toolUserSelection === "boolean") {
+				if (!toolUserSelection) {
+					toolIndex++;
+					continue;
+				}
+			} else if (Array.isArray(toolUserSelection)) {
+				if (!toolUserSelection.includes(tool.id)) {
+					toolIndex++;
+					continue;
+				}
+			}
+
+			const index = toolIndex++;
+			const functionName = this.sanitizeToolName(tool, index, usedToolNames);
+			usedToolNames.add(functionName);
+			nameToToolId.set(functionName, tool.id);
+
+			const descriptionParts = [];
+			if ('displayName' in tool && tool.displayName) descriptionParts.push(tool.displayName);
+			if ('description' in tool && tool.description) descriptionParts.push(tool.description);
+
+			const description = descriptionParts.length
+				? descriptionParts.join(" ")
+				: undefined;
+
+			// Apply same parameters validation as ChatGPT (consolidated)
+			let parameters: Record<string, unknown> & {
+				type?: string;
+				properties?: Record<string, unknown>;
+			};
+			const rawParameters = tool.inputSchema;
+			if (
+				!rawParameters ||
+				typeof rawParameters !== "object" ||
+				rawParameters === null ||
+				Array.isArray(rawParameters)
+			) {
+				parameters = { type: "object", properties: {} };
+			} else {
+				// Cast to object type for type narrowing
+				parameters = rawParameters as Record<string, unknown> & {
+					type?: string;
+					properties?: Record<string, unknown>;
+				};
+				if (!("type" in parameters) || parameters.type !== "object") {
+					parameters = { ...parameters, type: "object" };
+				}
+				if (
+					!("properties" in parameters) ||
+					typeof parameters.properties !== "object" ||
+					parameters.properties === null ||
+					Array.isArray(parameters.properties)
+				) {
+					parameters = { ...parameters, properties: {} };
+				}
+				if (parameters.properties) {
+					// eslint-disable-next-line @typescript-eslint/no-explicit-any
+					const props = parameters.properties as Record<string, any>;
+					for (const key in props) {
+						if (propIsObject(props[key])) { // Helper needed
+							const prop = props[key];
+							if (!("type" in prop) || typeof prop.type !== "string") {
+								props[key] = { ...prop, type: "string" };
+							}
+							if (!("description" in props[key])) {
+								props[key] = { ...props[key], description: "" };
+							}
+						}
+					}
+				}
+			}
+
+			summaries.push(
+				`${functionName}: ${description ?? tool.toolReferenceName ?? tool.id}`
+			);
+
+			serverTools.push({
+				name: functionName,
+				description,
+				parameters,
+			});
+		}
+
+		return {
+			tools: serverTools,
+			nameToToolId,
+			summaries,
+		};
+	}
+
+	private sanitizeToolName(
+		tool: IToolData,
+		index: number,
+		usedNames: Set<string>
+	): string {
+		const rawBase = tool.toolReferenceName ?? tool.id;
+		let base = rawBase
+			.replace(/[^a-zA-Z0-9_]/g, "_")
+			.replace(/_{2,}/g, "_")
+			.replace(/^_+/, "")
+			.slice(0, 64);
+		if (!base || !/^[A-Za-z]/.test(base)) {
+			base = `tool_${index + 1}`;
+		}
+
+		let attempt = base;
+		let counter = 1;
+		while (usedNames.has(attempt)) {
+			counter++;
+			const suffix = `_${counter}`;
+			const baseLength = Math.max(1, 64 - suffix.length);
+			attempt = `${base.slice(0, baseLength)}${suffix}`;
+			if (!/^[A-Za-z]/.test(attempt)) {
+				attempt = `tool_${index + counter}`;
+			}
+		}
+		return attempt;
+	}
+
+	private createToolInvocation(
+		callId: string,
+		toolId: string,
+		parameters: Record<string, unknown>,
+		request: IChatAgentRequest
+	): IToolInvocation {
+		return {
+			callId,
+			toolId,
+			parameters,
+			context: { sessionId: request.sessionId },
+			chatRequestId: request.requestId,
+		};
+	}
+
+	// Abstract this for customization
+	protected getEndpoint(mode: ChatModeKind): "/api/agent/tools" | "/api/agent/ask" {
+		// Default behavior for Claude/Gemini: ask endpoint for Ask mode, tools otherwise.
+		// DeepSeek overrides this to always return "/api/agent/tools"
+		return mode === ChatModeKind.Ask ? "/api/agent/ask" : "/api/agent/tools";
+	}
+
+	private async performRequest(
+		messages: IChatMessage[],
+		tools: Array<{ name: string; description?: string; parameters: unknown }>,
+		token: CancellationToken,
+		model: string,
+		toolResults?: ServerToolResult[],
+		mode?: string,
+		sessionId?: string,
+		projectId?: string
+	): Promise<ChatGPTStreamingResponse> {
+		const toolNames = tools.map((t) => t.name || "<unnamed>");
+		this.logService.info(
+			`${this.config.logPrefix} performRequest: model=${model}, messages=${messages.length
+			}, tools=${toolNames.join(", ") || "none"}, toolResults=${toolResults?.length || 0
+			}, mode=${mode || "unknown"}`
+		);
+
+		const accessToken = await this.getAccessToken();
+		if (!accessToken) {
+			throw new Error(
+				localize(
+					`${this.config.vendorId}.noAuthToken`,
+					"Authentication token is missing. Please sign in."
+				)
+			);
+		}
+
+		validateIDEFormat(messages);
+		this.logService.debug(
+			`${this.config.logPrefix} Message format validation passed: ${messages.length} messages in IDE format`
+		);
+
+		const endpoint = this.getEndpoint(mode as ChatModeKind);
+		const hasToolResults = toolResults && toolResults.length > 0;
+
+		// Calculate max output tokens
+		const models = this.getModels();
+		const modelConfig = models.find((m) => m.id === model);
+		const maxOutputTokens = modelConfig?.maxOutputTokens ?? 8192;
+
+		this.logService.info(
+			`${this.config.logPrefix} Using endpoint: ${endpoint} (tools=${tools.length
+			}, toolResults=${toolResults?.length || 0}, maxOutputTokens=${maxOutputTokens})`
+		);
+
+		const response = await sendChatGPTRequest(
+			this.requestService,
+			accessToken,
+			this.serverAddress,
+			endpoint,
+			messages,
+			token,
+			{
+				modelName: model,
+				tools: tools,
+				toolResults: hasToolResults ? toolResults : undefined,
+				mode: mode,
+				maxOutputTokens, // Some agents might ignore this but passing it is safe
+				sessionId,
+				projectId,
+			},
+			this.logService,
+			this.config.vendorId as "openai" | "gemini" | "claude" | "deepseek"
+		);
+
+		response.result.then(
+			(result: {
+				parts: Array<{
+					text?: string;
+					toolCall?: {
+						name: string;
+						id: string;
+						args: Record<string, unknown>;
+					};
+				}>;
+				finishReason?: string | null;
+			}) => {
+				this.logService.info(
+					`${this.config.logPrefix} Request completed: ${result.parts.length
+					} parts, finishReason=${result.finishReason || "none"}`
+				);
+			},
+			(error: unknown) => {
+				this.logService.error(
+					`${this.config.logPrefix} Streaming request failed: ${error instanceof Error ? error.message : String(error)}`
+				);
+			}
+		);
+		return response;
+	}
+
+	// Helper to build messages (shared logic)
+	protected async buildMessages(
+		request: IChatAgentRequest,
+		history: IChatAgentHistoryEntry[],
+		token: CancellationToken
+	): Promise<{
+		messages: IChatMessage[];
+		contextEntries: IContextBlockMetadata[];
+	}> {
+		const messages: IChatMessage[] = [];
+		const contextPrompt = await this.contextBuilder.buildContextPrompt(
+			request,
+			token
+		);
+		const contextEntries = contextPrompt?.entries ?? [];
+		if (contextPrompt) {
+			messages.push({
+				role: ChatMessageRole.User,
+				content: [{ type: "text", value: contextPrompt.prompt }],
+			});
+		}
+
+		for (const entry of history) {
+			if (!entry) {
+				continue;
+			}
+			const userMessage = entry.request?.message;
+			if (userMessage) {
+				messages.push({
+					role: ChatMessageRole.User,
+					content: [{ type: "text", value: userMessage }],
+				});
+			}
+			const assistantText = entry.response
+				?.map((part) => extractResponseContent(part))
+				.filter(
+					(value): value is string =>
+						typeof value === "string" && value.length > 0
+				)
+				.join("\n");
+
+			// Extract thinking content for DeepSeek reasoner models
+			const thinkingText = entry.response
+				?.map((part) => extractThinkingContent(part))
+				.filter(
+					(value): value is string =>
+						typeof value === "string" && value.length > 0
+				)
+				.join("\n");
+
+			if (assistantText || thinkingText) {
+				const content: Array<{ type: "text"; value: string } | { type: "thinking"; value: string }> = [];
+				if (thinkingText) {
+					content.push({ type: "thinking", value: thinkingText });
+				}
+				if (assistantText) {
+					content.push({ type: "text", value: assistantText });
+				}
+				messages.push({
+					role: ChatMessageRole.Assistant,
+					content,
+				});
+			}
+		}
+
+		messages.push({
+			role: ChatMessageRole.User,
+			content: [{ type: "text", value: request.message }],
+		});
+
+		return { messages, contextEntries };
+	}
+}
+
+function propIsObject(val: any): val is Record<string, any> {
+	return val && typeof val === "object" && val !== null && !Array.isArray(val);
+}
