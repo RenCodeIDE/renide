@@ -52,6 +52,10 @@ import {
 import { IConfigurationService } from "../../../../platform/configuration/common/configuration.js";
 import { ILanguageFeaturesService } from "../../../../editor/common/services/languageFeatures.js";
 import { IMetricsService } from "../../../services/metrics/common/metricsService.js";
+import {
+	AuthenticationHelper,
+	ChatConfigurationService,
+} from "../common/chatUtilities.js";
 
 export interface IBaseAgentConfig {
 	vendorId: string; // e.g. "deepseek", "claude", "gemini"
@@ -66,6 +70,8 @@ export abstract class BaseAgentImplementation implements IChatAgentImplementatio
 		_token: CancellationToken
 	) => input.length;
 	protected readonly contextBuilder: ContextBuilder;
+	protected readonly authHelper: AuthenticationHelper;
+	protected readonly chatConfig: ChatConfigurationService;
 
 	constructor(
 		protected readonly config: IBaseAgentConfig,
@@ -86,30 +92,19 @@ export abstract class BaseAgentImplementation implements IChatAgentImplementatio
 			logService,
 			languageFeaturesService
 		);
+		// Initialize utilities
+		this.authHelper = new AuthenticationHelper(
+			secretStorageService,
+			logService,
+			config.logPrefix
+		);
+		this.chatConfig = new ChatConfigurationService(configurationService);
 	}
 
 	protected abstract getModels(): Array<{ id: string; identifier: string; isDefault?: boolean; maxOutputTokens?: number }>;
 
 	protected async getAccessToken(): Promise<string | undefined> {
-		try {
-			const token = await this.secretStorageService.get("ren.auth.accessToken");
-			if (token) {
-				this.logService.debug(
-					`${this.config.logPrefix} Access token retrieved successfully (length: ${token.length})`
-				);
-			} else {
-				this.logService.warn(
-					`${this.config.logPrefix} No access token found in secret storage. User needs to authenticate.`
-				);
-			}
-			return token ?? undefined;
-		} catch (error) {
-			this.logService.error(
-				`${this.config.logPrefix} Error retrieving access token: ${error instanceof Error ? error.message : String(error)
-				}`
-			);
-			return undefined;
-		}
+		return this.authHelper.getAccessToken();
 	}
 
 	protected resolveModelFromRequest(userSelectedModelId?: string): string {
@@ -264,9 +259,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			});
 		}
 
-		const maxIterations =
-			this.configurationService.getValue<number>("chat.agent.maxIterations") ??
-			Number.MAX_SAFE_INTEGER;
+		const maxIterations = this.chatConfig.getMaxIterations();
 		let iteration = 0;
 		let pendingToolResults: ServerToolResult[] | undefined = undefined;
 		const conversationToolResults = new Map<string, ServerToolResult>();
@@ -516,14 +509,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				const toolResultsForNextRequest: ServerToolResult[] = [];
 
 				// Parallel tool execution
-				const maxConcurrency =
-					this.configurationService.getValue<number>(
-						"chat.toolCalls.maxConcurrency"
-					) ?? 10;
-				const timeoutMs =
-					this.configurationService.getValue<number>(
-						"chat.toolCalls.timeoutMs"
-					) ?? 30000;
+				const maxConcurrency = this.chatConfig.getToolCallMaxConcurrency();
+				const timeoutMs = this.chatConfig.getToolCallTimeoutMs();
 
 				const parallelExecutionStartTime = Date.now();
 				this.logService.info(

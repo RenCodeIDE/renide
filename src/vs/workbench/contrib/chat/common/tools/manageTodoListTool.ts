@@ -27,6 +27,12 @@ export const TodoListToolDescriptionFieldSettingId = 'chat.todoListTool.descript
 
 export const ManageTodoListToolToolId = 'manage_todo_list';
 
+/**
+ * Default session ID used when no session context is available.
+ * Extracted to avoid duplication across methods.
+ */
+const DEFAULT_TODO_SESSION_ID = 'default';
+
 export function createManageTodoListToolData(writeOnly: boolean, includeDescription: boolean = true): IToolData {
 	const baseProperties: any = {
 		todoList: {
@@ -119,8 +125,6 @@ export class ManageTodoListTool extends Disposable implements IToolImpl {
 
 	async invoke(invocation: IToolInvocation, _countTokens: any, _progress: any, _token: CancellationToken): Promise<IToolResult> {
 		const args = invocation.parameters as IManageTodoListToolInputParams;
-		// For: #263001 Use default sessionId
-		const DEFAULT_TODO_SESSION_ID = 'default';
 		const chatSessionId = invocation.context?.sessionId ?? args.chatSessionId ?? DEFAULT_TODO_SESSION_ID;
 
 		this.logService.debug(`ManageTodoListTool: Invoking with options ${JSON.stringify(args)}`);
@@ -164,8 +168,6 @@ export class ManageTodoListTool extends Disposable implements IToolImpl {
 
 	async prepareToolInvocation(context: IToolInvocationPreparationContext, _token: CancellationToken): Promise<IPreparedToolInvocation | undefined> {
 		const args = context.parameters as IManageTodoListToolInputParams;
-		// For: #263001 Use default sessionId
-		const DEFAULT_TODO_SESSION_ID = 'default';
 		const chatSessionId = context.chatSessionId ?? args.chatSessionId ?? DEFAULT_TODO_SESSION_ID;
 
 		const currentTodoItems = this.chatTodoListService.getTodos(chatSessionId);
