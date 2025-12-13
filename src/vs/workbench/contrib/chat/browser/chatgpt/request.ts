@@ -33,7 +33,7 @@ export async function sendChatGPTRequest(
 	token: CancellationToken,
 	options?: ServerRequestOptions,
 	logService?: ILogService,
-	modelType: "openai" | "gemini" = "openai"
+	modelType: "openai" | "gemini" | "claude" = "openai"
 ): Promise<ChatGPTStreamingResponse> {
 	// Normalize serverAddress (remove trailing slashes)
 	const normalizedServerAddress = serverAddress.trim().replace(/\/+$/, "");
@@ -81,6 +81,9 @@ export async function sendChatGPTRequest(
 	}
 	if (options?.tools !== undefined) {
 		payload["tools"] = options.tools;
+	}
+	if (options?.maxOutputTokens !== undefined) {
+		payload["maxOutputTokens"] = options.maxOutputTokens;
 	}
 	if (options?.toolResults && options.toolResults.length > 0) {
 		payload["toolResults"] = options.toolResults;
@@ -185,11 +188,6 @@ export async function sendChatGPTRequest(
 		}
 		stream.reject(error);
 	};
-
-	cancellationListener = token.onCancellationRequested(() => {
-		const err = new CancellationError();
-		finalizeError(err);
-	});
 
 	const parser = new SSEParser((event: any) => {
 		const timestamp = Date.now();
@@ -330,7 +328,9 @@ export async function sendChatGPTRequest(
 	// Use native fetch for streaming
 	abortController = new AbortController();
 	cancellationListener = token.onCancellationRequested(() => {
+		// Abort the fetch request and finalize with cancellation error
 		abortController?.abort();
+		finalizeError(new CancellationError());
 	});
 
 	(async () => {

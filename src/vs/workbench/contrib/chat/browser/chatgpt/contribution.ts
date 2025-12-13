@@ -182,6 +182,7 @@ class ChatGPTAgentContribution
 			languageModelToolsService,
 			languageModelsService,
 			this.configurationService,
+			this.chatAgentService,
 			agentPlanner,
 			dependencyGraphService,
 			workspaceService,

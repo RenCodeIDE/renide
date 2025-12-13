@@ -35,7 +35,7 @@ import { IRequestService } from "../../../../../platform/request/common/request.
 import { ISecretStorageService } from "../../../../../platform/secrets/common/secrets.js";
 import { ITextModelService } from "../../../../../editor/common/services/resolverService.js";
 import { hasKey } from "../../../../../base/common/types.js";
-import { GEMINI_MODELS } from "./models.js";
+import { CLAUDE_MODELS } from "./models.js";
 // @ts-ignore - Module resolution error is false positive, files exist
 import type {
 	ServerToolResult,
@@ -50,12 +50,11 @@ import {
 	ContextBuilder,
 	type IContextBlockMetadata,
 } from "../../common/contextBuilder.js";
-import type { GeminiContentPart } from "./types.js";
 import { IConfigurationService } from "../../../../../platform/configuration/common/configuration.js";
 import { ILanguageFeaturesService } from "../../../../../editor/common/services/languageFeatures.js";
 import { IMetricsService } from "../../../../services/metrics/common/metricsService.js";
 
-export class GeminiAgentImplementation implements IChatAgentImplementation {
+export class ClaudeAgentImplementation implements IChatAgentImplementation {
 	private readonly requestTools = new Map<string, UserSelectedTools>();
 	private readonly fallbackCountTokens: CountTokensCallback = async (
 		input: string,
@@ -88,17 +87,17 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 			const token = await this.secretStorageService.get("ren.auth.accessToken");
 			if (token) {
 				this.logService.debug(
-					`[gemini-server] Access token retrieved successfully (length: ${token.length})`
+					`[claude-server] Access token retrieved successfully (length: ${token.length})`
 				);
 			} else {
 				this.logService.warn(
-					`[gemini-server] No access token found in secret storage. User needs to authenticate.`
+					`[claude-server] No access token found in secret storage. User needs to authenticate.`
 				);
 			}
 			return token ?? undefined;
 		} catch (error) {
 			this.logService.error(
-				`[gemini-server] Error retrieving access token: ${
+				`[claude-server] Error retrieving access token: ${
 					error instanceof Error ? error.message : String(error)
 				}`
 			);
@@ -108,15 +107,15 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 
 	private resolveModelFromRequest(userSelectedModelId?: string): string {
 		if (userSelectedModelId) {
-			const selectedModelConfig = GEMINI_MODELS.find(
+			const selectedModelConfig = CLAUDE_MODELS.find(
 				(m) => m.identifier === userSelectedModelId
 			);
 			if (selectedModelConfig) {
 				return selectedModelConfig.id;
 			}
 		}
-		const defaultModel = GEMINI_MODELS.find((m) => m.isDefault);
-		return defaultModel?.id || "gemini-2.5-flash";
+		const defaultModel = CLAUDE_MODELS.find((m) => m.isDefault);
+		return defaultModel?.id || "claude-3-5-sonnet-20241022";
 	}
 
 	async invoke(
@@ -135,7 +134,7 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 				this.languageModelsService.lookupLanguageModel(
 					request.userSelectedModelId
 				);
-			if (selectedModelMetadata && selectedModelMetadata.vendor !== "google") {
+			if (selectedModelMetadata && selectedModelMetadata.vendor !== "anthropic") {
 				// If the selected model is OpenAI, route through the ChatGPT agent so tools execute
 				if (
 					selectedModelMetadata.vendor === "openai" ||
@@ -149,13 +148,13 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 						token
 					);
 				}
-				// If the selected model is Anthropic/Claude, route through the Claude agent so tools execute
+				// If the selected model is Google/Gemini, route through the Gemini agent so tools execute
 				if (
-					selectedModelMetadata.vendor === "anthropic" ||
-					request.userSelectedModelId.startsWith("anthropic/")
+					selectedModelMetadata.vendor === "google" ||
+					request.userSelectedModelId.startsWith("google/")
 				) {
 					return this.chatAgentService.invokeAgent(
-						"claude.local",
+						"gemini.local",
 						request,
 						progress,
 						history,
@@ -181,7 +180,7 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 		// Read tools from request object first (setRequestTools() may not be called for initial value)
 		if (request.userSelectedTools) {
 			this.logService.debug(
-				`[gemini] reading tools from request object for request ${
+				`[claude] reading tools from request object for request ${
 					request.requestId
 				}: ${JSON.stringify(request.userSelectedTools)}`
 			);
@@ -197,7 +196,7 @@ export class GeminiAgentImplementation implements IChatAgentImplementation {
 			tools: toolConfigs,
 			nameToToolId,
 			summaries,
-		} = this.buildGeminiToolDeclarations(request.requestId, request.chatMode);
+		} = this.buildClaudeToolDeclarations(request.requestId, request.chatMode);
 
 		// Inject Plan mode instructions BEFORE tool summaries for better visibility
 		if (request.chatMode === ChatModeKind.Plan) {
@@ -254,7 +253,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 						.map((result) => result.toolCallId)
 						.join(", ");
 					this.logService.info(
-						`[gemini-server] Added ${pendingToolResults.length} tool result(s) to conversation history: ${ids}`
+						`[claude-server] Added ${pendingToolResults.length} tool result(s) to conversation history: ${ids}`
 					);
 					pendingToolResults = undefined;
 				}
@@ -264,11 +263,11 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 						.map((result) => result.toolCallId)
 						.join(", ");
 					this.logService.info(
-						`[gemini-server] Forwarding ${conversationToolResults.size} total tool result(s) to server: ${ids}`
+						`[claude-server] Forwarding ${conversationToolResults.size} total tool result(s) to server: ${ids}`
 					);
 				} else {
 					this.logService.info(
-						"[gemini-server] No pending tool results to forward for this iteration"
+						"[claude-server] No pending tool results to forward for this iteration"
 					);
 				}
 				const lastAssistantWithTools = [...messages]
@@ -284,11 +283,11 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 						.map((part) => part.toolCallId)
 						.join(", ");
 					this.logService.info(
-						`[gemini-server] Last assistant message before request contains tool_use parts: ${ids}`
+						`[claude-server] Last assistant message before request contains tool_use parts: ${ids}`
 					);
 				} else {
 					this.logService.warn(
-						"[gemini-server] No assistant message with tool_use parts found before request"
+						"[claude-server] No assistant message with tool_use parts found before request"
 					);
 				}
 
@@ -315,8 +314,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 						if (token.isCancellationRequested) {
 							break;
 						}
-						// Convert ChatGPTContentPart[] to GeminiContentPart[] for display
-						const geminiParts: GeminiContentPart[] = chunk
+						// Convert ChatGPTContentPart[] to ClaudeContentPart[] for display
+						const claudeParts: Array<{ text?: string; functionCall?: { name: string; args: Record<string, unknown> } }> = chunk
 							.map(
 								(part: {
 									text?: string;
@@ -339,11 +338,11 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 									return { text: "" };
 								}
 							)
-							.filter((part: GeminiContentPart) =>
-								hasKey(part, { text: true }) ? part.text.length > 0 : true
+							.filter((part) =>
+								hasKey(part, { text: true }) ? part.text!.length > 0 : true
 							);
 
-						const delta = extractTextFromParts(geminiParts, false);
+						const delta = extractTextFromParts(claudeParts, false);
 						if (delta.length) {
 							const markdownChunk = new MarkdownString(delta);
 							markdownChunk.supportThemeIcons = true;
@@ -364,7 +363,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				const responseData = await streamingResponse.result;
 				const responseParts = responseData.parts;
 
-				// Note: For Gemini path we do not mutate prior tool results into messages here;
+				// Note: For Claude path we do not mutate prior tool results into messages here;
 				// the server-side transformer handles tool result placement for the current request only.
 
 				// Add assistant message with both text and tool_use parts if present
@@ -428,8 +427,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 							.map((part: { text?: string }) => part.text || "")
 							.join("") ||
 						localize(
-							"gemini.emptyTextResponse",
-							"Gemini did not return any text."
+							"claude.emptyTextResponse",
+							"Claude did not return any text."
 						);
 
 					await this.contextBuilder.tryAutoApplyEdits(
@@ -446,15 +445,15 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 					}
 
 					return {
-						details: "gemini-response",
+						details: "claude-response",
 						metadata: { model: modelToUse },
 					};
 				}
 
 				if (!toolConfigs.length) {
 					const errorMessage = localize(
-						"gemini.toolsNotAuthorized",
-						"Gemini requested tool calls but none were authorized for this request."
+						"claude.toolsNotAuthorized",
+						"Claude requested tool calls but none were authorized for this request."
 					);
 					progress([
 						{
@@ -486,7 +485,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 
 				const parallelExecutionStartTime = Date.now();
 				this.logService.info(
-					`[gemini-server] Starting parallel execution of ${toolCallParts.length} tool call(s) with maxConcurrency=${maxConcurrency}`
+					`[claude-server] Starting parallel execution of ${toolCallParts.length} tool call(s) with maxConcurrency=${maxConcurrency}`
 				);
 
 				interface ToolTask {
@@ -529,7 +528,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 
 					if (!toolId) {
 						this.logService.error(
-							`[gemini-server] model requested unknown tool name '${toolName}'. Available names: ${Array.from(
+							`[claude-server] model requested unknown tool name '${toolName}'. Available names: ${Array.from(
 								nameToToolId.keys()
 							).join(", ")}`
 						);
@@ -539,8 +538,8 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 								{
 									type: "text",
 									value: localize(
-										"gemini.unknownToolCall",
-										"Gemini requested unknown tool {0}.",
+										"claude.unknownToolCall",
+										"Claude requested unknown tool {0}.",
 										toolName
 									),
 								},
@@ -593,14 +592,14 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 						resultsBuffer[index] = await runWithTimeout();
 						const taskTime = Date.now() - taskStartTime;
 						this.logService.debug(
-							`[gemini-server] Finished tool ${toolName} (callId: ${callId}) in ${taskTime}ms`
+							`[claude-server] Finished tool ${toolName} (callId: ${callId}) in ${taskTime}ms`
 						);
 					} catch (error) {
 						const taskTime = Date.now() - taskStartTime;
 						const message =
 							error instanceof Error ? error.message : String(error);
 						this.logService.error(
-							`[gemini-server] tool ${toolId} (callId: ${callId}) failed after ${taskTime}ms: ${message}`
+							`[claude-server] tool ${toolId} (callId: ${callId}) failed after ${taskTime}ms: ${message}`
 						);
 						resultsBuffer[index] = {
 							toolCallId: callId,
@@ -630,7 +629,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 
 				const parallelExecutionTime = Date.now() - parallelExecutionStartTime;
 				this.logService.info(
-					`[gemini-server] Completed parallel execution of ${tasks.length} tool call(s) in ${parallelExecutionTime}ms ` +
+					`[claude-server] Completed parallel execution of ${tasks.length} tool call(s) in ${parallelExecutionTime}ms ` +
 						`(avg: ${(parallelExecutionTime / tasks.length).toFixed(
 							2
 						)}ms per call, ` +
@@ -647,36 +646,36 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				if (toolResultsForNextRequest.length === 0) {
 					throw new Error(
 						localize(
-							"gemini.noToolResponses",
-							"Gemini requested tool calls but no responses were produced."
+							"claude.noToolResponses",
+							"Claude requested tool calls but no responses were produced."
 						)
 					);
 				}
 
 				pendingToolResults = toolResultsForNextRequest;
 				this.logService.info(
-					`[gemini-server] Collected ${toolResultsForNextRequest.length} tool results for next request`
+					`[claude-server] Collected ${toolResultsForNextRequest.length} tool results for next request`
 				);
 				iteration++;
 			}
 
 			const totalRequestTime = Date.now() - requestStartTime;
 			this.logService.warn(
-				`[gemini-server] Reached maxIterations limit (${maxIterations}) after ${totalRequestTime}ms and ${iteration} iterations`
+				`[claude-server] Reached maxIterations limit (${maxIterations}) after ${totalRequestTime}ms and ${iteration} iterations`
 			);
 			throw new Error(
 				localize(
-					"gemini.maxToolIterations",
+					"claude.maxToolIterations",
 					"Reached the maximum number of tool call iterations ({0}) without producing an answer.",
 					maxIterations
 				)
 			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			this.logService.error(`[gemini] ${message}`);
+			this.logService.error(`[claude] ${message}`);
 
 			const markdown = new MarkdownString(
-				localize("gemini.error", "Gemini request failed: {0}", message)
+				localize("claude.error", "Claude request failed: {0}", message)
 			);
 			markdown.isTrusted = true;
 			progress([{ kind: "markdownContent", content: markdown }]);
@@ -704,7 +703,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		modelId: string
 	): Promise<IChatAgentResult> {
 		this.logService.info(
-			`[gemini] Delegating request to language models service for model ${modelId} (cross-vendor)`
+			`[claude] Delegating request to language models service for model ${modelId} (cross-vendor)`
 		);
 
 		const messages: IChatMessage[] = [];
@@ -757,7 +756,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		try {
 			const response = await this.languageModelsService.sendChatRequest(
 				modelId,
-				new ExtensionIdentifier("core.gemini"),
+				new ExtensionIdentifier("core.claude"),
 				messages,
 				{},
 				token
@@ -780,17 +779,17 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			await response.result;
 
 			return {
-				details: "gemini-response",
+				details: "claude-response",
 				metadata: { model: modelId, delegated: true },
 			};
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			this.logService.error(
-				`[gemini] Error in delegated request for model ${modelId}:`,
+				`[claude] Error in delegated request for model ${modelId}:`,
 				error
 			);
 			const markdown = new MarkdownString(
-				localize("gemini.error", "Gemini request failed: {0}", message)
+				localize("claude.error", "Claude request failed: {0}", message)
 			);
 			markdown.isTrusted = true;
 			progress([{ kind: "markdownContent", content: markdown }]);
@@ -807,13 +806,13 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 	setRequestTools(requestId: string, tools: UserSelectedTools): void {
 		if (!tools) {
 			this.logService.debug(
-				`[gemini] clearing tool selection for request ${requestId}`
+				`[claude] clearing tool selection for request ${requestId}`
 			);
 			this.requestTools.delete(requestId);
 			return;
 		}
 		this.logService.debug(
-			`[gemini] received tool selection for request ${requestId}: ${JSON.stringify(
+			`[claude] received tool selection for request ${requestId}: ${JSON.stringify(
 				tools
 			)}`
 		);
@@ -850,9 +849,9 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 	private filterAskModeTools(tools: IToolData[]): IToolData[] {
 		return tools.filter((tool) => {
 			const isBlocked =
-				GeminiAgentImplementation.ASK_MODE_BLOCKED_TOOLS.includes(tool.id);
+				ClaudeAgentImplementation.ASK_MODE_BLOCKED_TOOLS.includes(tool.id);
 			if (isBlocked) {
-				this.logService.debug(`[gemini] Ask mode: blocking tool ${tool.id}`);
+				this.logService.debug(`[claude] Ask mode: blocking tool ${tool.id}`);
 			}
 			return !isBlocked;
 		});
@@ -865,7 +864,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		const selected = this.requestTools.get(requestId);
 		if (!selected) {
 			this.logService.debug(
-				`[gemini] no tools selected for request ${requestId}, defaulting to all available tools`
+				`[claude] no tools selected for request ${requestId}, defaulting to all available tools`
 			);
 			const allTools = Array.from(this.languageModelToolsService.getTools());
 			// In Plan mode, filter out create_file even when no tools are explicitly selected
@@ -884,7 +883,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		if (!allowedIds.length) {
 			// Empty selection - fall back to default behavior
 			this.logService.debug(
-				`[gemini] tool selection for request ${requestId} contained no enabled entries, falling back to default`
+				`[claude] tool selection for request ${requestId} contained no enabled entries, falling back to default`
 			);
 			const allTools = Array.from(this.languageModelToolsService.getTools());
 			if (chatMode === ChatModeKind.Plan) {
@@ -904,10 +903,10 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		}
 
 		// CRITICAL FIX: If filtering resulted in zero tools, fall back to default
-		// This prevents empty tool arrays from being sent to Gemini, which would prevent tool calls
+		// This prevents empty tool arrays from being sent to Claude, which would prevent tool calls
 		if (allowedTools.length === 0) {
 			this.logService.warn(
-				`[gemini] Tool filtering for request ${requestId} resulted in zero tools (selected IDs: ${allowedIds.join(
+				`[claude] Tool filtering for request ${requestId} resulted in zero tools (selected IDs: ${allowedIds.join(
 					", "
 				)}), falling back to default behavior`
 			);
@@ -925,13 +924,13 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		if (chatMode === ChatModeKind.Ask) {
 			const filteredTools = this.filterAskModeTools(allowedTools);
 			this.logService.debug(
-				`[gemini] Ask mode: filtered ${allowedTools.length} user-selected tools to ${filteredTools.length} allowed tools`
+				`[claude] Ask mode: filtered ${allowedTools.length} user-selected tools to ${filteredTools.length} allowed tools`
 			);
 			return filteredTools;
 		}
 
 		this.logService.debug(
-			`[gemini] resolved ${
+			`[claude] resolved ${
 				allowedTools.length
 			} tools for request ${requestId}: ${allowedTools
 				.map((tool) => tool.id)
@@ -940,7 +939,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		return allowedTools;
 	}
 
-	private buildGeminiToolDeclarations(
+	private buildClaudeToolDeclarations(
 		requestId: string,
 		chatMode?: string
 	): {
@@ -951,7 +950,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		const allowedTools = this.getAllowedToolData(requestId, chatMode);
 		if (!allowedTools.length) {
 			this.logService.warn(
-				`[gemini] buildGeminiToolDeclarations: No tools available for request ${requestId} in mode ${
+				`[claude] buildClaudeToolDeclarations: No tools available for request ${requestId} in mode ${
 					chatMode || "unknown"
 				}. This will prevent tool calls.`
 			);
@@ -1112,7 +1111,7 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 	): Promise<ChatGPTStreamingResponse> {
 		const toolNames = tools.map((t) => t.name || "<unnamed>");
 		this.logService.info(
-			`[gemini-server] performRequest: model=${model}, messages=${
+			`[claude-server] performRequest: model=${model}, messages=${
 				messages.length
 			}, tools=${toolNames.join(", ") || "none"}, toolResults=${
 				toolResults?.length || 0
@@ -1123,15 +1122,15 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		if (!accessToken) {
 			throw new Error(
 				localize(
-					"gemini.noAuthToken",
-					"Authentication token is missing. Please sign in to use Gemini."
+					"claude.noAuthToken",
+					"Authentication token is missing. Please sign in to use Claude."
 				)
 			);
 		}
 
 		validateIDEFormat(messages);
 		this.logService.debug(
-			`[gemini-server] Message format validation passed: ${messages.length} messages in IDE format`
+			`[claude-server] Message format validation passed: ${messages.length} messages in IDE format`
 		);
 
 		// Use /api/agent/ask endpoint for Ask mode, /api/agent/tools for other modes
@@ -1139,10 +1138,14 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 			mode === ChatModeKind.Ask ? "/api/agent/ask" : "/api/agent/tools";
 		const hasToolResults = toolResults && toolResults.length > 0;
 
+		// Get max output tokens from model config (Claude API requires max_tokens)
+		const modelConfig = CLAUDE_MODELS.find((m) => m.id === model);
+		const maxOutputTokens = modelConfig?.maxOutputTokens ?? 8192;
+
 		this.logService.info(
-			`[gemini-server] Using endpoint: ${endpoint} (tools=${
+			`[claude-server] Using endpoint: ${endpoint} (tools=${
 				tools.length
-			}, toolResults=${toolResults?.length || 0})`
+			}, toolResults=${toolResults?.length || 0}, maxOutputTokens=${maxOutputTokens})`
 		);
 
 		const response = await sendChatGPTRequest(
@@ -1157,11 +1160,12 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				tools: tools,
 				toolResults: hasToolResults ? toolResults : undefined,
 				mode: mode,
+				maxOutputTokens,
 				sessionId,
 				projectId,
 			},
 			this.logService,
-			"gemini"
+			"claude"
 		);
 
 		response.result.then(
@@ -1177,14 +1181,14 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 				finishReason?: string | null;
 			}) => {
 				this.logService.info(
-					`[gemini-server] Request completed: ${
+					`[claude-server] Request completed: ${
 						result.parts.length
 					} parts, finishReason=${result.finishReason || "none"}`
 				);
 			},
 			(error: unknown) => {
 				this.logService.error(
-					`[gemini-server] Streaming request failed: ${
+					`[claude-server] Streaming request failed: ${
 						error instanceof Error ? error.message : String(error)
 					}`
 				);

@@ -45,28 +45,14 @@ export class MetricsService extends Disposable implements IMetricsService {
 	) {
 		super();
 		// #region agent log
-		console.log('[DEBUG-METRICS] MetricsService constructor called');
-		// #endregion
-
 		// Get server address from configuration, with dev mode detection
 		const configuredAddress = this.configurationService.getValue<string>('renide.server.address');
-		// #region agent log
-		console.log('[DEBUG-METRICS] Location info', {
-			hostname: mainWindow.location.hostname,
-			protocol: mainWindow.location.protocol,
-			href: mainWindow.location.href,
-			pathname: mainWindow.location.pathname
-		});
-		// #endregion
 		const isDevMode = mainWindow.location.hostname === 'localhost' ||
 			mainWindow.location.hostname === '127.0.0.1' ||
 			mainWindow.location.protocol === 'file:' ||
 			mainWindow.location.href.includes('workbench-dev.html');
 		const defaultAddress = isDevMode ? 'http://localhost:8787' : 'https://ren-server.rahilmittal-1.workers.dev';
 		this._serverAddress = configuredAddress || defaultAddress;
-		// #region agent log
-		console.log('[DEBUG-METRICS] Server address configured', { serverAddress: this._serverAddress, isDevMode, configuredAddress });
-		// #endregion
 
 		// Initialize project ID when workspace opens
 		this._initializeProjectId();
@@ -158,33 +144,18 @@ export class MetricsService extends Disposable implements IMetricsService {
 	}
 
 	private async _sendMetricsRequest(endpoint: string, data: unknown): Promise<void> {
-		// #region agent log
-		console.log('[DEBUG-METRICS] _sendMetricsRequest called', { endpoint, dataKeys: Object.keys(data as object), serverAddress: this._serverAddress, projectId: this._projectId });
-		// #endregion
 		const accessToken = await this.secretStorageService.get('ren.auth.accessToken');
-		// #region agent log
-		console.log('[DEBUG-METRICS] Token check', { hasToken: !!accessToken, tokenLength: accessToken?.length });
-		// #endregion
 		if (!accessToken) {
 			this.logService.debug('[MetricsService] No access token, skipping metrics request');
-			// #region agent log
-			console.log('[DEBUG-METRICS] SKIPPED - no access token', { endpoint });
-			// #endregion
 			return;
 		}
 
 		if (!this._serverAddress) {
 			this.logService.debug('[MetricsService] No server address configured');
-			// #region agent log
-			console.log('[DEBUG-METRICS] SKIPPED - no server address', { endpoint });
-			// #endregion
 			return;
 		}
 
 		try {
-			// #region agent log
-			console.log('[DEBUG-METRICS] About to fetch', { url: `${this._serverAddress}${endpoint}`, body: data });
-			// #endregion
 			const response = await fetch(`${this._serverAddress}${endpoint}`, {
 				method: 'POST',
 				headers: {
@@ -195,43 +166,43 @@ export class MetricsService extends Disposable implements IMetricsService {
 				body: JSON.stringify(data)
 			});
 
-			// #region agent log
-			console.log('[DEBUG-METRICS] Got response', { endpoint, status: response.status, ok: response.ok });
-			// #endregion
 			if (!response.ok) {
 				const errorText = await response.text();
 				this.logService.warn(`[MetricsService] Request to ${endpoint} failed: ${response.status} - ${errorText}`);
-				// #region agent log
-				console.log('[DEBUG-METRICS] Request failed', { endpoint, status: response.status, errorText });
-				// #endregion
 			}
 		} catch (error) {
 			this.logService.warn(`[MetricsService] Failed to send metrics to ${endpoint}:`, error);
-			// #region agent log
-			console.log('[DEBUG-METRICS] Fetch threw error', { endpoint, error: String(error) });
-			// #endregion
 		}
 	}
 
 	async trackEditApplied(event: IEditEvent): Promise<void> {
-		await this._sendMetricsRequest('/api/metrics/edit-applied', {
-			editId: event.editId,
-			type: event.type,
-			sizeChars: event.sizeChars,
-			sizeLines: event.sizeLines,
-			sessionId: event.sessionId,
-			projectId: event.projectId || this._projectId
-		});
+		try {
+			const projectId = event.projectId || await this.getProjectIdAsync();
+			await this._sendMetricsRequest('/api/metrics/edit-applied', {
+				editId: event.editId,
+				type: event.type,
+				sizeChars: event.sizeChars,
+				sizeLines: event.sizeLines,
+				sessionId: event.sessionId,
+				projectId
+			});
+		} catch (error) {
+			throw error;
+		}
 	}
 
 	async trackEditReverted(editId: string, type?: 'agent' | 'inline', sessionId?: string): Promise<void> {
-		const projectId = await this.getProjectIdAsync();
-		await this._sendMetricsRequest('/api/metrics/edit-reverted', {
-			editId,
-			type,
-			sessionId,
-			projectId
-		});
+		try {
+			const projectId = await this.getProjectIdAsync();
+			await this._sendMetricsRequest('/api/metrics/edit-reverted', {
+				editId,
+				type,
+				sessionId,
+				projectId
+			});
+		} catch (error) {
+			throw error;
+		}
 	}
 
 	async trackSuggestionShown(event: ISuggestionEvent): Promise<void> {
@@ -258,17 +229,8 @@ export class MetricsService extends Disposable implements IMetricsService {
 	}
 
 	async trackProjectOpened(sessionId?: string): Promise<void> {
-		// #region agent log
-		console.log('[DEBUG-METRICS] trackProjectOpened called', { sessionId });
-		// #endregion
 		const projectId = await this.getProjectIdAsync();
-		// #region agent log
-		console.log('[DEBUG-METRICS] trackProjectOpened projectId', { projectId, hasProjectId: !!projectId });
-		// #endregion
 		if (!projectId) {
-			// #region agent log
-			console.log('[DEBUG-METRICS] trackProjectOpened SKIPPED - no projectId');
-			// #endregion
 			return;
 		}
 

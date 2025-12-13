@@ -20,6 +20,7 @@ import { IChatResponseModel } from '../../common/chatModel.js';
 import { IChatService } from '../../common/chatService.js';
 import { IRenMonitorXChangelogBuffer } from '../../../renViews/common/renChangelogBuffer.js';
 import { IRenWorkspaceStore } from '../../../renViews/common/renWorkspaceStore.js';
+import { IMetricsService } from '../../../../services/metrics/common/metricsService.js';
 import { VSBuffer } from '../../../../../base/common/buffer.js';
 import { AbstractChatEditingModifiedFileEntry } from './chatEditingModifiedFileEntry.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
@@ -64,6 +65,7 @@ export class ChatEditingFileOperationEntry extends AbstractChatEditingModifiedFi
 		@IRenWorkspaceStore renWorkspaceStore: IRenWorkspaceStore,
 		@IRenMonitorXChangelogBuffer renChangelogBuffer: IRenMonitorXChangelogBuffer,
 		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
+		@IMetricsService metricsService: IMetricsService,
 	) {
 		super(
 			fileURI,
@@ -78,6 +80,7 @@ export class ChatEditingFileOperationEntry extends AbstractChatEditingModifiedFi
 			aiEditTelemetryService,
 			renWorkspaceStore,
 			renChangelogBuffer,
+			metricsService,
 		);
 
 		this._fileOperation = fileOperation;

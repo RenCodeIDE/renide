@@ -48,6 +48,7 @@ import { IChatService } from '../../common/chatService.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { IRenWorkspaceStore } from '../../../renViews/common/renWorkspaceStore.js';
 import { IRenMonitorXChangelogBuffer, IMonitorXChangelogDraftSeed } from '../../../renViews/common/renChangelogBuffer.js';
+import { IMetricsService } from '../../../../services/metrics/common/metricsService.js';
 import { AbstractChatEditingModifiedFileEntry } from './chatEditingModifiedFileEntry.js';
 import { createSnapshot, deserializeSnapshot, getNotebookSnapshotFileURI, restoreSnapshot, SnapshotComparer } from './notebook/chatEditingModifiedNotebookSnapshot.js';
 import { ChatEditingNewNotebookContentEdits } from './notebook/chatEditingNewNotebookContentEdits.js';
@@ -196,6 +197,7 @@ export class ChatEditingModifiedNotebookEntry extends AbstractChatEditingModifie
 		@IRenWorkspaceStore renWorkspaceStore: IRenWorkspaceStore,
 		@IRenMonitorXChangelogBuffer renChangelogBuffer: IRenMonitorXChangelogBuffer,
 		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
+		@IMetricsService metricsService: IMetricsService,
 	) {
 		super(
 			modifiedResourceRef.object.notebook.uri,
@@ -210,6 +212,7 @@ export class ChatEditingModifiedNotebookEntry extends AbstractChatEditingModifie
 			aiEditTelemetryService,
 			renWorkspaceStore,
 			renChangelogBuffer,
+			metricsService,
 		);
 		this.initialContentComparer = new SnapshotComparer(initialContent);
 		this.modifiedModel = this._register(modifiedResourceRef).object.notebook;

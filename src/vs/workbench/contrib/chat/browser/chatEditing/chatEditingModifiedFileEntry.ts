@@ -26,6 +26,8 @@ import { ICellEditOperation } from '../../../notebook/common/notebookCommon.js';
 import { ChatEditKind, IModifiedEntryTelemetryInfo, IModifiedFileEntry, IModifiedFileEntryEditorIntegration, ISnapshotEntry, ModifiedFileEntryState } from '../../common/chatEditingService.js';
 import { IChatResponseModel } from '../../common/chatModel.js';
 import { ChatUserAction, IChatService } from '../../common/chatService.js';
+import { IMetricsService } from '../../../../services/metrics/common/metricsService.js';
+import { generateUuid } from '../../../../../base/common/uuid.js';
 import { IRenMonitorXChangelogBuffer, IMonitorXChangelogDraftSeed } from '../../../renViews/common/renChangelogBuffer.js';
 import { IRenWorkspaceStore, IMonitorXChangelogEntryInput } from '../../../renViews/common/renWorkspaceStore.js';
 
@@ -109,6 +111,7 @@ export abstract class AbstractChatEditingModifiedFileEntry extends Disposable im
 		@IAiEditTelemetryService private readonly _aiEditTelemetryService: IAiEditTelemetryService,
 		@IRenWorkspaceStore protected readonly _renWorkspaceStore: IRenWorkspaceStore,
 		@IRenMonitorXChangelogBuffer protected readonly _changelogBuffer: IRenMonitorXChangelogBuffer,
+		@IMetricsService private readonly _metricsService: IMetricsService,
 	) {
 		super();
 
@@ -229,6 +232,19 @@ export abstract class AbstractChatEditingModifiedFileEntry extends Disposable im
 		});
 
 		this._notifySessionAction('accepted');
+
+		// Track edit applied for metrics (centralized tracking point for all "Keep" actions)
+		try {
+			await this._metricsService.trackEditApplied({
+				editId: generateUuid(),
+				type: 'agent',
+				sizeChars: 0, // Size calculation would require diff access, track at higher level if needed
+				sizeLines: 0,
+				sessionId: this._telemetryInfo.sessionId,
+			});
+		} catch (error) {
+			// Metrics tracking failure should not block edit acceptance
+		}
 	}
 
 	protected abstract _doAccept(): Promise<void>;
@@ -246,6 +262,13 @@ export abstract class AbstractChatEditingModifiedFileEntry extends Disposable im
 			this._autoAcceptCtrl.set(undefined, tx);
 		});
 		this._deleteChangelogDraft();
+
+		// Track edit reverted for metrics (centralized tracking point for all "Undo" actions)
+		try {
+			await this._metricsService.trackEditReverted(generateUuid(), 'agent', this._telemetryInfo.sessionId);
+		} catch (error) {
+			// Metrics tracking failure should not block edit rejection
+		}
 	}
 
 	protected abstract _doReject(): Promise<void>;

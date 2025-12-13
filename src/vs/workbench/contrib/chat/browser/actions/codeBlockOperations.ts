@@ -38,6 +38,8 @@ import { ICodeMapperCodeBlock, ICodeMapperRequest, ICodeMapperResponse, ICodeMap
 import { ChatUserAction, IChatService } from '../../common/chatService.js';
 import { IChatRequestViewModel, isRequestVM, isResponseVM } from '../../common/chatViewModel.js';
 import { ICodeBlockActionContext } from '../codeBlockPart.js';
+import { IMetricsService } from '../../../../services/metrics/common/metricsService.js';
+import { generateUuid } from '../../../../../base/common/uuid.js';
 
 export class InsertCodeBlockOperation {
 	constructor(
@@ -146,6 +148,7 @@ export class ApplyCodeBlockOperation {
 		@INotebookService private readonly notebookService: INotebookService,
 		@IBulkEditService private readonly bulkEditService: IBulkEditService,
 		@ILanguageService private readonly languageService: ILanguageService,
+		@IMetricsService private readonly metricsService: IMetricsService,
 	) {
 	}
 
@@ -210,6 +213,21 @@ export class ApplyCodeBlockOperation {
 				modelId: request?.modelId ?? '',
 				languageId: context.languageId,
 			});
+
+			// Track edit applied for metrics
+			if (result?.editsProposed) {
+				try {
+					await this.metricsService.trackEditApplied({
+						editId: generateUuid(),
+						type: 'agent',
+						sizeChars: context.code.length,
+						sizeLines: context.code.split('\n').length,
+						sessionId: context.element.sessionId,
+					});
+				} catch (error) {
+					// Metrics service may not be available, ignore silently
+				}
+			}
 		}
 	}
 

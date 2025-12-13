@@ -35,9 +35,6 @@ export class MetricsEventContribution extends Disposable implements IWorkbenchCo
 	}
 
 	private _initializeTracking(): void {
-		// #region agent log
-		console.log('[DEBUG-METRICS] MetricsContribution _initializeTracking called');
-		// #endregion
 		// Track project opened on contribution init
 		this._trackProjectOpened();
 
@@ -55,57 +52,33 @@ export class MetricsEventContribution extends Disposable implements IWorkbenchCo
 	}
 
 	private async _trackProjectOpened(): Promise<void> {
-		// #region agent log
-		console.log('[DEBUG-METRICS] _trackProjectOpened called', { sessionId: this._currentSessionId });
-		// #endregion
 		try {
 			await this.metricsService.trackProjectOpened(this._currentSessionId);
 			this.logService.debug('[MetricsContribution] Project opened tracked');
-			// #region agent log
-			console.log('[DEBUG-METRICS] trackProjectOpened completed successfully');
-			// #endregion
 		} catch (error) {
 			this.logService.warn('[MetricsContribution] Failed to track project opened:', error);
-			// #region agent log
-			console.log('[DEBUG-METRICS] trackProjectOpened error', { error: String(error) });
-			// #endregion
 		}
 	}
 
 	private async _trackFileTouched(): Promise<void> {
-		// #region agent log
-		console.log('[DEBUG-METRICS] _trackFileTouched called');
-		// #endregion
 		try {
 			const activeEditor = this.editorService.activeEditor;
 			if (!activeEditor) {
-				// #region agent log
-				console.log('[DEBUG-METRICS] _trackFileTouched: no active editor');
-				// #endregion
 				return;
 			}
 
 			const resource = activeEditor.resource;
 			if (!resource) {
-				// #region agent log
-				console.log('[DEBUG-METRICS] _trackFileTouched: no resource');
-				// #endregion
 				return;
 			}
 
 			const filePath = resource.fsPath || resource.path;
 			if (!filePath) {
-				// #region agent log
-				console.log('[DEBUG-METRICS] _trackFileTouched: no filePath');
-				// #endregion
 				return;
 			}
 
 			// Dedupe - don't track same file twice in a row
 			if (this._lastTrackedFilePath === filePath) {
-				// #region agent log
-				console.log('[DEBUG-METRICS] _trackFileTouched: deduped same file');
-				// #endregion
 				return;
 			}
 			this._lastTrackedFilePath = filePath;
@@ -113,9 +86,6 @@ export class MetricsEventContribution extends Disposable implements IWorkbenchCo
 			// Hash the file path for privacy
 			const filePathHash = String(hash(filePath));
 			const projectId = this.metricsService.getProjectId();
-			// #region agent log
-			console.log('[DEBUG-METRICS] _trackFileTouched: sending', { filePathHash: filePathHash.substring(0, 8), projectId });
-			// #endregion
 
 			await this.metricsService.trackFileTouched({
 				filePathHash,
@@ -124,14 +94,8 @@ export class MetricsEventContribution extends Disposable implements IWorkbenchCo
 			});
 
 			this.logService.debug(`[MetricsContribution] File touched: ${filePathHash.substring(0, 8)}...`);
-			// #region agent log
-			console.log('[DEBUG-METRICS] _trackFileTouched: success');
-			// #endregion
 		} catch (error) {
 			this.logService.warn('[MetricsContribution] Failed to track file touched:', error);
-			// #region agent log
-			console.log('[DEBUG-METRICS] _trackFileTouched: error', { error: String(error) });
-			// #endregion
 		}
 	}
 }

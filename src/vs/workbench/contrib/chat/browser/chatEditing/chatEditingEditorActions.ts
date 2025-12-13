@@ -195,9 +195,9 @@ abstract class KeepOrUndoAction extends ChatEditingEditorAction {
 	}
 
 	override async runChatEditingCommand(accessor: ServicesAccessor, session: IChatEditingSession, entry: IModifiedFileEntry, _integration: IModifiedFileEntryEditorIntegration): Promise<void> {
-
 		const instaService = accessor.get(IInstantiationService);
 
+		// Tracking is centralized in AbstractChatEditingModifiedFileEntry.accept()/reject()
 		if (this._keep) {
 			session.accept(entry.modifiedURI);
 		} else {

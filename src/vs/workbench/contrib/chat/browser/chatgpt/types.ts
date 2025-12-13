@@ -81,6 +81,16 @@ export interface ServerToolResult {
 	readonly content: Array<{ type: 'text'; value: string }>;
 }
 
+/**
+ * Options for server requests.
+ *
+ * NOTE: The server is responsible for transforming this IDE format to the target API format:
+ * - For Claude API: `parameters` must be renamed to `input_schema`
+ * - For Claude API: Numeric roles (0=System, 1=User, 2=Assistant) must be converted to strings
+ * - For Claude API: System messages must be extracted to the separate `system` parameter
+ * - For Claude API: `toolResults` must be converted to `tool_result` content blocks in user messages
+ * - For Claude API: `max_tokens` is required and must be added if not provided
+ */
 export interface ServerRequestOptions {
 	readonly context?: string;
 	readonly modelName?: string;
@@ -88,9 +98,12 @@ export interface ServerRequestOptions {
 	readonly tools?: Array<{
 		name: string;
 		description?: string;
+		/** Note: For Claude API, the server must rename this to `input_schema` */
 		parameters?: unknown;
 	}>;
 	readonly toolResults?: ServerToolResult[];
+	/** Maximum output tokens for the model response */
+	readonly maxOutputTokens?: number;
 	/** Chat session ID for metrics tracking */
 	readonly sessionId?: string;
 	/** Project ID for metrics tracking */

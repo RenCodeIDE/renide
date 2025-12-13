@@ -214,6 +214,7 @@ export class ChatEditingAcceptAllAction extends EditingSessionAction {
 	}
 
 	override async runEditingSessionAction(accessor: ServicesAccessor, editingSession: IChatEditingSession, chatWidget: IChatWidget, ...args: unknown[]) {
+		// Tracking is centralized in AbstractChatEditingModifiedFileEntry.accept()
 		await editingSession.accept();
 	}
 }

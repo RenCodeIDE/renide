@@ -35,6 +35,7 @@ import { relativePath, basename } from '../../../../../base/common/resources.js'
 import { IDocumentDiff } from '../../../../../editor/common/diff/documentDiffProvider.js';
 import { IRenWorkspaceStore } from '../../../renViews/common/renWorkspaceStore.js';
 import { IRenMonitorXChangelogBuffer, IMonitorXChangelogDraftSeed } from '../../../renViews/common/renChangelogBuffer.js';
+import { IMetricsService } from '../../../../services/metrics/common/metricsService.js';
 import { ChatEditingCodeEditorIntegration } from './chatEditingCodeEditorIntegration.js';
 import { AbstractChatEditingModifiedFileEntry } from './chatEditingModifiedFileEntry.js';
 import { ChatEditingTextModelChangeService } from './chatEditingTextModelChangeService.js';
@@ -101,6 +102,7 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 		@IRenWorkspaceStore renWorkspaceStore: IRenWorkspaceStore,
 		@IRenMonitorXChangelogBuffer renChangelogBuffer: IRenMonitorXChangelogBuffer,
 		@IWorkspaceContextService private readonly _workspaceContextService: IWorkspaceContextService,
+		@IMetricsService metricsService: IMetricsService,
 	) {
 		super(
 			resourceRef.object.textEditorModel.uri,
@@ -115,6 +117,7 @@ export class ChatEditingModifiedDocumentEntry extends AbstractChatEditingModifie
 			aiEditTelemetryService,
 			renWorkspaceStore,
 			renChangelogBuffer,
+			metricsService,
 		);
 
 		this._docFileEditorModel = this._register(resourceRef).object;

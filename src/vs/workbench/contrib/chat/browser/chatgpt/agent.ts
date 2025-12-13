@@ -14,6 +14,7 @@ import {
 	IChatAgentRequest,
 	IChatAgentResult,
 	UserSelectedTools,
+	IChatAgentService,
 } from "../../common/chatAgents.js";
 import { IChatProgressHistoryResponseContent } from "../../common/chatModel.js";
 import {
@@ -118,6 +119,7 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		private readonly languageModelToolsService: ILanguageModelToolsService,
 		private readonly languageModelsService: ILanguageModelsService,
 		private readonly configurationService: IConfigurationService,
+		private readonly chatAgentService: IChatAgentService,
 		private readonly agentPlanner?: IAgentPlanner,
 		private readonly dependencyGraphService?: IDependencyGraphService,
 		private readonly workspaceService?: IWorkspaceContextService,
@@ -215,6 +217,33 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					request.userSelectedModelId
 				);
 			if (selectedModelMetadata && selectedModelMetadata.vendor !== "openai") {
+				// If the selected model is Anthropic/Claude, route through the Claude agent so tools execute
+				if (
+					selectedModelMetadata.vendor === "anthropic" ||
+					request.userSelectedModelId.startsWith("anthropic/")
+				) {
+					return this.chatAgentService.invokeAgent(
+						"claude.local",
+						request,
+						progress,
+						history,
+						token
+					);
+				}
+				// If the selected model is Google/Gemini, route through the Gemini agent so tools execute
+				if (
+					selectedModelMetadata.vendor === "google" ||
+					request.userSelectedModelId.startsWith("google/")
+				) {
+					return this.chatAgentService.invokeAgent(
+						"gemini.local",
+						request,
+						progress,
+						history,
+						token
+					);
+				}
+				// Otherwise, delegate to language models service for cross-vendor model
 				return this.invokeViaLanguageModelsService(
 					request,
 					progress,
@@ -417,9 +446,6 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				);
 				// Get project ID asynchronously to ensure it's initialized
 				const projectId = await this.metricsService?.getProjectIdAsync();
-				// #region agent log
-				console.log('[DEBUG-METRICS] ChatGPTAgent projectId for request', { projectId, hasMetricsService: !!this.metricsService });
-				// #endregion
 				const streamingResponse = await this.performRequest(
 					messages,
 					toolConfigs,

@@ -644,7 +644,6 @@ export function registerChatCodeCompareBlockActions() {
 		}
 
 		async runWithContext(accessor: ServicesAccessor, context: ICodeCompareBlockActionContext): Promise<any> {
-
 			const instaService = accessor.get(IInstantiationService);
 			const editorService = accessor.get(ICodeEditorService);
 
@@ -677,29 +676,20 @@ export function registerChatCodeCompareBlockActions() {
 				try {
 					const metricsService = accessor.get(IMetricsService);
 					if (metricsService) {
-						// #region agent log
-						console.log('[DEBUG-METRICS] Applying agent edit');
-						// #endregion
-						const projectId = await metricsService.getProjectIdAsync();
-						// Flatten item.edits (TextEdit[][]) to TextEdit[] for metrics calculation
+						// Calculate sizes from item.edits (TextEdit[][])
 						const allEdits = item.edits.flat();
-						metricsService.trackEditApplied({
+						const sizeChars = allEdits.reduce((sum: number, edit) => sum + edit.text.length, 0);
+						const sizeLines = allEdits.length;
+						await metricsService.trackEditApplied({
 							editId: generateUuid(),
 							type: 'agent',
-							sizeChars: allEdits.reduce((sum: number, edit) => sum + edit.text.length, 0),
-							sizeLines: allEdits.length,
+							sizeChars,
+							sizeLines,
 							sessionId: response.session.sessionId,
-							projectId,
 						});
-						// #region agent log
-						console.log('[DEBUG-METRICS] Edit applied tracked', { projectId, sessionId: response.session.sessionId });
-						// #endregion
 					}
 				} catch (error) {
-					// Metrics service may not be available, ignore
-					// #region agent log
-					console.log('[DEBUG-METRICS] Edit applied tracking error', { error: String(error) });
-					// #endregion
+					// Metrics service may not be available, ignore silently
 				}
 
 				return true;
@@ -734,19 +724,10 @@ export function registerChatCodeCompareBlockActions() {
 			try {
 				const metricsService = accessor.get(IMetricsService);
 				if (metricsService) {
-					// #region agent log
-					console.log('[DEBUG-METRICS] Reverting agent edit');
-					// #endregion
-					metricsService.trackEditReverted(generateUuid(), 'agent', context.element.session.sessionId);
-					// #region agent log
-					console.log('[DEBUG-METRICS] Edit reverted tracked', { sessionId: context.element.session.sessionId });
-					// #endregion
+					await metricsService.trackEditReverted(generateUuid(), 'agent', context.element.session.sessionId);
 				}
 			} catch (error) {
-				// Metrics service may not be available, ignore
-				// #region agent log
-				console.log('[DEBUG-METRICS] Edit reverted tracking error', { error: String(error) });
-				// #endregion
+				// Metrics service may not be available, ignore silently
 			}
 		}
 	});
