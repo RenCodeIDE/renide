@@ -7,7 +7,6 @@ import { CancellationToken } from "../../../../base/common/cancellation.js";
 import { MarkdownString } from "../../../../base/common/htmlContent.js";
 import { localize } from "../../../../nls.js";
 import { ILogService } from "../../../../platform/log/common/log.js";
-import { getDurationString } from "../../../../base/common/date.js";
 import { ExtensionIdentifier } from "../../../../platform/extensions/common/extensions.js";
 import {
 	IChatAgentImplementation,
@@ -46,11 +45,7 @@ import type {
 import { validateIDEFormat } from "./chatgpt/validation.js";
 // @ts-ignore - Module resolution error is false positive, files exist
 import { sendChatGPTRequest } from "./chatgpt/request.js";
-import {
-	extractTextFromParts,
-	extractResponseContent,
-	extractThinkingContent,
-} from "./deepseek/utils.js"; // Reuse existing utils or move to common? Reuse for now.
+import { extractTextFromParts, extractResponseContent, extractThinkingContent } from "./deepseek/utils.js"; // Reuse existing utils or move to common? Reuse for now.
 import {
 	ContextBuilder,
 	type IContextBlockMetadata,
@@ -70,9 +65,7 @@ export interface IBaseAgentConfig {
 	defaultModelId?: string; // e.g. "deepseek-chat"
 }
 
-export abstract class BaseAgentImplementation
-	implements IChatAgentImplementation
-{
+export abstract class BaseAgentImplementation implements IChatAgentImplementation {
 	private readonly requestTools = new Map<string, UserSelectedTools>();
 	protected readonly fallbackCountTokens: CountTokensCallback = async (
 		input: string,
@@ -111,12 +104,7 @@ export abstract class BaseAgentImplementation
 		this.chatConfig = new ChatConfigurationService(configurationService);
 	}
 
-	protected abstract getModels(): Array<{
-		id: string;
-		identifier: string;
-		isDefault?: boolean;
-		maxOutputTokens?: number;
-	}>;
+	protected abstract getModels(): Array<{ id: string; identifier: string; isDefault?: boolean; maxOutputTokens?: number }>;
 
 	protected async getAccessToken(): Promise<string | undefined> {
 		return this.authHelper.getAccessToken();
@@ -135,6 +123,8 @@ export abstract class BaseAgentImplementation
 		const defaultModel = models.find((m) => m.isDefault);
 		return defaultModel?.id || this.config.defaultModelId || models[0]?.id;
 	}
+
+
 
 	async invoke(
 		request: IChatAgentRequest,
@@ -155,13 +145,8 @@ export abstract class BaseAgentImplementation
 			// If the model ID contains vendorId, handle it locally regardless of vendor metadata
 			if (request.userSelectedModelId.includes(this.config.vendorId)) {
 				// This is a local model, handle it locally
-				this.logService.info(
-					`${this.config.logPrefix} Handling model locally: ${request.userSelectedModelId}`
-				);
-			} else if (
-				selectedModelMetadata &&
-				selectedModelMetadata.vendor !== this.config.vendorId
-			) {
+				this.logService.info(`${this.config.logPrefix} Handling model locally: ${request.userSelectedModelId}`);
+			} else if (selectedModelMetadata && selectedModelMetadata.vendor !== this.config.vendorId) {
 				// Route to appropriate agent based on vendor
 				if (
 					selectedModelMetadata.vendor === "openai" ||
@@ -230,10 +215,7 @@ export abstract class BaseAgentImplementation
 		// Read tools from request object first
 		if (request.userSelectedTools) {
 			this.logService.debug(
-				`[${
-					this.config.vendorId
-				}] reading tools from request object for request ${
-					request.requestId
+				`[${this.config.vendorId}] reading tools from request object for request ${request.requestId
 				}: ${JSON.stringify(request.userSelectedTools)}`
 			);
 			this.requestTools.set(request.requestId, request.userSelectedTools);
@@ -248,10 +230,7 @@ export abstract class BaseAgentImplementation
 			tools: toolConfigs,
 			nameToToolId,
 			summaries,
-		} = this.buildToolDeclarations(
-			request.requestId,
-			validateChatMode(request.chatMode) || ChatModeKind.Agent
-		);
+		} = this.buildToolDeclarations(request.requestId, validateChatMode(request.chatMode) || ChatModeKind.Agent);
 
 		// Check if a different model might be better for this task
 		const toolIds = Array.from(nameToToolId.values());
@@ -290,10 +269,7 @@ export abstract class BaseAgentImplementation
 
 		if (summaries.length) {
 			// Build an enhanced system prompt that encourages proactive tool usage
-			const agenticPrompt = this.buildAgenticSystemPrompt(
-				summaries,
-				validateChatMode(request.chatMode)
-			);
+			const agenticPrompt = this.buildAgenticSystemPrompt(summaries, validateChatMode(request.chatMode));
 			messages.push({
 				role: ChatMessageRole.System,
 				content: [
@@ -344,6 +320,7 @@ export abstract class BaseAgentImplementation
 						? Array.from(conversationToolResults.values())
 						: undefined;
 
+
 				const projectId = await this.metricsService?.getProjectIdAsync();
 				const streamingResponse = await this.performRequest(
 					messages,
@@ -372,11 +349,7 @@ export abstract class BaseAgentImplementation
 						// Note: formatting might differ slightly per agent if they did custom processing
 						// But looking at the source, they all use very similar logic.
 
-						const responseParts: Array<{
-							text?: string;
-							thinking?: string;
-							functionCall?: { name: string; args: Record<string, unknown> };
-						}> = chunk
+						const responseParts: Array<{ text?: string; thinking?: string; functionCall?: { name: string; args: Record<string, unknown> } }> = chunk
 							.map(
 								(part: {
 									text?: string;
@@ -402,15 +375,10 @@ export abstract class BaseAgentImplementation
 									return { text: "" };
 								}
 							)
-							.filter(
-								(part) =>
-									(hasKey(part, { text: true })
-										? part.text!.length > 0
-										: false) ||
-									(hasKey(part, { thinking: true })
-										? part.thinking!.length > 0
-										: false) ||
-									hasKey(part, "functionCall")
+							.filter((part) =>
+								(hasKey(part, { text: true }) ? part.text!.length > 0 : false) ||
+								(hasKey(part, { thinking: true }) ? part.thinking!.length > 0 : false) ||
+								hasKey(part, "functionCall")
 							);
 
 						const delta = extractTextFromParts(responseParts, false); // This helper extracts text. We might need to handle thinking separately in UI.
@@ -419,10 +387,7 @@ export abstract class BaseAgentImplementation
 						// Currently extractTextFromParts only handles text.
 						// Let's modify the progress emission to handle thinking.
 
-						const thinkingParts = responseParts
-							.filter((p) => p.thinking)
-							.map((p) => p.thinking)
-							.join("");
+						const thinkingParts = responseParts.filter(p => p.thinking).map(p => p.thinking).join("");
 						if (thinkingParts.length > 0) {
 							// Emit proper thinking part - UI handles accumulation
 							progress([{ kind: "thinking", value: thinkingParts }]);
@@ -465,11 +430,11 @@ export abstract class BaseAgentImplementation
 					| { type: "text"; value: string }
 					| { type: "thinking"; value: string }
 					| {
-							type: "tool_use";
-							name: string;
-							toolCallId: string;
-							parameters: Record<string, unknown>;
-					  }
+						type: "tool_use";
+						name: string;
+						toolCallId: string;
+						parameters: Record<string, unknown>;
+					}
 				> = [];
 
 				if (thinkingParts.length > 0) {
@@ -515,9 +480,10 @@ export abstract class BaseAgentImplementation
 
 				// Check if there are tool calls to process
 				if (!toolCallParts.length) {
-					const responseText = textParts
-						.map((part: { text?: string }) => part.text || "")
-						.join("");
+					const responseText =
+						textParts
+							.map((part: { text?: string }) => part.text || "")
+							.join("");
 
 					// If response is empty after gathering tool results, request a summary
 					if (!responseText.trim() && iteration > 0 && pendingToolResults) {
@@ -528,13 +494,10 @@ export abstract class BaseAgentImplementation
 						// Add a user message asking for summary
 						messages.push({
 							role: ChatMessageRole.User,
-							content: [
-								{
-									type: "text",
-									value:
-										"You've gathered information using the tools. Please provide a clear, helpful summary or answer based on what you found. If you encountered issues or found nothing relevant, explain that clearly.",
-								},
-							],
+							content: [{
+								type: "text",
+								value: "You've gathered information using the tools. Please provide a clear, helpful summary or answer based on what you found. If you encountered issues or found nothing relevant, explain that clearly."
+							}],
 						});
 
 						// Continue the loop - this will trigger another API call with the fallback prompt
@@ -658,9 +621,7 @@ export abstract class BaseAgentImplementation
 
 					if (!toolId) {
 						this.logService.error(
-							`${
-								this.config.logPrefix
-							} model requested unknown tool name '${toolName}'. Available names: ${Array.from(
+							`${this.config.logPrefix} model requested unknown tool name '${toolName}'. Available names: ${Array.from(
 								nameToToolId.keys()
 							).join(", ")}`
 						);
@@ -691,17 +652,7 @@ export abstract class BaseAgentImplementation
 						const timer = new Promise<never>((_, reject) => {
 							const id = setTimeout(() => {
 								clearTimeout(id);
-								const timeoutDuration = getDurationString(timeoutMs, true);
-								reject(
-									new Error(
-										localize(
-											`${this.config.vendorId}.toolTimeout`,
-											"Tool '{0}' timed out after {1}. This may indicate the operation is taking longer than expected or there's a connection issue.",
-											toolName,
-											timeoutDuration
-										)
-									)
-								);
+								reject(new Error(`Tool timed out after ${timeoutMs}ms`));
 							}, timeoutMs);
 						});
 
@@ -719,8 +670,8 @@ export abstract class BaseAgentImplementation
 									textOutput.trim().length > 0
 										? textOutput
 										: (result as any).toolResultError
-										? `Error: ${(result as any).toolResultError}`
-										: "Tool executed successfully but returned no output.";
+											? `Error: ${(result as any).toolResultError}`
+											: "Tool executed successfully but returned no output.";
 								return {
 									toolCallId: callId,
 									content: [{ type: "text" as const, value: finalOutput }],
@@ -745,11 +696,7 @@ export abstract class BaseAgentImplementation
 						);
 
 						// Generate recovery guidance based on the error and tool
-						const recoveryGuidance = this.getToolRecoveryGuidance(
-							toolId,
-							toolName,
-							message
-						);
+						const recoveryGuidance = this.getToolRecoveryGuidance(toolId, toolName, message);
 
 						resultsBuffer[index] = {
 							toolCallId: callId,
@@ -780,10 +727,10 @@ export abstract class BaseAgentImplementation
 				const parallelExecutionTime = Date.now() - parallelExecutionStartTime;
 				this.logService.info(
 					`${this.config.logPrefix} Completed parallel execution of ${tasks.length} tool call(s) in ${parallelExecutionTime}ms ` +
-						`(avg: ${(parallelExecutionTime / tasks.length).toFixed(
-							2
-						)}ms per call, ` +
-						`concurrency: ${maxConcurrency})`
+					`(avg: ${(parallelExecutionTime / tasks.length).toFixed(
+						2
+					)}ms per call, ` +
+					`concurrency: ${maxConcurrency})`
 				);
 
 				for (let i = 0; i < resultsBuffer.length; i++) {
@@ -825,11 +772,7 @@ export abstract class BaseAgentImplementation
 			this.logService.error(`[${this.config.vendorId}] ${message}`);
 
 			const markdown = new MarkdownString(
-				localize(
-					`${this.config.vendorId}.error`,
-					"${this.config.vendorId} request failed: {0}",
-					message
-				)
+				localize(`${this.config.vendorId}.error`, "${this.config.vendorId} request failed: {0}", message)
 			);
 			markdown.isTrusted = true;
 			progress([{ kind: "markdownContent", content: markdown }]);
@@ -940,11 +883,7 @@ export abstract class BaseAgentImplementation
 				error
 			);
 			const markdown = new MarkdownString(
-				localize(
-					`${this.config.vendorId}.error`,
-					"${this.config.vendorId} request failed: {0}",
-					message
-				)
+				localize(`${this.config.vendorId}.error`, "${this.config.vendorId} request failed: {0}", message)
 			);
 			markdown.isTrusted = true;
 			progress([{ kind: "markdownContent", content: markdown }]);
@@ -967,9 +906,7 @@ export abstract class BaseAgentImplementation
 			return;
 		}
 		this.logService.debug(
-			`[${
-				this.config.vendorId
-			}] received tool selection for request ${requestId}: ${JSON.stringify(
+			`[${this.config.vendorId}] received tool selection for request ${requestId}: ${JSON.stringify(
 				tools
 			)}`
 		);
@@ -1005,13 +942,12 @@ export abstract class BaseAgentImplementation
 		if (chatMode === ChatModeKind.Ask) {
 			// In Ask mode, include ask-mode tools (tagged with 'ask-mode')
 			// and general tools (not exclusively for agent mode)
-			tools = allTools.filter(
-				(tool) =>
-					tool.tags?.includes("ask-mode") || !tool.tags?.includes("agent-only")
+			tools = allTools.filter(tool =>
+				tool.tags?.includes('ask-mode') || !tool.tags?.includes('agent-only')
 			);
 		} else {
 			// In non-ask modes, exclude ask-mode-only tools
-			tools = allTools.filter((tool) => !tool.tags?.includes("ask-mode"));
+			tools = allTools.filter(tool => !tool.tags?.includes('ask-mode'));
 		}
 
 		const currentRequestTools = this.requestTools.get(requestId);
@@ -1019,6 +955,7 @@ export abstract class BaseAgentImplementation
 			currentRequestTools === undefined || currentRequestTools === null
 				? true
 				: currentRequestTools;
+
 
 		let toolIndex = 0;
 		for (const tool of tools) {
@@ -1041,10 +978,8 @@ export abstract class BaseAgentImplementation
 			nameToToolId.set(functionName, tool.id);
 
 			const descriptionParts = [];
-			if ("displayName" in tool && tool.displayName)
-				descriptionParts.push(tool.displayName);
-			if ("description" in tool && tool.description)
-				descriptionParts.push(tool.description);
+			if ('displayName' in tool && tool.displayName) descriptionParts.push(tool.displayName);
+			if ('description' in tool && tool.description) descriptionParts.push(tool.description);
 
 			const description = descriptionParts.length
 				? descriptionParts.join(" ")
@@ -1084,8 +1019,7 @@ export abstract class BaseAgentImplementation
 					// eslint-disable-next-line @typescript-eslint/no-explicit-any
 					const props = parameters.properties as Record<string, any>;
 					for (const key in props) {
-						if (propIsObject(props[key])) {
-							// Helper needed
+						if (propIsObject(props[key])) { // Helper needed
 							const prop = props[key];
 							if (!("type" in prop) || typeof prop.type !== "string") {
 								props[key] = { ...prop, type: "string" };
@@ -1165,22 +1099,17 @@ export abstract class BaseAgentImplementation
 					activeFileLanguage: ctx.activeFileLanguage,
 					cursorPosition: ctx.cursorPosition,
 					selectionText: ctx.selection?.text,
-					selectionRange: ctx.selection?.range
-						? {
-								startLine: ctx.selection.range.startLineNumber,
-								endLine: ctx.selection.range.endLineNumber,
-								startColumn: ctx.selection.range.startColumn,
-								endColumn: ctx.selection.range.endColumn,
-						  }
-						: undefined,
-					visibleRange: ctx.visibleRange
-						? {
-								startLine: ctx.visibleRange.startLineNumber,
-								endLine: ctx.visibleRange.endLineNumber,
-						  }
-						: undefined,
-					fileWithMostErrors:
-						this.toolContextResolverService.getFileWithMostErrors(),
+					selectionRange: ctx.selection?.range ? {
+						startLine: ctx.selection.range.startLineNumber,
+						endLine: ctx.selection.range.endLineNumber,
+						startColumn: ctx.selection.range.startColumn,
+						endColumn: ctx.selection.range.endColumn,
+					} : undefined,
+					visibleRange: ctx.visibleRange ? {
+						startLine: ctx.visibleRange.startLineNumber,
+						endLine: ctx.visibleRange.endLineNumber,
+					} : undefined,
+					fileWithMostErrors: this.toolContextResolverService.getFileWithMostErrors(),
 					workspaceRoot: ctx.workspaceRoot,
 				};
 
@@ -1191,16 +1120,10 @@ export abstract class BaseAgentImplementation
 				mergedParameters = { ...defaults, ...parameters };
 
 				// Log what we auto-filled for debugging
-				const autoFilledKeys = Object.keys(defaults).filter(
-					(k) => !(k in parameters)
-				);
+				const autoFilledKeys = Object.keys(defaults).filter(k => !(k in parameters));
 				if (autoFilledKeys.length > 0) {
 					this.logService.debug(
-						`${
-							this.config.logPrefix
-						} [SmartDefaults] Tool ${toolId}: auto-filled ${autoFilledKeys.join(
-							", "
-						)}`
+						`${this.config.logPrefix} [SmartDefaults] Tool ${toolId}: auto-filled ${autoFilledKeys.join(', ')}`
 					);
 				}
 			} catch (error) {
@@ -1222,9 +1145,7 @@ export abstract class BaseAgentImplementation
 	}
 
 	// Abstract this for customization
-	protected getEndpoint(
-		mode: ChatModeKind
-	): "/api/agent/tools" | "/api/agent/ask" {
+	protected getEndpoint(mode: ChatModeKind): "/api/agent/tools" | "/api/agent/ask" {
 		// Default behavior for Claude/Gemini: ask endpoint for Ask mode, tools otherwise.
 		// DeepSeek overrides this to always return "/api/agent/tools"
 		return mode === ChatModeKind.Ask ? "/api/agent/ask" : "/api/agent/tools";
@@ -1242,10 +1163,8 @@ export abstract class BaseAgentImplementation
 	): Promise<ChatGPTStreamingResponse> {
 		const toolNames = tools.map((t) => t.name || "<unnamed>");
 		this.logService.info(
-			`${this.config.logPrefix} performRequest: model=${model}, messages=${
-				messages.length
-			}, tools=${toolNames.join(", ") || "none"}, toolResults=${
-				toolResults?.length || 0
+			`${this.config.logPrefix} performRequest: model=${model}, messages=${messages.length
+			}, tools=${toolNames.join(", ") || "none"}, toolResults=${toolResults?.length || 0
 			}, mode=${mode || "unknown"}`
 		);
 
@@ -1273,11 +1192,8 @@ export abstract class BaseAgentImplementation
 		const maxOutputTokens = modelConfig?.maxOutputTokens ?? 8192;
 
 		this.logService.info(
-			`${this.config.logPrefix} Using endpoint: ${endpoint} (tools=${
-				tools.length
-			}, toolResults=${
-				toolResults?.length || 0
-			}, maxOutputTokens=${maxOutputTokens})`
+			`${this.config.logPrefix} Using endpoint: ${endpoint} (tools=${tools.length
+			}, toolResults=${toolResults?.length || 0}, maxOutputTokens=${maxOutputTokens})`
 		);
 
 		const response = await sendChatGPTRequest(
@@ -1313,32 +1229,24 @@ export abstract class BaseAgentImplementation
 				finishReason?: string | null;
 			}) => {
 				this.logService.info(
-					`${this.config.logPrefix} Request completed: ${
-						result.parts.length
+					`${this.config.logPrefix} Request completed: ${result.parts.length
 					} parts, finishReason=${result.finishReason || "none"}`
 				);
 			},
 			(error: unknown) => {
 				this.logService.error(
-					`${this.config.logPrefix} Streaming request failed: ${
-						error instanceof Error ? error.message : String(error)
-					}`
+					`${this.config.logPrefix} Streaming request failed: ${error instanceof Error ? error.message : String(error)}`
 				);
 			}
 		);
 
+
 		// Track the request
 		if (this.metricsService) {
-			this.logService.info(
-				`[${this.config.vendorId}]Tracking chat request feature usage`
-			);
-			this.metricsService.trackFeatureUsed(
-				`${this.config.vendorId}.chatRequest`
-			);
+			this.logService.info(`[${this.config.vendorId}]Tracking chat request feature usage`);
+			this.metricsService.trackFeatureUsed(`${this.config.vendorId}.chatRequest`);
 		} else {
-			this.logService.warn(
-				`[${this.config.vendorId}]Metrics service not available for tracking`
-			);
+			this.logService.warn(`[${this.config.vendorId}]Metrics service not available for tracking`);
 		}
 
 		return response;
@@ -1395,9 +1303,7 @@ export abstract class BaseAgentImplementation
 				.join("\n");
 
 			if (assistantText || thinkingText) {
-				const content: Array<
-					{ type: "text"; value: string } | { type: "thinking"; value: string }
-				> = [];
+				const content: Array<{ type: "text"; value: string } | { type: "thinking"; value: string }> = [];
 				if (thinkingText) {
 					content.push({ type: "thinking", value: thinkingText });
 				}
@@ -1423,10 +1329,7 @@ export abstract class BaseAgentImplementation
 	 * Builds an enhanced system prompt that encourages proactive tool usage
 	 * and provides behavioral guidelines for agentic behavior.
 	 */
-	protected buildAgenticSystemPrompt(
-		toolSummaries: string[],
-		chatMode?: ChatModeKind
-	): string {
+	protected buildAgenticSystemPrompt(toolSummaries: string[], chatMode?: ChatModeKind): string {
 		const toolsList = toolSummaries.map((summary) => `- ${summary}`).join("\n");
 
 		// Core agentic behavior instructions
@@ -1489,20 +1392,12 @@ You are in EDIT mode - focus on making targeted edits.Read relevant context firs
 	 * Generates recovery guidance based on the tool that failed and the error message.
 	 * This helps the model understand how to recover from tool failures.
 	 */
-	protected getToolRecoveryGuidance(
-		toolId: string,
-		toolName: string,
-		errorMessage: string
-	): string {
+	protected getToolRecoveryGuidance(toolId: string, toolName: string, errorMessage: string): string {
 		const lowerError = errorMessage.toLowerCase();
 		const lowerToolId = toolId.toLowerCase();
 
 		// File not found errors
-		if (
-			lowerError.includes("not found") ||
-			lowerError.includes("no such file") ||
-			lowerError.includes("enoent")
-		) {
+		if (lowerError.includes("not found") || lowerError.includes("no such file") || lowerError.includes("enoent")) {
 			if (lowerToolId.includes("read") || lowerToolId.includes("file")) {
 				return `RECOVERY OPTIONS:
 		1. Use searchFiles to find the correct file path(handles typos - e.g., "authetication" will find "authentication")
@@ -1523,11 +1418,7 @@ You are in EDIT mode - focus on making targeted edits.Read relevant context firs
 		}
 
 		// Permission/access errors
-		if (
-			lowerError.includes("permission") ||
-			lowerError.includes("access denied") ||
-			lowerError.includes("eperm")
-		) {
+		if (lowerError.includes("permission") || lowerError.includes("access denied") || lowerError.includes("eperm")) {
 			return `RECOVERY OPTIONS:
 		1. The file may be read - only or locked by another process
 		2. TERMINAL: runTerminal("ls -la {file}") to check permissions
@@ -1538,65 +1429,59 @@ You are in EDIT mode - focus on making targeted edits.Read relevant context firs
 		// Timeout errors
 		if (lowerError.includes("timeout") || lowerError.includes("timed out")) {
 			return `RECOVERY OPTIONS:
-1. The operation took too long - try with a smaller scope
-2. For searches: use more specific patterns to reduce results
-3. For file operations: the file might be very large - try limiting lines read
-4. Retry the operation - it may have been a temporary issue`;
+		1. The operation took too long - try with a smaller scope
+		2. For searches: use more specific patterns to reduce results
+		3. For file operations: the file might be very large - try limiting lines read
+		4. Retry the operation - it may have been a temporary issue`;
 		}
 
 		// Search/query errors
 		if (lowerToolId.includes("search")) {
-			if (
-				lowerError.includes("no results") ||
-				lowerError.includes("not found")
-			) {
+			if (lowerError.includes("no results") || lowerError.includes("not found")) {
 				return `RECOVERY OPTIONS:
-1. BROADEN SEARCH: Try a shorter pattern or fewer keywords
-2. Use searchCodebase for semantic/meaning-based search
-3. TERMINAL FALLBACK (ultimate backup):
-   - runTerminal("grep -r 'pattern' . --include='*.ts'") for content search
-   - runTerminal("find . -name '*partial*' -type f") for file search
-   - runTerminal("tree -L 2") to see codebase structure
-4. Check for typos in the search query`;
+		1. BROADEN SEARCH: Try a shorter pattern or fewer keywords
+		2. Use searchCodebase for semantic/meaning-based search
+		3. TERMINAL FALLBACK (ultimate backup):
+		   - runTerminal("grep -r 'pattern' . --include='*.ts'") for content search
+		   - runTerminal("find . -name '*partial*' -type f") for file search
+		   - runTerminal("tree -L 2") to see codebase structure
+		4. Check for typos in the search query`;
 			}
 			return `RECOVERY OPTIONS:
-1. Try a simpler search pattern
-2. Check if the search pattern is valid regex (if useRegex is true)
-3. TERMINAL: runTerminal("ls -la {folder}") to see contents
-4. Try limiting the search scope to a specific folder`;
+		1. Try a simpler search pattern
+		2. Check if the search pattern is valid regex (if useRegex is true)
+		3. TERMINAL: runTerminal("ls -la {folder}") to see contents
+		4. Try limiting the search scope to a specific folder`;
 		}
 
 		// Edit tool errors
 		if (lowerToolId.includes("edit")) {
-			if (
-				lowerError.includes("no match") ||
-				lowerError.includes("cannot find")
-			) {
+			if (lowerError.includes("no match") || lowerError.includes("cannot find")) {
 				return `RECOVERY OPTIONS:
-1. First use readFile to see the current file contents
-2. The file may have changed - re-read it before editing
-3. Check that your edit target matches the actual file content exactly`;
+		1. First use readFile to see the current file contents
+		2. The file may have changed - re-read it before editing
+		3. Check that your edit target matches the actual file content exactly`;
 			}
 			return `RECOVERY OPTIONS:
-1. Read the file first to understand current state
-2. Verify the file path is correct
-3. Check for linter errors with checkLinter after any successful edits`;
+		1. Read the file first to understand current state
+		2. Verify the file path is correct
+		3. Check for linter errors with checkLinter after any successful edits`;
 		}
 
 		// Linter tool errors
 		if (lowerToolId.includes("linter") || lowerToolId.includes("lint")) {
 			return `RECOVERY OPTIONS:
-1. The file path may be incorrect - try without specifying a path to see all workspace errors
-2. The linter service may not be initialized yet - try again
-3. The file type may not have linting support`;
+		1. The file path may be incorrect - try without specifying a path to see all workspace errors
+		2. The linter service may not be initialized yet - try again
+		3. The file type may not have linting support`;
 		}
 
 		// Generic recovery guidance
 		return `RECOVERY OPTIONS:
-1. Try the operation again - the error may be transient
-2. Use a different approach to accomplish the same goal
-3. Break down the task into smaller steps
-4. Read related files first to understand context`;
+		1. Try the operation again - the error may be transient
+		2. Use a different approach to accomplish the same goal
+		3. Break down the task into smaller steps
+		4. Read related files first to understand context`;
 	}
 
 	/**
@@ -1617,37 +1502,29 @@ You are in EDIT mode - focus on making targeted edits.Read relevant context firs
 		}
 
 		// Normalize current model for comparison
-		const currentModel = currentModelId?.toLowerCase() || "";
+		const currentModel = currentModelId?.toLowerCase() || '';
 
 		// === Long Context Analysis Tasks ===
 		// Claude excels at long context and detailed analysis
 		const longContextIndicators = [
-			"analyze this entire",
-			"review all the",
-			"summarize this large",
-			"read through all",
-			"analyze the whole",
-			"understand the entire",
-			"explain everything in",
-			"full codebase",
-			"entire project",
-			"all files in",
+			'analyze this entire',
+			'review all the',
+			'summarize this large',
+			'read through all',
+			'analyze the whole',
+			'understand the entire',
+			'explain everything in',
+			'full codebase',
+			'entire project',
+			'all files in'
 		];
 
-		if (
-			longContextIndicators.some((i) => lowerMessage.includes(i)) ||
-			messageLength > 5000
-		) {
-			if (
-				!currentModel.includes("claude") &&
-				!currentModel.includes("sonnet") &&
-				!currentModel.includes("opus")
-			) {
+		if (longContextIndicators.some(i => lowerMessage.includes(i)) || messageLength > 5000) {
+			if (!currentModel.includes('claude') && !currentModel.includes('sonnet') && !currentModel.includes('opus')) {
 				return {
-					model: "Claude",
-					reason:
-						"Claude has excellent long context handling for analyzing large codebases or files",
-					confidence: 0.75,
+					model: 'Claude',
+					reason: 'Claude has excellent long context handling for analyzing large codebases or files',
+					confidence: 0.75
 				};
 			}
 		}
@@ -1655,24 +1532,23 @@ You are in EDIT mode - focus on making targeted edits.Read relevant context firs
 		// === Complex Multi-Step Planning ===
 		// GPT-4o and o1 are good for complex planning
 		const planningIndicators = [
-			"create a plan",
-			"design a system",
-			"architect",
-			"step by step plan",
-			"implementation strategy",
-			"road map",
-			"break down this complex",
-			"design pattern",
-			"how should i structure",
+			'create a plan',
+			'design a system',
+			'architect',
+			'step by step plan',
+			'implementation strategy',
+			'road map',
+			'break down this complex',
+			'design pattern',
+			'how should i structure'
 		];
 
-		if (planningIndicators.some((i) => lowerMessage.includes(i))) {
-			if (!currentModel.includes("gpt-4") && !currentModel.includes("o1")) {
+		if (planningIndicators.some(i => lowerMessage.includes(i))) {
+			if (!currentModel.includes('gpt-4') && !currentModel.includes('o1')) {
 				return {
-					model: "GPT-4o",
-					reason:
-						"GPT-4o excels at complex multi-step planning and system design",
-					confidence: 0.7,
+					model: 'GPT-4o',
+					reason: 'GPT-4o excels at complex multi-step planning and system design',
+					confidence: 0.7
 				};
 			}
 		}
@@ -1680,27 +1556,23 @@ You are in EDIT mode - focus on making targeted edits.Read relevant context firs
 		// === Deep Reasoning / Math / Logic ===
 		// DeepSeek reasoner is excellent for complex reasoning
 		const reasoningIndicators = [
-			"prove that",
-			"derive the",
-			"mathematical",
-			"algorithm complexity",
-			"optimize this algorithm",
-			"logical reasoning",
-			"step by step thinking",
-			"prove or disprove",
-			"formal verification",
+			'prove that',
+			'derive the',
+			'mathematical',
+			'algorithm complexity',
+			'optimize this algorithm',
+			'logical reasoning',
+			'step by step thinking',
+			'prove or disprove',
+			'formal verification'
 		];
 
-		if (reasoningIndicators.some((i) => lowerMessage.includes(i))) {
-			if (
-				!currentModel.includes("deepseek") &&
-				!currentModel.includes("reasoner")
-			) {
+		if (reasoningIndicators.some(i => lowerMessage.includes(i))) {
+			if (!currentModel.includes('deepseek') && !currentModel.includes('reasoner')) {
 				return {
-					model: "DeepSeek Reasoner",
-					reason:
-						"DeepSeek Reasoner excels at complex mathematical and logical reasoning",
-					confidence: 0.7,
+					model: 'DeepSeek Reasoner',
+					reason: 'DeepSeek Reasoner excels at complex mathematical and logical reasoning',
+					confidence: 0.7
 				};
 			}
 		}
@@ -1708,27 +1580,21 @@ You are in EDIT mode - focus on making targeted edits.Read relevant context firs
 		// === Code Generation with Context ===
 		// DeepSeek-coder is excellent for pure code generation
 		const codeGenIndicators = [
-			"write the complete",
-			"generate the full",
-			"implement from scratch",
-			"create a new",
-			"build a complete",
-			"code for",
+			'write the complete',
+			'generate the full',
+			'implement from scratch',
+			'create a new',
+			'build a complete',
+			'code for'
 		];
 
 		const hasHeavyToolUse = toolIds && toolIds.length > 3;
-		if (
-			codeGenIndicators.some((i) => lowerMessage.includes(i)) &&
-			!hasHeavyToolUse
-		) {
-			if (
-				!currentModel.includes("deepseek") &&
-				!currentModel.includes("coder")
-			) {
+		if (codeGenIndicators.some(i => lowerMessage.includes(i)) && !hasHeavyToolUse) {
+			if (!currentModel.includes('deepseek') && !currentModel.includes('coder')) {
 				return {
-					model: "DeepSeek Coder",
-					reason: "DeepSeek Coder is optimized for code generation tasks",
-					confidence: 0.65,
+					model: 'DeepSeek Coder',
+					reason: 'DeepSeek Coder is optimized for code generation tasks',
+					confidence: 0.65
 				};
 			}
 		}
@@ -1736,23 +1602,20 @@ You are in EDIT mode - focus on making targeted edits.Read relevant context firs
 		// === Quick Simple Tasks ===
 		// For simple tasks, smaller/faster models are better
 		const simpleTaskIndicators = [
-			"what is",
-			"how do i",
-			"quick question",
-			"simple",
-			"just tell me",
-			"briefly explain",
+			'what is',
+			'how do i',
+			'quick question',
+			'simple',
+			'just tell me',
+			'briefly explain'
 		];
 
-		if (
-			simpleTaskIndicators.some((i) => lowerMessage.includes(i)) &&
-			messageLength < 200
-		) {
-			if (currentModel.includes("opus") || currentModel.includes("o1")) {
+		if (simpleTaskIndicators.some(i => lowerMessage.includes(i)) && messageLength < 200) {
+			if (currentModel.includes('opus') || currentModel.includes('o1')) {
 				return {
-					model: "GPT-4o-mini",
-					reason: "A faster model would work well for this simple task",
-					confidence: 0.6,
+					model: 'GPT-4o-mini',
+					reason: 'A faster model would work well for this simple task',
+					confidence: 0.6
 				};
 			}
 		}

@@ -27,7 +27,7 @@ export const SwitchViewToolData: IToolData = {
 	displayName: localize("switchViewTool.displayName", "Switch View"),
 	modelDescription: localize(
 		"switchViewTool.modelDescription",
-		"Switches the IDE view between code view (for showing code files) and graph view (for showing dependency graphs and visualizations). Use this when you want to show the user different types of information - code in code view, visualizations in graph view."
+		"Switches the IDE view between code view and graph view. When switching to graph view, you can optionally specify a targetPath and targetType to show the dependency graph for a specific file, folder, or the entire workspace. Use this when explaining code architecture or showing the user how files relate to each other."
 	),
 	source: ToolDataSource.Internal,
 	canBeReferencedInPrompt: true,
@@ -44,6 +44,21 @@ export const SwitchViewToolData: IToolData = {
 					"Optional: The view mode to switch to. If omitted, toggles between code and graph view."
 				),
 			},
+			targetPath: {
+				type: "string",
+				description: localize(
+					"switchViewTool.targetPath",
+					"Required when viewMode is \"graph\": The absolute path to the file or folder to show in the graph view."
+				),
+			},
+			targetType: {
+				type: "string",
+				enum: ["file", "folder", "workspace"],
+				description: localize(
+					"switchViewTool.targetType",
+					"Required when viewMode is \"graph\": The type of target - \"file\" for a single file's dependencies, \"folder\" for a folder's structure, or \"workspace\" for the entire workspace."
+				),
+			},
 		},
 		additionalProperties: false,
 	},
@@ -51,6 +66,8 @@ export const SwitchViewToolData: IToolData = {
 
 export interface ISwitchViewToolParams {
 	viewMode?: "code" | "graph";
+	targetPath?: string;
+	targetType?: "file" | "folder" | "workspace";
 }
 
 export class SwitchViewTool implements IToolImpl {
@@ -128,20 +145,34 @@ export class SwitchViewTool implements IToolImpl {
 		}
 
 		try {
-			// Switch to the requested view
-			this.renViewManager.switchToView(viewMode);
+			// Switch to the requested view, passing target options for graph view
+			if (viewMode === "graph" && args.targetPath && args.targetType) {
+				this.renViewManager.switchToView(viewMode, {
+					targetPath: args.targetPath,
+					targetType: args.targetType,
+				});
+			} else {
+				this.renViewManager.switchToView(viewMode);
+			}
 
 			const viewLabel =
 				viewMode === "code"
 					? localize("switchViewTool.codeView", "Code View")
 					: localize("switchViewTool.graphView", "Graph View");
 
-			// Even if already in view, we return success so the model knows it's in the correct state
-			const message = localize(
-				"switchViewTool.success",
-				"Switched to {0}",
-				viewLabel
-			);
+			// Build success message with target info if applicable
+			let message: string;
+			if (viewMode === "graph" && args.targetPath) {
+				message = localize(
+					"switchViewTool.successWithTarget",
+					"Switched to {0} showing {1}: {2}",
+					viewLabel,
+					args.targetType || "target",
+					args.targetPath
+				);
+			} else {
+				message = localize("switchViewTool.success", "Switched to {0}", viewLabel);
+			}
 
 			return {
 				content: [

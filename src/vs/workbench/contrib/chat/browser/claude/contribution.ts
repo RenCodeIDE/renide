@@ -67,6 +67,7 @@ class ClaudeAgentContribution
 	) {
 		super();
 
+
 		const serverAddress = env['SERVER_ADDRESS'];
 		logService.info(
 			`[claude-server] Environment check: SERVER_ADDRESS=${serverAddress ? 'present' : 'missing'}`,

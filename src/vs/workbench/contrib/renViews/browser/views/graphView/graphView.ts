@@ -160,6 +160,52 @@ export class GraphView extends Disposable implements IRenView {
 		void this.loadWebview(viewport);
 	}
 
+	/**
+	 * Public method to render a specific target (file, folder, or workspace).
+	 * Called by RenViewManager when switching to graph view with a target.
+	 */
+	public async renderTarget(targetPath: string, targetType: 'file' | 'folder' | 'workspace'): Promise<void> {
+		this.logService.info(`[GraphView] renderTarget called: path=${targetPath}, type=${targetType}`);
+
+		// Wait for webview to be ready
+		if (!this._graphReady) {
+			// Wait a bit for the webview to initialize
+			await new Promise(resolve => setTimeout(resolve, 500));
+		}
+
+		const requestId = ++this._renderRequestId;
+
+		try {
+			switch (targetType) {
+				case 'file': {
+					const uri = URI.file(targetPath);
+					this._selectedFile = uri;
+					this._mode = 'file';
+					this.updateToolbarUI();
+					await this.renderFileGraph(uri, requestId);
+					break;
+				}
+				case 'folder': {
+					const uri = URI.file(targetPath);
+					this._selectedFolder = uri;
+					this._mode = 'folder';
+					this.updateToolbarUI();
+					await this.renderFolderGraph(uri, requestId);
+					break;
+				}
+				case 'workspace': {
+					this._mode = 'workspace';
+					this.updateToolbarUI();
+					await this.renderWorkspaceGraph(requestId);
+					break;
+				}
+			}
+		} catch (error) {
+			this.logService.error(`[GraphView] renderTarget failed: ${error}`);
+			await this.sendStatus(`Failed to render ${targetType} graph: ${error instanceof Error ? error.message : String(error)}`, 'error');
+		}
+	}
+
 	private async loadWebview(container: HTMLElement): Promise<void> {
 		if (!this._window) {
 			return;
@@ -604,14 +650,14 @@ export class GraphView extends Disposable implements IRenView {
 						this._selectedFile = file;
 						this.updateToolbarUI();
 					}
-					
-			// Now prompt for function selection
-			await this.sendStatus('Waiting for function selection…', 'loading');
-			const selection = await this.pickers.pickFunction(file);
-			if (!selection) {
-				await this.sendStatus('Function selection canceled. Click "Select function" again to select a function.', 'warning', 6000);
-				return;
-			}
+
+					// Now prompt for function selection
+					await this.sendStatus('Waiting for function selection…', 'loading');
+					const selection = await this.pickers.pickFunction(file);
+					if (!selection) {
+						await this.sendStatus('Function selection canceled. Click "Select function" again to select a function.', 'warning', 6000);
+						return;
+					}
 					this._selectedFunction = selection.function;
 					this.updateToolbarUI();
 					await this.renderDataFlowGraph(selection.function, requestId);

@@ -68,12 +68,10 @@ class ChatGPTAgentContribution
 
 		logService.info(`[chatgpt-server] ===== ChatGPTAgentContribution constructor START =====`);
 
+
 		const serverAddress = env['SERVER_ADDRESS'];
 		logService.info(
-			`[chatgpt-server] Environment check: SERVER_ADDRESS=${serverAddress ? 'present' : 'missing'}, env keys available: ${Object.keys(env)
-				.filter((k) => k.includes('SERVER') || k.includes('ADDRESS'))
-				.join(', ') || 'none'
-			}`,
+			`[chatgpt-server] Environment check: SERVER_ADDRESS=${serverAddress ? 'present' : 'missing'}`,
 		);
 
 		if (!serverAddress) {

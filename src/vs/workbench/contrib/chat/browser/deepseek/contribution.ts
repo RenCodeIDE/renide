@@ -67,6 +67,7 @@ class DeepSeekAgentContribution
 	) {
 		super();
 
+
 		const serverAddress = env['SERVER_ADDRESS'];
 		logService.info(
 			`[deepseek-server] Environment check: SERVER_ADDRESS=${serverAddress ? 'present' : 'missing'}`,

@@ -5,6 +5,7 @@
 
 import { Disposable } from '../../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
+import { env } from '../../../../base/common/process.js';
 import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
@@ -46,12 +47,15 @@ export class MetricsService extends Disposable implements IMetricsService {
 		super();
 		// Get server address from configuration, with dev mode detection
 		const configuredAddress = this.configurationService.getValue<string>('renide.server.address');
+		const envAddress = env['SERVER_ADDRESS'];
 		const isDevMode = mainWindow.location.hostname === 'localhost' ||
 			mainWindow.location.hostname === '127.0.0.1' ||
 			mainWindow.location.protocol === 'file:' ||
 			mainWindow.location.href.includes('workbench-dev.html');
-		const defaultAddress = isDevMode ? 'http://localhost:8787' : 'https://ren-server.rahilmittal-1.workers.dev';
-		this._serverAddress = configuredAddress || defaultAddress;
+
+		// Fallback to local dev server if in dev mode, otherwise expect env var or config
+		const defaultAddress = isDevMode ? 'http://localhost:8787' : undefined;
+		this._serverAddress = configuredAddress || envAddress || defaultAddress;
 
 		// Initialize project ID when workspace opens
 		this._initializeProjectId();

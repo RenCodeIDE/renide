@@ -1,5 +1,6 @@
 // renViewManager.ts
 import { Disposable } from "../../../../../base/common/lifecycle.js";
+import { getWindow } from "../../../../../base/browser/dom.js";
 import { IRenView } from "../views/renView.interface.js";
 import { CodeView } from "../views/codeView.js";
 import { GraphView } from "../views/graphView.js";
@@ -9,6 +10,11 @@ import { createDecorator } from "../../../../../platform/instantiation/common/in
 
 export type RenViewMode = "code" | "graph";
 
+export interface GraphViewOptions {
+	targetPath?: string;
+	targetType?: 'file' | 'folder' | 'workspace';
+}
+
 export const IRenViewManager =
 	createDecorator<IRenViewManager>("IRenViewManager");
 
@@ -16,7 +22,7 @@ export interface IRenViewManager {
 	readonly _serviceBrand: undefined;
 	getGraphView(): GraphView | undefined;
 	getCurrentView(): RenViewMode;
-	switchToView(mode: RenViewMode): void;
+	switchToView(mode: RenViewMode, options?: GraphViewOptions): void;
 	setContentArea(contentArea: HTMLElement): void;
 }
 
@@ -88,8 +94,8 @@ export class RenViewManager extends Disposable implements IRenViewManager {
 		this._contentArea = contentArea;
 	}
 
-	switchToView(mode: RenViewMode): void {
-		if (this._currentView === mode) {
+	switchToView(mode: RenViewMode, options?: GraphViewOptions): void {
+		if (this._currentView === mode && !options) {
 			return;
 		}
 
@@ -104,6 +110,27 @@ export class RenViewManager extends Disposable implements IRenViewManager {
 		const newView = this._views.get(mode);
 		if (newView && this._contentArea) {
 			newView.show(this._contentArea);
+
+			// If switching to graph view with target options, render the target
+			if (mode === 'graph' && options?.targetPath && options?.targetType) {
+				const graphView = this.getGraphView();
+				if (graphView) {
+					void graphView.renderTarget(options.targetPath, options.targetType);
+				}
+			}
+
+			// Dispatch event to sync UI components (Overlay, Buttons) that listen for this
+			// This matches the event structure expected by RenMainWindowOverlay
+			const targetWindow = getWindow(this._contentArea);
+			if (targetWindow && targetWindow.document) {
+				const event = new CustomEvent("ren-switch-view", {
+					detail: {
+						mode,
+						container: this._contentArea.parentElement
+					}
+				});
+				targetWindow.document.dispatchEvent(event);
+			}
 		}
 	}
 
