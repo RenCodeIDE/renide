@@ -1158,21 +1158,30 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 	): IToolData[] {
 		const selected = this.requestTools.get(requestId);
 		if (!selected) {
-			const allTools = Array.from(this.languageModelToolsService.getTools());
+			// Use getTools(true) to include all tools regardless of context key filtering.
+			// The global context key service doesn't have 'chatAgentKind' set properly,
+			// so we bypass the when-clause check and rely on mode-based filtering below.
+			const allTools = Array.from(this.languageModelToolsService.getTools(true));
 			this.logService.debug(
 				`[chatgpt] no tools selected for request ${requestId}, using all ${allTools.length} registered tools`
 			);
-			// In Ask mode, filter out all edit/write tools
+			// In Ask mode, filter out edit/write tools but keep ask-mode specific tools
 			if (chatMode === ChatModeKind.Ask) {
-				return this.filterAskModeTools(allTools);
+				// Filter to include ask-mode tools (tags include 'ask-mode') and filter out blocked tools
+				const askModeTools = allTools.filter(tool => 
+					tool.tags?.includes('ask-mode') || !ChatGPTAgentImplementation.ASK_MODE_BLOCKED_TOOLS.includes(tool.id)
+				);
+				return askModeTools;
 			}
-			return allTools;
+			// In non-ask modes, exclude ask-mode-only tools
+			return allTools.filter(tool => !tool.tags?.includes('ask-mode'));
 		}
 		const allowedIds = Object.keys(selected).filter(
 			(id) => selected[id] === true
 		);
 		if (!allowedIds.length) {
-			const allTools = Array.from(this.languageModelToolsService.getTools());
+			// Same fix: use getTools(true) to bypass context key filtering
+			const allTools = Array.from(this.languageModelToolsService.getTools(true));
 			this.logService.debug(
 				`[chatgpt] tool selection for request ${requestId} contained no enabled entries, using all ${allTools.length} registered tools`
 			);

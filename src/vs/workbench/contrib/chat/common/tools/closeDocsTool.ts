@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
+import { ContextKeyExpr } from '../../../../../platform/contextkey/common/contextkey.js';
 import { localize } from '../../../../../nls.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
 import { CountTokensCallback, IPreparedToolInvocation, IToolData, IToolImpl, IToolInvocation, IToolInvocationPreparationContext, IToolResult, ToolDataSource, ToolProgress } from '../languageModelToolsService.js';
@@ -18,6 +19,8 @@ export const CloseDocsToolData: IToolData = {
 	modelDescription: localize('closeDocsTool.modelDescription', 'Closes the documentation panel if it is open. Use this to clean up the workspace after showing documentation.'),
 	source: ToolDataSource.Internal,
 	canBeReferencedInPrompt: true,
+	tags: ['ask-mode'],
+	when: ContextKeyExpr.equals('chatAgentKind', 'ask'),
 	inputSchema: {
 		type: 'object',
 		properties: {},

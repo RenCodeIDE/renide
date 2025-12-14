@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
+import { ContextKeyExpr } from '../../../../../platform/contextkey/common/contextkey.js';
 import { MarkdownString } from '../../../../../base/common/htmlContent.js';
 import { localize } from '../../../../../nls.js';
 import { CountTokensCallback, IPreparedToolInvocation, IToolData, IToolImpl, IToolInvocation, IToolInvocationPreparationContext, IToolResult, ToolDataSource, ToolInvocationPresentation, ToolProgress } from '../languageModelToolsService.js';
@@ -17,6 +18,8 @@ export const AskConfirmationToolData: IToolData = {
 	modelDescription: localize('askConfirmationTool.modelDescription', 'Asks the user for confirmation about their understanding via a chat popup. Use this to check if the user understood your explanation or to give them options to continue. The user will see clickable buttons in the chat to respond.'),
 	source: ToolDataSource.Internal,
 	canBeReferencedInPrompt: true,
+	tags: ['ask-mode'],
+	when: ContextKeyExpr.equals('chatAgentKind', 'ask'),
 	inputSchema: {
 		type: 'object',
 		properties: {

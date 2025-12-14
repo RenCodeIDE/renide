@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
+import { ContextKeyExpr } from '../../../../../platform/contextkey/common/contextkey.js';
 import { localize } from '../../../../../nls.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { IEditorService } from '../../../../services/editor/common/editorService.js';
@@ -19,6 +20,8 @@ export const OpenFileToolData: IToolData = {
 	modelDescription: localize('openFileTool.modelDescription', 'Opens a file in the editor. Can optionally navigate to a specific line number. Useful for showing the user specific code files when explaining concepts.'),
 	source: ToolDataSource.Internal,
 	canBeReferencedInPrompt: true,
+	tags: ['ask-mode'],
+	when: ContextKeyExpr.equals('chatAgentKind', 'ask'),
 	inputSchema: {
 		type: 'object',
 		properties: {

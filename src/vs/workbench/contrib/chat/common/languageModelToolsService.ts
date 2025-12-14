@@ -383,7 +383,7 @@ export interface ILanguageModelToolsService {
 	registerToolData(toolData: IToolData): IDisposable;
 	registerToolImplementation(id: string, tool: IToolImpl): IDisposable;
 	registerTool(toolData: IToolData, tool: IToolImpl): IDisposable;
-	getTools(): Iterable<Readonly<IToolData>>;
+	getTools(includeDisabled?: boolean): Iterable<Readonly<IToolData>>;
 	getTool(id: string): IToolData | undefined;
 	getToolByName(name: string, includeDisabled?: boolean): IToolData | undefined;
 	invokeTool(invocation: IToolInvocation, countTokens: CountTokensCallback, token: CancellationToken): Promise<IToolResult>;

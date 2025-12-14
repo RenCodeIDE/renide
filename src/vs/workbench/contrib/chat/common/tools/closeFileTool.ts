@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
+import { ContextKeyExpr } from '../../../../../platform/contextkey/common/contextkey.js';
 import { localize } from '../../../../../nls.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { IEditorGroupsService } from '../../../../services/editor/common/editorGroupsService.js';
@@ -19,6 +20,8 @@ export const CloseFileToolData: IToolData = {
 	modelDescription: localize('closeFileTool.modelDescription', 'Closes a file in the editor. Can close all instances of the file across all editor groups, or just the active instance. Useful for cleaning up the workspace after showing code examples.'),
 	source: ToolDataSource.Internal,
 	canBeReferencedInPrompt: true,
+	tags: ['ask-mode'],
+	when: ContextKeyExpr.equals('chatAgentKind', 'ask'),
 	inputSchema: {
 		type: 'object',
 		properties: {
