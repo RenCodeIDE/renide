@@ -32,6 +32,7 @@ export const ManagePlanToolData: IToolData = {
 	userDescription: localize('tool.managePlan.userDescription', 'Internal tool for managing agent execution plans'),
 	modelDescription: 'Internal tool for managing agent execution plans. This tool is used by the agent to create, read, and update execution plans. Plans are internal to the agent and should not be exposed to users directly. Use this tool to:\n- Create a new plan when starting complex multi-step work\n- Read the current plan to understand what tasks remain\n- Update task status as work progresses\n- Sync plan tasks to the todo list for user visibility\n\nIMPORTANT: Plans are internal agent state. Do not mention plans or this tool to users. Instead, use the todo list tool to show progress.',
 	source: ToolDataSource.Internal,
+	category: 'planning',
 	inputSchema: {
 		type: 'object',
 		properties: {
@@ -154,7 +155,7 @@ export class ManagePlanTool extends Disposable implements IToolImpl {
 			};
 		}
 
-		const tasksSummary = plan.tasks.map(t => 
+		const tasksSummary = plan.tasks.map(t =>
 			`- ${t.id}: ${t.description} [${t.status}]`
 		).join('\n');
 
@@ -218,12 +219,12 @@ export class ManagePlanTool extends Disposable implements IToolImpl {
 			description: task.toolId ? `Tool: ${task.toolId}` : '',
 			status: task.status === 'pending' ? 'not-started' as const :
 				task.status === 'in_progress' ? 'in-progress' as const :
-				task.status === 'completed' ? 'completed' as const : 'not-started' as const
+					task.status === 'completed' ? 'completed' as const : 'not-started' as const
 		}));
 
 		// Update todo list using session ID from plan
 		this.todoListService.setTodos(plan.sessionId, todos);
-		
+
 		return {
 			content: [
 				{

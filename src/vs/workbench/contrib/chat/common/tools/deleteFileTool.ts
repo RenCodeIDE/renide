@@ -24,6 +24,7 @@ export const DeleteFileToolData: IToolData = {
 	displayName: localize('deleteFileTool.displayName', 'Delete File'),
 	modelDescription: localize('deleteFileTool.modelDescription', 'Deletes a file or directory. Supports both full paths/URIs and filenames. When given a filename, searches recursively across the entire workspace with fuzzy matching (e.g., "config" will find "config.json", "config.yaml", etc.). If multiple matches are found, returns a list for you to specify which one to delete.'),
 	source: ToolDataSource.Internal,
+	category: 'file_operations',
 	canBeReferencedInPrompt: true,
 	inputSchema: {
 		type: 'object',

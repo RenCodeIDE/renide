@@ -37,6 +37,17 @@ export const OpenFileToolData: IToolData = {
 		},
 		required: ['filePath'],
 		additionalProperties: false
+	},
+	// Smart default: use active file if available
+	resolveDefaults: (ctx) => {
+		const defaults: Partial<Record<string, unknown>> = {};
+		if (ctx.activeFile) {
+			defaults.filePath = ctx.activeFile.fsPath;
+		}
+		if (ctx.cursorPosition) {
+			defaults.lineNumber = ctx.cursorPosition.line;
+		}
+		return defaults;
 	}
 };
 
@@ -54,7 +65,7 @@ export class OpenFileTool implements IToolImpl {
 
 	async prepareToolInvocation(context: IToolInvocationPreparationContext, token: CancellationToken): Promise<IPreparedToolInvocation | undefined> {
 		const parameters = context.parameters as IOpenFileToolParams;
-		
+
 		const lineInfo = parameters.lineNumber ? ` at line ${parameters.lineNumber}` : '';
 
 		return {
@@ -70,9 +81,17 @@ export class OpenFileTool implements IToolImpl {
 			return {
 				content: [{
 					kind: 'text',
-					value: localize('openFileTool.missingPath', 'File path is required')
+					value: localize('openFileTool.missingPath',
+						`File path is required. The filePath parameter is REQUIRED.
+
+RECOVERY: You must provide a file path:
+- openFile({ filePath: "/absolute/path/to/file.ts" })
+- openFile({ filePath: "relative/path/from/workspace.ts" })
+- openFile({ filePath: "/path/to/file.ts", lineNumber: 42 }) - to go to specific line
+
+ALTERNATIVE: If you don't know the exact path, use searchFiles first to find the file.`)
 				}],
-				toolResultMessage: localize('openFileTool.error', 'Failed to open file: missing path')
+				toolResultMessage: localize('openFileTool.errorShort', 'Missing filePath. Provide absolute or workspace-relative path.')
 			};
 		}
 

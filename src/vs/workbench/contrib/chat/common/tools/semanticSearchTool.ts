@@ -34,9 +34,24 @@ export const SemanticSearchToolData: IToolData = {
 	displayName: localize("semanticSearchTool.displayName", "Search Codebase"),
 	modelDescription: localize(
 		"semanticSearchTool.modelDescription",
-		"Searches the codebase using semantic similarity to find relevant code chunks. Use this when you need to find code related to a specific concept, function, or feature. The search uses vector embeddings to understand the semantic meaning of your query, not just keyword matching."
+		`Searches codebase using AI-powered semantic similarity (understands meaning, not just keywords).
+
+USE THIS WHEN:
+- Looking for conceptual code ("authentication logic", "error handling", "user management")
+- Exploring unfamiliar codebase by concept
+- Finding implementations when you don't know exact function names
+- User describes functionality in natural language
+
+PREFER OVER searchFiles WHEN: You want conceptual/meaning-based search, not exact text.
+PREFER searchFiles WHEN: You know the exact text/function name to find.
+
+EXAMPLES:
+- "Where is user authentication handled?" → query:"user authentication logic"
+- "Find database connection code" → query:"database connection handling"
+- "How are API errors handled?" → query:"API error handling responses"`
 	),
 	source: ToolDataSource.Internal,
+	category: 'search',
 	canBeReferencedInPrompt: true,
 	inputSchema: {
 		type: "object",
@@ -120,7 +135,7 @@ export class SemanticSearchTool implements IToolImpl {
 		@ILogService private readonly logService: ILogService,
 		@IWorkspaceContextService
 		private readonly workspaceContextService: IWorkspaceContextService
-	) {}
+	) { }
 
 	/**
 	 * Detect programming language from file extension for better context
@@ -278,12 +293,10 @@ export class SemanticSearchTool implements IToolImpl {
 		const language = this.detectLanguage(result.filePath);
 
 		// Build header with relevance tier for quick scanning
-		let formatted = `\n---\n### ${index + 1}. [${relevanceTier}] ${
-			result.filePath
-		}\n`;
-		formatted += `   Lines ${result.startLine + 1}-${
-			result.endLine + 1
-		} | Similarity: ${similarityPercent}%`;
+		let formatted = `\n---\n### ${index + 1}. [${relevanceTier}] ${result.filePath
+			}\n`;
+		formatted += `   Lines ${result.startLine + 1}-${result.endLine + 1
+			} | Similarity: ${similarityPercent}%`;
 		if (language) {
 			formatted += ` | Language: ${language}`;
 		}
@@ -301,9 +314,8 @@ export class SemanticSearchTool implements IToolImpl {
 		}
 
 		// Add actionable hint for reading more
-		formatted += `\n   To read full context: read file "${
-			result.filePath
-		}" lines ${result.startLine + 1}-${result.endLine + 1}\n`;
+		formatted += `\n   To read full context: read file "${result.filePath
+			}" lines ${result.startLine + 1}-${result.endLine + 1}\n`;
 
 		// Add dependency information if available
 		if (result.dependencyGraph) {
@@ -312,8 +324,7 @@ export class SemanticSearchTool implements IToolImpl {
 
 			if (files.length > 0) {
 				dependencies.push(
-					`Related files: ${files.slice(0, 3).join(", ")}${
-						files.length > 3 ? ` (+${files.length - 3} more)` : ""
+					`Related files: ${files.slice(0, 3).join(", ")}${files.length > 3 ? ` (+${files.length - 3} more)` : ""
 					}`
 				);
 			}
@@ -323,8 +334,7 @@ export class SemanticSearchTool implements IToolImpl {
 					.map((s) => s.name)
 					.join(", ");
 				dependencies.push(
-					`Symbols used: ${symbolNames}${
-						symbols.length > 3 ? ` (+${symbols.length - 3} more)` : ""
+					`Symbols used: ${symbolNames}${symbols.length > 3 ? ` (+${symbols.length - 3} more)` : ""
 					}`
 				);
 			}
@@ -334,8 +344,7 @@ export class SemanticSearchTool implements IToolImpl {
 					.map((f) => f.name)
 					.join(", ");
 				dependencies.push(
-					`Functions: ${functionNames}${
-						functions.length > 3 ? ` (+${functions.length - 3} more)` : ""
+					`Functions: ${functionNames}${functions.length > 3 ? ` (+${functions.length - 3} more)` : ""
 					}`
 				);
 			}

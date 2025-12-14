@@ -17,8 +17,24 @@ export const ReadFileToolData: IToolData = {
 	id: 'read_file',
 	toolReferenceName: 'readFile',
 	displayName: localize('readFileTool.displayName', 'Read File'),
-	modelDescription: localize('readFileTool.modelDescription', 'Reads the contents of a file. Supports both full paths/URIs and filenames. When given a filename, searches recursively across the entire workspace with fuzzy matching (e.g., "config" will find "config.json", "config.yaml", etc.). If multiple matches are found, returns a list for you to choose from.'),
+	modelDescription: localize('readFileTool.modelDescription',
+		`Reads file contents with fuzzy filename matching across the workspace.
+
+USE THIS WHEN:
+- You need to examine specific file contents before editing
+- User mentions a file by name (even partial names work)
+- You want to understand implementation details
+- You need to verify current file state
+
+PREFER OVER searchFiles WHEN: You know the filename and want full contents.
+PREFER searchFiles WHEN: You're looking for specific code patterns across files.
+
+EXAMPLES:
+- "Read config file" → finds config.json, config.yaml, etc.
+- "Show me utils.ts" → finds and reads utilities file
+- Always read files BEFORE making edits to understand context`),
 	source: ToolDataSource.Internal,
+	category: 'file_operations',
 	canBeReferencedInPrompt: true,
 	inputSchema: {
 		type: 'object',
@@ -33,6 +49,19 @@ export const ReadFileToolData: IToolData = {
 			}
 		},
 		required: ['uri']
+	},
+	// Smart default: use active file if user doesn't specify
+	resolveDefaults: (ctx) => {
+		const defaults: Partial<Record<string, unknown>> = {};
+		if (ctx.activeFile) {
+			defaults.uri = ctx.activeFile.toString();
+		}
+		// If there's a visible range, suggest reading that portion for large files
+		if (ctx.visibleRange) {
+			defaults.startLine = ctx.visibleRange.startLine;
+			defaults.endLine = ctx.visibleRange.endLine;
+		}
+		return defaults;
 	}
 };
 

@@ -36,6 +36,17 @@ export const GraphControlToolData: IToolData = {
 		},
 		required: ['graphType'],
 		additionalProperties: false
+	},
+	// Smart default: default to workspace overview, use active file as target
+	resolveDefaults: (ctx) => {
+		const defaults: Partial<Record<string, unknown>> = {};
+		// Default to workspace overview (most useful general view)
+		defaults.graphType = 'workspace';
+		// If user has a file open, use that as target for file/folder modes
+		if (ctx.activeFile) {
+			defaults.targetPath = ctx.activeFile.fsPath;
+		}
+		return defaults;
 	}
 };
 
@@ -52,7 +63,7 @@ export class GraphControlTool implements IToolImpl {
 
 	async prepareToolInvocation(context: IToolInvocationPreparationContext, token: CancellationToken): Promise<IPreparedToolInvocation | undefined> {
 		const parameters = context.parameters as IGraphControlToolParams;
-		
+
 		const graphTypeLabel = this.getGraphTypeLabel(parameters.graphType);
 		const targetInfo = parameters.targetPath ? ` for ${parameters.targetPath}` : '';
 
@@ -72,9 +83,19 @@ export class GraphControlTool implements IToolImpl {
 			return {
 				content: [{
 					kind: 'text',
-					value: localize('graphControlTool.invalidType', 'Invalid graph type "{0}". Must be one of: {1}', args.graphType, validGraphTypes.join(', '))
+					value: localize('graphControlTool.invalidType',
+						`Invalid or missing graphType "${args.graphType}". The graphType parameter is REQUIRED.
+
+RECOVERY: You must provide one of these graph types:
+- graphControl({ graphType: "workspace" }) - Workspace overview
+- graphControl({ graphType: "file", targetPath: "/path/to/file.ts" }) - File dependencies
+- graphControl({ graphType: "folder", targetPath: "/path/to/folder" }) - Folder structure
+- graphControl({ graphType: "gitHeatmap" }) - Git commit coupling
+- graphControl({ graphType: "architecture" }) - Architecture analysis
+
+If unsure, use "workspace" for a general overview.`)
 				}],
-				toolResultMessage: localize('graphControlTool.error', 'Failed to control graph: invalid type "{0}". Must be one of: {1}', args.graphType, validGraphTypes.join(', '))
+				toolResultMessage: localize('graphControlTool.errorShort', 'Missing graphType. Use: workspace, file, folder, architecture, gitHeatmap, dataFlow, evolution, or changeImpact')
 			};
 		}
 

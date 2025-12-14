@@ -44,6 +44,23 @@ export const HighlightLinesToolData: IToolData = {
 		},
 		required: ['startLine', 'endLine'],
 		additionalProperties: false
+	},
+	// Smart default: use selection or cursor position
+	resolveDefaults: (ctx) => {
+		const defaults: Partial<Record<string, unknown>> = {};
+		if (ctx.activeFile) {
+			defaults.filePath = ctx.activeFile.fsPath;
+		}
+		// If there's a selection, highlight that
+		if (ctx.selectionRange) {
+			defaults.startLine = ctx.selectionRange.startLine;
+			defaults.endLine = ctx.selectionRange.endLine;
+		} else if (ctx.cursorPosition) {
+			// Otherwise use cursor line
+			defaults.startLine = ctx.cursorPosition.line;
+			defaults.endLine = ctx.cursorPosition.line;
+		}
+		return defaults;
 	}
 };
 
@@ -71,7 +88,7 @@ export class HighlightLinesTool implements IToolImpl {
 
 	async prepareToolInvocation(context: IToolInvocationPreparationContext, token: CancellationToken): Promise<IPreparedToolInvocation | undefined> {
 		const parameters = context.parameters as IHighlightLinesToolParams;
-		
+
 		const lineRange = parameters.startLine === parameters.endLine
 			? `line ${parameters.startLine}`
 			: `lines ${parameters.startLine}-${parameters.endLine}`;
@@ -108,7 +125,7 @@ export class HighlightLinesTool implements IToolImpl {
 
 		try {
 			let fileUri: URI | undefined;
-			
+
 			// If filePath is provided, parse it
 			if (args.filePath) {
 				fileUri = this.parseFilePath(args.filePath);

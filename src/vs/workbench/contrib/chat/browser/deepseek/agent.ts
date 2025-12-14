@@ -22,6 +22,7 @@ import { IConfigurationService } from "../../../../../platform/configuration/com
 import { ILanguageFeaturesService } from "../../../../../editor/common/services/languageFeatures.js";
 import { IMetricsService } from "../../../../services/metrics/common/metricsService.js";
 import { BaseAgentImplementation } from "../baseAgentImplementation.js";
+import { IToolContextResolverService } from "../toolContextResolverService.js";
 
 export class DeepSeekAgentImplementation extends BaseAgentImplementation {
 	constructor(
@@ -35,7 +36,8 @@ export class DeepSeekAgentImplementation extends BaseAgentImplementation {
 		chatAgentService: IChatAgentService,
 		configurationService: IConfigurationService,
 		languageFeaturesService?: ILanguageFeaturesService,
-		metricsService?: IMetricsService
+		metricsService?: IMetricsService,
+		toolContextResolverService?: IToolContextResolverService
 	) {
 		super(
 			{
@@ -53,7 +55,8 @@ export class DeepSeekAgentImplementation extends BaseAgentImplementation {
 			chatAgentService,
 			configurationService,
 			languageFeaturesService,
-			metricsService
+			metricsService,
+			toolContextResolverService
 		);
 	}
 

@@ -113,14 +113,19 @@ export class PlanFileTool extends Disposable implements IToolImpl {
 			}
 
 			const workspaceRelative = this.getWorkspaceRelativePath(uri);
-			const markdownLink = new MarkdownString(`[Plan file created: ${workspaceRelative ?? uri.fsPath}](${uri.toString(true)})`);
-			markdownLink.isTrusted = true;
+
+			// Create a rich markdown preview of the plan
+			const markdownPreview = new MarkdownString();
+			markdownPreview.isTrusted = true;
+			markdownPreview.supportThemeIcons = true;
+
+			markdownPreview.appendMarkdown(`### Plan Updated: [${workspaceRelative ?? uri.fsPath}](${uri.toString(true)})\n\n`);
+			markdownPreview.appendMarkdown(contentToWrite);
 
 			return {
 				content: [
-					{ kind: 'text', value: localize('planFileTool.success', "Plan file created and opened: {0}", workspaceRelative ?? uri.fsPath) }
 				],
-				toolResultMessage: markdownLink
+				toolResultMessage: markdownPreview
 			};
 		} catch (error) {
 			this.logService.error('[PlanFileTool] Failed to write plan file', error);

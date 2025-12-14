@@ -46,6 +46,7 @@ import { sendChatGPTRequest } from '../chatgpt/request.js';
 // @ts-ignore - Module resolution error is false positive, files exist
 import { validateIDEFormatStatic } from '../chatgpt/validation.js';
 import { IMetricsService } from '../../../../services/metrics/common/metricsService.js';
+import { IToolContextResolverService } from '../toolContextResolverService.js';
 
 class ClaudeAgentContribution
 	extends Disposable
@@ -120,6 +121,14 @@ class ClaudeAgentContribution
 			// Service not available
 		}
 
+		// Get tool context resolver service for smart defaults
+		let toolContextResolverService: IToolContextResolverService | undefined;
+		try {
+			toolContextResolverService = this.instantiationService.invokeFunction(accessor => accessor.get(IToolContextResolverService));
+		} catch {
+			// Service not available
+		}
+
 		const implementation = new ClaudeAgentImplementation(
 			this.requestService,
 			serverAddress,
@@ -132,6 +141,7 @@ class ClaudeAgentContribution
 			this.configurationService,
 			languageFeaturesService,
 			metricsService,
+			toolContextResolverService,
 		);
 		this._register(this.chatAgentService.registerAgentImplementation(agentId, implementation));
 

@@ -270,6 +270,14 @@ import { ChatStatusBarEntry } from "./chatStatus.js";
 import { ChatVariablesService } from "./chatVariables.js";
 import { ChatWidget, ChatWidgetService } from "./chatWidget.js";
 import { ChatCodeBlockContextProviderService } from "./codeBlockContextProviderService.js";
+import {
+	CodebaseStructureService,
+	ICodebaseStructureService,
+} from "./codebaseStructureService.js";
+import {
+	ToolContextResolverService,
+	IToolContextResolverService,
+} from "./toolContextResolverService.js";
 import { ChatDynamicVariableModel } from "./contrib/chatDynamicVariables.js";
 import { ChatImplicitContextContribution } from "./contrib/chatImplicitContext.js";
 import "./contrib/chatInputCompletions.js";
@@ -1316,8 +1324,7 @@ class ChatResolverContribution extends Disposable {
 
 class ChatAgentSettingContribution
 	extends Disposable
-	implements IWorkbenchContribution
-{
+	implements IWorkbenchContribution {
 	static readonly ID = "workbench.contrib.chatAgentSetting";
 
 	constructor(
@@ -1369,7 +1376,7 @@ class ChatAgentSettingContribution
 			Event.runAndSubscribe(
 				Event.debounce(
 					this.entitlementService.onDidChangeEntitlement,
-					() => {},
+					() => { },
 					1000
 				),
 				() => registerMaxRequestsSetting()
@@ -1734,8 +1741,7 @@ registerSingleton(
 );
 class ChatAgentNotificationContribution
 	extends Disposable
-	implements IWorkbenchContribution
-{
+	implements IWorkbenchContribution {
 	static readonly ID = "workbench.contrib.chatAgentNotification";
 
 	constructor(@IChatService private readonly chatService: IChatService) {
@@ -1744,15 +1750,15 @@ class ChatAgentNotificationContribution
 			this.chatService.onDidCompleteAgentRequest(async (event) => {
 				const message = event.success
 					? nls.localize(
-							"agentFinished",
-							"Agent {0} finished its work",
-							event.agentName
-					  )
+						"agentFinished",
+						"Agent {0} finished its work",
+						event.agentName
+					)
 					: nls.localize(
-							"agentFinishedError",
-							"Agent {0} finished with an error",
-							event.agentName
-					  );
+						"agentFinishedError",
+						"Agent {0} finished with an error",
+						event.agentName
+					);
 				await triggerNotification(message);
 			})
 		);
@@ -1881,6 +1887,16 @@ registerSingleton(
 registerSingleton(
 	IChatLayoutService,
 	ChatLayoutService,
+	InstantiationType.Delayed
+);
+registerSingleton(
+	ICodebaseStructureService,
+	CodebaseStructureService,
+	InstantiationType.Delayed
+);
+registerSingleton(
+	IToolContextResolverService,
+	ToolContextResolverService,
 	InstantiationType.Delayed
 );
 

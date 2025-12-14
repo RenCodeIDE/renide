@@ -27,9 +27,23 @@ export const CheckLinterToolData: IToolData = {
 	displayName: localize('checkLinterTool.displayName', 'Check Linter'),
 	modelDescription: localize(
 		'checkLinterTool.modelDescription',
-		'Checks for linter errors, warnings, and other diagnostics in files. Returns detailed information about each issue including file path, line number, column, severity, message, and source. Use this tool after editing files to verify correctness and identify issues that need to be fixed.'
+		`Checks for linter errors, warnings, and diagnostics in files.
+
+USE THIS WHEN:
+- AFTER making any code edits (always verify your work!)
+- User reports issues or "it doesn't work"
+- Before completing a coding task to ensure code quality
+- Investigating build/compile problems
+
+BEST PRACTICE: Always call this tool after using editFile or createFile to catch issues immediately.
+
+EXAMPLES:
+- After editing: checkLinter with the edited file path
+- Quick health check: checkLinter with no args gets top 20 errors
+- Focus on specific issues: checkLinter with severity:"Warning"`
 	),
 	source: ToolDataSource.Internal,
+	category: 'code_analysis',
 	canBeReferencedInPrompt: true,
 	inputSchema: {
 		type: 'object',
@@ -52,6 +66,18 @@ export const CheckLinterToolData: IToolData = {
 		},
 		required: [],
 	},
+	// Smart default: prioritize file with most errors, fallback to active file
+	resolveDefaults: (ctx) => {
+		const defaults: Partial<Record<string, unknown>> = {};
+		// Prefer file with most linter errors
+		if (ctx.fileWithMostErrors) {
+			defaults.path = ctx.fileWithMostErrors.fsPath;
+		} else if (ctx.activeFile) {
+			// Fallback to active file
+			defaults.path = ctx.activeFile.fsPath;
+		}
+		return defaults;
+	},
 };
 
 export interface ICheckLinterToolInput {
@@ -63,7 +89,7 @@ export class CheckLinterTool implements IToolImpl {
 	constructor(
 		@IMarkerService private readonly markerService: IMarkerService,
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService
-	) {}
+	) { }
 
 	async prepareToolInvocation(
 		context: IToolInvocationPreparationContext,

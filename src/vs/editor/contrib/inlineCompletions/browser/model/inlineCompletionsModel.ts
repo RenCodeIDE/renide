@@ -114,6 +114,7 @@ import { TypingInterval } from "./typingSpeed.js";
 import { StringReplacement } from "../../../../common/core/edits/stringEdit.js";
 import { OffsetRange } from "../../../../common/core/ranges/offsetRange.js";
 import { URI } from "../../../../../base/common/uri.js";
+import { IMetricsService } from "../../../../../workbench/services/metrics/common/metricsService.js";
 
 export class InlineCompletionsModel extends Disposable {
 	private readonly _source;
@@ -197,7 +198,8 @@ export class InlineCompletionsModel extends Disposable {
 		private readonly _languageFeaturesService: ILanguageFeaturesService,
 		@ICodeEditorService private readonly _codeEditorService: ICodeEditorService,
 		@IInlineCompletionsService
-		private readonly _inlineCompletionsService: IInlineCompletionsService
+		private readonly _inlineCompletionsService: IInlineCompletionsService,
+		@IMetricsService private readonly _metricsService: IMetricsService
 	) {
 		super();
 		this._source = this._register(
@@ -269,8 +271,8 @@ export class InlineCompletionsModel extends Disposable {
 			this.editorType = isNotebook
 				? InlineCompletionEditorType.Notebook
 				: this.isInDiffEditor
-				? InlineCompletionEditorType.DiffEditor
-				: InlineCompletionEditorType.TextEditor;
+					? InlineCompletionEditorType.DiffEditor
+					: InlineCompletionEditorType.TextEditor;
 		}
 
 		this._register(
@@ -279,6 +281,13 @@ export class InlineCompletionsModel extends Disposable {
 					this._inlineCompletionsService.reportNewCompletion(
 						s.inlineCompletion.requestUuid
 					);
+
+					// Track suggestion shown
+					this._metricsService.trackSuggestionShown({
+						suggestionId: s.inlineCompletion.semanticId,
+						type: s.inlineCompletion.isInlineEdit ? 'agent' : 'inline',
+						sessionId: 'current-session' // Session ID will be handled by the service if undefined
+					});
 				}
 			})
 		);
@@ -385,15 +394,15 @@ export class InlineCompletionsModel extends Disposable {
 
 	private _lastShownInlineCompletionInfo:
 		| {
-				alternateTextModelVersionId: number;
+			alternateTextModelVersionId: number;
 				/* already freed! */ inlineCompletion: InlineSuggestionItem;
-		  }
+		}
 		| undefined = undefined;
 	private _lastAcceptedInlineCompletionInfo:
 		| {
-				textModelVersionIdAfter: number;
+			textModelVersionIdAfter: number;
 				/* already freed! */ inlineCompletion: InlineSuggestionItem;
-		  }
+		}
 		| undefined = undefined;
 	private readonly _didUndoInlineEdits = derivedHandleChanges(
 		{
@@ -413,7 +422,7 @@ export class InlineCompletionsModel extends Disposable {
 				versionId !== null &&
 				this._lastAcceptedInlineCompletionInfo &&
 				this._lastAcceptedInlineCompletionInfo.textModelVersionIdAfter ===
-					versionId - 1 &&
+				versionId - 1 &&
 				this._lastAcceptedInlineCompletionInfo.inlineCompletion.isInlineEdit &&
 				changeSummary.didUndo
 			) {
@@ -550,7 +559,7 @@ export class InlineCompletionsModel extends Disposable {
 					this._isActive.read(reader)) &&
 				(!this._inlineCompletionsService.isSnoozing() ||
 					changeSummary.inlineCompletionTriggerKind ===
-						InlineCompletionTriggerKind.Explicit);
+					InlineCompletionTriggerKind.Explicit);
 			if (!shouldUpdate) {
 				this._source.cancelUpdate();
 				return undefined;
@@ -575,7 +584,7 @@ export class InlineCompletionsModel extends Disposable {
 			if (
 				this._didUndoInlineEdits.read(reader) &&
 				changeSummary.inlineCompletionTriggerKind !==
-					InlineCompletionTriggerKind.Explicit
+				InlineCompletionTriggerKind.Explicit
 			) {
 				transaction((tx) => {
 					this._source.clear(tx);
@@ -620,7 +629,7 @@ export class InlineCompletionsModel extends Disposable {
 					requestInfo.startTime +
 					(changeSummary.inlineCompletionTriggerKind ===
 						InlineCompletionTriggerKind.Explicit ||
-					this.inAcceptFlow.read(undefined)
+						this.inAcceptFlow.read(undefined)
 						? 0
 						: this._minShowDelay.read(undefined)),
 			};
@@ -651,28 +660,28 @@ export class InlineCompletionsModel extends Disposable {
 				this._inlineCompletionItems.read(undefined)?.inlineEdit;
 			const itemToPreserve =
 				changeSummary.preserveCurrentCompletion ||
-				itemToPreserveCandidate?.forwardStable
+					itemToPreserveCandidate?.forwardStable
 					? itemToPreserveCandidate
 					: undefined;
 			const userJumpedToActiveCompletion = this._jumpedToId.map(
 				(jumpedTo) =>
 					!!jumpedTo &&
 					jumpedTo ===
-						this._inlineCompletionItems.read(undefined)?.inlineEdit?.semanticId
+					this._inlineCompletionItems.read(undefined)?.inlineEdit?.semanticId
 			);
 
 			const providers = changeSummary.provider
 				? {
-						providers: [changeSummary.provider],
-						label: "single:" + changeSummary.provider.providerId?.toString(),
-				  }
+					providers: [changeSummary.provider],
+					label: "single:" + changeSummary.provider.providerId?.toString(),
+				}
 				: {
-						providers:
-							this._languageFeaturesService.inlineCompletionsProvider.all(
-								this.textModel
-							),
-						label: undefined,
-				  }; // TODO: should use inlineCompletionProviders
+					providers:
+						this._languageFeaturesService.inlineCompletionsProvider.all(
+							this.textModel
+						),
+					label: undefined,
+				}; // TODO: should use inlineCompletionProviders
 			const availableProviders = this.getAvailableProviders(
 				providers.providers
 			);
@@ -826,8 +835,8 @@ export class InlineCompletionsModel extends Disposable {
 				this._selectedInlineCompletionId === undefined
 					? -1
 					: filteredCompletions.findIndex(
-							(v) => v.semanticId === selectedInlineCompletionId
-					  );
+						(v) => v.semanticId === selectedInlineCompletionId
+					);
 			if (idx === -1) {
 				// Reset the selection so that the selection does not jump back when it appears again
 				this._selectedInlineCompletionId.set(undefined, undefined);
@@ -896,21 +905,21 @@ export class InlineCompletionsModel extends Disposable {
 
 	public readonly state = derivedOpts<
 		| {
-				kind: "ghostText";
-				edits: readonly TextReplacement[];
-				primaryGhostText: GhostTextOrReplacement;
-				ghostTexts: readonly GhostTextOrReplacement[];
-				suggestItem: SuggestItemInfo | undefined;
-				inlineCompletion: InlineCompletionItem | undefined;
-		  }
+			kind: "ghostText";
+			edits: readonly TextReplacement[];
+			primaryGhostText: GhostTextOrReplacement;
+			ghostTexts: readonly GhostTextOrReplacement[];
+			suggestItem: SuggestItemInfo | undefined;
+			inlineCompletion: InlineCompletionItem | undefined;
+		}
 		| {
-				kind: "inlineEdit";
-				edits: readonly TextReplacement[];
-				inlineEdit: InlineEdit;
-				inlineCompletion: InlineEditItem;
-				cursorAtInlineEdit: IObservable<boolean>;
-				nextEditUri: URI | undefined;
-		  }
+			kind: "inlineEdit";
+			edits: readonly TextReplacement[];
+			inlineEdit: InlineEdit;
+			inlineCompletion: InlineEditItem;
+			cursorAtInlineEdit: IObservable<boolean>;
+			nextEditUri: URI | undefined;
+		}
 		| undefined
 	>(
 		{
@@ -967,13 +976,13 @@ export class InlineCompletionsModel extends Disposable {
 				const edits = inlineEditResult.updatedEdit;
 				const e = edits
 					? TextEdit.fromStringEdit(edits, new TextModelText(this.textModel))
-							.replacements
+						.replacements
 					: [edit];
 				const nextEditUri =
 					(item.inlineEdit?.command?.id === "vscode.open" ||
 						item.inlineEdit?.command?.id === "_workbench.open") &&
-					// eslint-disable-next-line local/code-no-any-casts
-					item.inlineEdit?.command.arguments?.length
+						// eslint-disable-next-line local/code-no-any-casts
+						item.inlineEdit?.command.arguments?.length
 						? URI.from(<any>item.inlineEdit?.command.arguments[0])
 						: undefined;
 				return {
@@ -1019,12 +1028,12 @@ export class InlineCompletionsModel extends Disposable {
 						edit,
 						ghostText: edit
 							? computeGhostText(
-									edit,
-									model,
-									mode,
-									positions[idx],
-									fullEditPreviewLength
-							  )
+								edit,
+								model,
+								mode,
+								positions[idx],
+								fullEditPreviewLength
+							)
 							: undefined,
 					}))
 					.filter(
@@ -1173,8 +1182,8 @@ export class InlineCompletionsModel extends Disposable {
 			this._source.suggestWidgetInlineCompletions.read(reader);
 		const candidateInlineCompletions = suggestWidgetInlineCompletions
 			? suggestWidgetInlineCompletions.inlineCompletions.filter(
-					(c) => !c.isInlineEdit
-			  )
+				(c) => !c.isInlineEdit
+			)
 			: [this.selectedInlineCompletion.read(reader)].filter(isDefined);
 
 		const augmentedCompletion = mapFindFirst(

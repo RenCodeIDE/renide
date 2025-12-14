@@ -30,6 +30,7 @@ export const GetDocsToolData: IToolData = {
 	displayName: localize('getDocsTool.displayName', 'Get Documentation'),
 	modelDescription: localize('getDocsTool.modelDescription', 'Retrieves generated documentation for a code file. The documentation is automatically generated from the file\'s code and provides explanations of functions, classes, and other symbols. Supports both full paths/URIs and filenames. When given a filename, searches recursively across the entire workspace with fuzzy matching. If multiple matches are found, returns a list for you to choose from.'),
 	source: ToolDataSource.Internal,
+	category: 'documentation',
 	canBeReferencedInPrompt: true,
 	inputSchema: {
 		type: 'object',

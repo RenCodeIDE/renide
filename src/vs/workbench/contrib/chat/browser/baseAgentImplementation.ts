@@ -30,6 +30,7 @@ import {
 	CountTokensCallback,
 	IToolInvocation,
 	IToolResultTextPart,
+	ISmartToolContext,
 } from "../common/languageModelToolsService.js";
 import { IRequestService } from "../../../../platform/request/common/request.js";
 import { ISecretStorageService } from "../../../../platform/secrets/common/secrets.js";
@@ -56,6 +57,7 @@ import {
 	AuthenticationHelper,
 	ChatConfigurationService,
 } from "../common/chatUtilities.js";
+import { IToolContextResolverService } from "./toolContextResolverService.js";
 
 export interface IBaseAgentConfig {
 	vendorId: string; // e.g. "deepseek", "claude", "gemini"
@@ -85,7 +87,8 @@ export abstract class BaseAgentImplementation implements IChatAgentImplementatio
 		protected readonly chatAgentService: IChatAgentService,
 		protected readonly configurationService: IConfigurationService,
 		languageFeaturesService?: ILanguageFeaturesService,
-		protected readonly metricsService?: IMetricsService
+		protected readonly metricsService?: IMetricsService,
+		protected readonly toolContextResolverService?: IToolContextResolverService
 	) {
 		this.contextBuilder = new ContextBuilder(
 			textModelService,
@@ -120,6 +123,8 @@ export abstract class BaseAgentImplementation implements IChatAgentImplementatio
 		const defaultModel = models.find((m) => m.isDefault);
 		return defaultModel?.id || this.config.defaultModelId || models[0]?.id;
 	}
+
+
 
 	async invoke(
 		request: IChatAgentRequest,
@@ -227,6 +232,23 @@ export abstract class BaseAgentImplementation implements IChatAgentImplementatio
 			summaries,
 		} = this.buildToolDeclarations(request.requestId, validateChatMode(request.chatMode) || ChatModeKind.Agent);
 
+		// Check if a different model might be better for this task
+		const toolIds = Array.from(nameToToolId.values());
+		const modelRecommendation = this.getModelRecommendation(
+			request.message,
+			request.userSelectedModelId,
+			toolIds
+		);
+
+		// Show recommendation as a helpful note (only for high confidence suggestions)
+		if (modelRecommendation && modelRecommendation.confidence >= 0.7) {
+			const suggestionMarkdown = new MarkdownString(
+				`💡 *Tip: ${modelRecommendation.model} might work better for this task* — ${modelRecommendation.reason}\n\n`
+			);
+			suggestionMarkdown.isTrusted = true;
+			progress([{ kind: "markdownContent", content: suggestionMarkdown }]);
+		}
+
 		// Inject Plan mode instructions
 		if (request.chatMode === ChatModeKind.Plan) {
 			const instructions = ChatMode.Plan.modeInstructions?.get();
@@ -246,14 +268,14 @@ export abstract class BaseAgentImplementation implements IChatAgentImplementatio
 		}
 
 		if (summaries.length) {
+			// Build an enhanced system prompt that encourages proactive tool usage
+			const agenticPrompt = this.buildAgenticSystemPrompt(summaries, validateChatMode(request.chatMode));
 			messages.push({
 				role: ChatMessageRole.System,
 				content: [
 					{
 						type: "text",
-						value: `You can call the following tools by name when they would help:
-${summaries.map((summary) => `- ${summary}`).join("\n")}
-Only call a tool if it is necessary; otherwise respond normally.`,
+						value: agenticPrompt,
 					},
 				],
 			});
@@ -461,11 +483,53 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 					const responseText =
 						textParts
 							.map((part: { text?: string }) => part.text || "")
-							.join("") ||
-						localize(
+							.join("");
+
+					// If response is empty after gathering tool results, request a summary
+					if (!responseText.trim() && iteration > 0 && pendingToolResults) {
+						this.logService.warn(
+							`${this.config.logPrefix} Model returned empty text after ${iteration} tool iterations - adding fallback prompt`
+						);
+
+						// Add a user message asking for summary
+						messages.push({
+							role: ChatMessageRole.User,
+							content: [{
+								type: "text",
+								value: "You've gathered information using the tools. Please provide a clear, helpful summary or answer based on what you found. If you encountered issues or found nothing relevant, explain that clearly."
+							}],
+						});
+
+						// Continue the loop - this will trigger another API call with the fallback prompt
+						iteration++;
+						continue;
+					}
+
+					if (!responseText.trim()) {
+						// After fallback prompt still got nothing - show default message
+						const fallbackText = localize(
 							`${this.config.vendorId}.emptyTextResponse`,
 							`${this.config.vendorId} did not return any text.`
 						);
+
+						await this.contextBuilder.tryAutoApplyEdits(
+							fallbackText,
+							contextEntries,
+							progress,
+							token
+						);
+
+						if (!streamedText) {
+							const markdown = new MarkdownString(fallbackText);
+							markdown.supportThemeIcons = true;
+							progress([{ kind: "markdownContent", content: markdown }]);
+						}
+
+						return {
+							details: `${this.config.vendorId}-response`,
+							metadata: { model: modelToUse },
+						};
+					}
 
 					await this.contextBuilder.tryAutoApplyEdits(
 						responseText,
@@ -630,12 +694,16 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 						this.logService.error(
 							`${this.config.logPrefix} tool ${toolId} (callId: ${callId}) failed after ${taskTime}ms: ${message}`
 						);
+
+						// Generate recovery guidance based on the error and tool
+						const recoveryGuidance = this.getToolRecoveryGuidance(toolId, toolName, message);
+
 						resultsBuffer[index] = {
 							toolCallId: callId,
 							content: [
 								{
 									type: "text" as const,
-									value: message || "Tool execution failed",
+									value: `Tool Error: ${message}\n\n${recoveryGuidance}`,
 								},
 							],
 						};
@@ -1009,10 +1077,60 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		parameters: Record<string, unknown>,
 		request: IChatAgentRequest
 	): IToolInvocation {
+		// Get tool data to check for resolveDefaults
+		const toolData = this.languageModelToolsService.getTool(toolId);
+
+		// Merge smart defaults if available
+		let mergedParameters = parameters;
+		if (toolData?.resolveDefaults && this.toolContextResolverService) {
+			try {
+				// Build smart context
+				const ctx = this.toolContextResolverService.getContext();
+				const smartContext: ISmartToolContext = {
+					activeFile: ctx.activeFile,
+					activeFileLanguage: ctx.activeFileLanguage,
+					cursorPosition: ctx.cursorPosition,
+					selectionText: ctx.selection?.text,
+					selectionRange: ctx.selection?.range ? {
+						startLine: ctx.selection.range.startLineNumber,
+						endLine: ctx.selection.range.endLineNumber,
+						startColumn: ctx.selection.range.startColumn,
+						endColumn: ctx.selection.range.endColumn,
+					} : undefined,
+					visibleRange: ctx.visibleRange ? {
+						startLine: ctx.visibleRange.startLineNumber,
+						endLine: ctx.visibleRange.endLineNumber,
+					} : undefined,
+					fileWithMostErrors: this.toolContextResolverService.getFileWithMostErrors(),
+					workspaceRoot: ctx.workspaceRoot,
+				};
+
+				// Get smart defaults
+				const defaults = toolData.resolveDefaults(smartContext);
+
+				// Merge: explicit model-provided parameters override defaults
+				mergedParameters = { ...defaults, ...parameters };
+
+				// Log what we auto-filled for debugging
+				const autoFilledKeys = Object.keys(defaults).filter(k => !(k in parameters));
+				if (autoFilledKeys.length > 0) {
+					this.logService.debug(
+						`${this.config.logPrefix} [SmartDefaults] Tool ${toolId}: auto-filled ${autoFilledKeys.join(', ')}`
+					);
+				}
+			} catch (error) {
+				// Don't fail tool invocation if smart defaults fail
+				this.logService.warn(
+					`${this.config.logPrefix} [SmartDefaults] Error resolving defaults for ${toolId}:`,
+					error
+				);
+			}
+		}
+
 		return {
 			callId,
 			toolId,
-			parameters,
+			parameters: mergedParameters,
 			context: { sessionId: request.sessionId },
 			chatRequestId: request.requestId,
 		};
@@ -1112,7 +1230,18 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 					`${this.config.logPrefix} Streaming request failed: ${error instanceof Error ? error.message : String(error)}`
 				);
 			}
+```typescript
 		);
+
+
+		// Track the request
+		if (this.metricsService) {
+			this.logService.info(`[${ this.config.vendorId }]Tracking chat request feature usage`);
+			this.metricsService.trackFeatureUsed(`${ this.config.vendorId }.chatRequest`);
+		} else {
+			this.logService.warn(`[${ this.config.vendorId }]Metrics service not available for tracking`);
+		}
+
 		return response;
 	}
 
@@ -1188,6 +1317,304 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 
 		return { messages, contextEntries };
 	}
+
+	/**
+	 * Builds an enhanced system prompt that encourages proactive tool usage
+	 * and provides behavioral guidelines for agentic behavior.
+	 */
+	protected buildAgenticSystemPrompt(toolSummaries: string[], chatMode?: ChatModeKind): string {
+		const toolsList = toolSummaries.map((summary) => `- ${ summary }`).join("\n");
+
+		// Core agentic behavior instructions
+		const coreInstructions = `# Your Role
+You are an expert AI coding assistant integrated into an IDE.You help developers by actively using your tools to understand, search, and modify code.
+
+# Core Behaviors
+		1. ** Be Proactive **: Don't just answer questions - use tools to gather information and take action. When a user mentions a bug, search for it. When they mention a file, read it.
+		2. ** Use Tools Liberally **: Your tools are powerful.Use them whenever they can help - don't ask permission or describe what you could do; just do it.
+		3. ** Chain Tools Together **: Combine multiple tools to accomplish complex tasks.Read before editing.Check linter after changes.Search before creating.
+4. ** Think Step - by - Step **: Break down complex requests into clear actions and execute them systematically.
+5. ** Verify Your Work **: After making changes, use checkLinter or re - read files to verify correctness.
+
+# Tool Usage Guidelines
+			- ** Search Before Edit **: Always read / search files before modifying them to understand context
+				- ** Verify After Edit **: Check for linting errors after code changes
+					- ** Progressive Disclosure **: Start with broad searches, then narrow down to specifics
+						- ** Parallel When Possible **: Make multiple independent tool calls simultaneously
+
+# Available Tools
+${ toolsList }
+
+# Examples of GOOD Agentic Behavior
+
+			** User says **: "There's a bug in the login"
+				** Good response **: * immediately searches for login - related files * → * reads relevant code * → * identifies potential issues * → * proposes or implements fix * → * checks linter *
+** Bad response **: "Could you tell me more about the bug?" or "Which file is the login code in?"
+
+			** User says **: "Add input validation to the form"
+				** Good response **: * searches for form files * → * reads current implementation * → * identifies inputs needing validation * → * implements validation * → * verifies with linter *
+** Bad response **: Describes how validation could be added without actually doing it
+
+			** User says **: "What does this function do?"
+				** Good response **: * reads the file containing the function* → * traces related code if needed * → * explains with specific references *
+** Bad response **: Asks which function or gives a generic explanation`;
+
+		// Mode-specific additions
+		let modeInstructions = "";
+		if (chatMode === ChatModeKind.Ask) {
+			modeInstructions = `
+
+# Ask Mode Guidelines
+You are in ASK mode - focus on answering questions and explaining code.Use read - only tools(read files, search, analyze) liberally to provide accurate, grounded answers.Avoid modifying files unless explicitly requested.`;
+		} else if (chatMode === ChatModeKind.Agent) {
+			modeInstructions = `
+
+# Agent Mode Guidelines
+You are in AGENT mode - take full ownership of tasks.Execute multi - step workflows, make changes, verify results.Proactively complete subtasks without asking for confirmation on each step.Report results when done.`;
+		} else if (chatMode === ChatModeKind.Edit) {
+			modeInstructions = `
+
+# Edit Mode Guidelines
+You are in EDIT mode - focus on making targeted edits.Read relevant context first, then make precise changes.Always verify edits with the linter.`;
+		}
+
+		return coreInstructions + modeInstructions;
+	}
+
+	/**
+	 * Generates recovery guidance based on the tool that failed and the error message.
+	 * This helps the model understand how to recover from tool failures.
+	 */
+	protected getToolRecoveryGuidance(toolId: string, toolName: string, errorMessage: string): string {
+		const lowerError = errorMessage.toLowerCase();
+		const lowerToolId = toolId.toLowerCase();
+
+		// File not found errors
+		if (lowerError.includes("not found") || lowerError.includes("no such file") || lowerError.includes("enoent")) {
+			if (lowerToolId.includes("read") || lowerToolId.includes("file")) {
+				return `RECOVERY OPTIONS:
+		1. Use searchFiles to find the correct file path(handles typos - e.g., "authetication" will find "authentication")
+		2. Use searchCodebase with a conceptual query to find related code
+		3. TERMINAL FALLBACK: Run these commands to explore:
+		- runTerminal("ls -la {parent_directory}") to see what files exist
+			- runTerminal("find . -name '*partial_name*' -type f") to search
+				- runTerminal("tree -L 2") to see folder structure
+		4. The file may have been moved - try a broader search`;
+			}
+			if (lowerToolId.includes("edit") || lowerToolId.includes("delete")) {
+				return `RECOVERY OPTIONS:
+		1. First use readFile to verify the file path exists
+		2. Use searchFiles to find the correct path
+		3. TERMINAL: runTerminal("ls -la {directory}") to see what's there
+		4. The file may not exist yet - consider using createFile instead`;
+			}
+		}
+
+		// Permission/access errors
+		if (lowerError.includes("permission") || lowerError.includes("access denied") || lowerError.includes("eperm")) {
+			return `RECOVERY OPTIONS:
+		1. The file may be read - only or locked by another process
+		2. TERMINAL: runTerminal("ls -la {file}") to check permissions
+		3. Try a different file or ask the user to close the file if it's open elsewhere
+		4. Check if you're trying to modify a system or protected file`;
+	}
+
+	// Timeout errors
+	if(lowerError.includes("timeout") || lowerError.includes("timed out")) {
+	return `RECOVERY OPTIONS:
+1. The operation took too long - try with a smaller scope
+2. For searches: use more specific patterns to reduce results
+3. For file operations: the file might be very large - try limiting lines read
+4. Retry the operation - it may have been a temporary issue`;
+}
+
+// Search/query errors
+if (lowerToolId.includes("search")) {
+	if (lowerError.includes("no results") || lowerError.includes("not found")) {
+		return `RECOVERY OPTIONS:
+1. BROADEN SEARCH: Try a shorter pattern or fewer keywords
+2. Use searchCodebase for semantic/meaning-based search
+3. TERMINAL FALLBACK (ultimate backup):
+   - runTerminal("grep -r 'pattern' . --include='*.ts'") for content search
+   - runTerminal("find . -name '*partial*' -type f") for file search
+   - runTerminal("tree -L 2") to see codebase structure
+4. Check for typos in the search query`;
+	}
+	return `RECOVERY OPTIONS:
+1. Try a simpler search pattern
+2. Check if the search pattern is valid regex (if useRegex is true)
+3. TERMINAL: runTerminal("ls -la {folder}") to see contents
+4. Try limiting the search scope to a specific folder`;
+}
+
+// Edit tool errors
+if (lowerToolId.includes("edit")) {
+	if (lowerError.includes("no match") || lowerError.includes("cannot find")) {
+		return `RECOVERY OPTIONS:
+1. First use readFile to see the current file contents
+2. The file may have changed - re-read it before editing
+3. Check that your edit target matches the actual file content exactly`;
+	}
+	return `RECOVERY OPTIONS:
+1. Read the file first to understand current state
+2. Verify the file path is correct
+3. Check for linter errors with checkLinter after any successful edits`;
+}
+
+// Linter tool errors
+if (lowerToolId.includes("linter") || lowerToolId.includes("lint")) {
+	return `RECOVERY OPTIONS:
+1. The file path may be incorrect - try without specifying a path to see all workspace errors
+2. The linter service may not be initialized yet - try again
+3. The file type may not have linting support`;
+}
+
+// Generic recovery guidance
+return `RECOVERY OPTIONS:
+1. Try the operation again - the error may be transient
+2. Use a different approach to accomplish the same goal
+3. Break down the task into smaller steps
+4. Read related files first to understand context`;
+	}
+
+	/**
+	 * Analyzes the user's request and returns a model recommendation if a different model
+	 * might be better suited for the task.
+	 */
+	protected getModelRecommendation(
+	message: string,
+	currentModelId ?: string,
+	toolIds ?: string[]
+): { model: string; reason: string; confidence: number } | undefined {
+	const lowerMessage = message.toLowerCase();
+	const messageLength = message.length;
+
+	// Don't recommend if message is too short to analyze
+	if (messageLength < 20) {
+		return undefined;
+	}
+
+	// Normalize current model for comparison
+	const currentModel = currentModelId?.toLowerCase() || '';
+
+	// === Long Context Analysis Tasks ===
+	// Claude excels at long context and detailed analysis
+	const longContextIndicators = [
+		'analyze this entire',
+		'review all the',
+		'summarize this large',
+		'read through all',
+		'analyze the whole',
+		'understand the entire',
+		'explain everything in',
+		'full codebase',
+		'entire project',
+		'all files in'
+	];
+
+	if (longContextIndicators.some(i => lowerMessage.includes(i)) || messageLength > 5000) {
+		if (!currentModel.includes('claude') && !currentModel.includes('sonnet') && !currentModel.includes('opus')) {
+			return {
+				model: 'Claude',
+				reason: 'Claude has excellent long context handling for analyzing large codebases or files',
+				confidence: 0.75
+			};
+		}
+	}
+
+	// === Complex Multi-Step Planning ===
+	// GPT-4o and o1 are good for complex planning
+	const planningIndicators = [
+		'create a plan',
+		'design a system',
+		'architect',
+		'step by step plan',
+		'implementation strategy',
+		'road map',
+		'break down this complex',
+		'design pattern',
+		'how should i structure'
+	];
+
+	if (planningIndicators.some(i => lowerMessage.includes(i))) {
+		if (!currentModel.includes('gpt-4') && !currentModel.includes('o1')) {
+			return {
+				model: 'GPT-4o',
+				reason: 'GPT-4o excels at complex multi-step planning and system design',
+				confidence: 0.7
+			};
+		}
+	}
+
+	// === Deep Reasoning / Math / Logic ===
+	// DeepSeek reasoner is excellent for complex reasoning
+	const reasoningIndicators = [
+		'prove that',
+		'derive the',
+		'mathematical',
+		'algorithm complexity',
+		'optimize this algorithm',
+		'logical reasoning',
+		'step by step thinking',
+		'prove or disprove',
+		'formal verification'
+	];
+
+	if (reasoningIndicators.some(i => lowerMessage.includes(i))) {
+		if (!currentModel.includes('deepseek') && !currentModel.includes('reasoner')) {
+			return {
+				model: 'DeepSeek Reasoner',
+				reason: 'DeepSeek Reasoner excels at complex mathematical and logical reasoning',
+				confidence: 0.7
+			};
+		}
+	}
+
+	// === Code Generation with Context ===
+	// DeepSeek-coder is excellent for pure code generation
+	const codeGenIndicators = [
+		'write the complete',
+		'generate the full',
+		'implement from scratch',
+		'create a new',
+		'build a complete',
+		'code for'
+	];
+
+	const hasHeavyToolUse = toolIds && toolIds.length > 3;
+	if (codeGenIndicators.some(i => lowerMessage.includes(i)) && !hasHeavyToolUse) {
+		if (!currentModel.includes('deepseek') && !currentModel.includes('coder')) {
+			return {
+				model: 'DeepSeek Coder',
+				reason: 'DeepSeek Coder is optimized for code generation tasks',
+				confidence: 0.65
+			};
+		}
+	}
+
+	// === Quick Simple Tasks ===
+	// For simple tasks, smaller/faster models are better
+	const simpleTaskIndicators = [
+		'what is',
+		'how do i',
+		'quick question',
+		'simple',
+		'just tell me',
+		'briefly explain'
+	];
+
+	if (simpleTaskIndicators.some(i => lowerMessage.includes(i)) && messageLength < 200) {
+		if (currentModel.includes('opus') || currentModel.includes('o1')) {
+			return {
+				model: 'GPT-4o-mini',
+				reason: 'A faster model would work well for this simple task',
+				confidence: 0.6
+			};
+		}
+	}
+
+	return undefined;
+}
 }
 
 function propIsObject(val: any): val is Record<string, any> {

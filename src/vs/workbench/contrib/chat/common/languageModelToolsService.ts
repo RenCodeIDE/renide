@@ -27,6 +27,18 @@ import { ChatRequestToolReferenceEntry } from './chatVariableEntries.js';
 import { LanguageModelPartAudience } from './languageModels.js';
 import { PromptElementJSON, stringifyPromptElementJSON } from './tools/promptTsxTypes.js';
 
+/**
+ * Tool categories for organization and discovery
+ */
+export type ToolCategory =
+	| 'file_operations'   // read, create, edit, delete files
+	| 'search'            // searchFiles, searchCodebase
+	| 'code_analysis'     // linter, diagnostics, symbols
+	| 'dev_tools'         // terminal, git, build
+	| 'planning'          // plan management, todo lists
+	| 'documentation'     // fetch docs, get help
+	| 'other';            // uncategorized
+
 export interface IToolData {
 	id: string;
 	source: ToolDataSource;
@@ -34,6 +46,11 @@ export interface IToolData {
 	icon?: { dark: URI; light?: URI } | ThemeIcon;
 	when?: ContextKeyExpression;
 	tags?: string[];
+	/**
+	 * Category for tool organization and discovery.
+	 * Helps users and the agent understand tool capabilities.
+	 */
+	category?: ToolCategory;
 	displayName: string;
 	userDescription?: string;
 	modelDescription: string;
@@ -62,7 +79,29 @@ export interface IToolData {
 		 */
 		prerequisites?: readonly string[];
 	};
+	/**
+	 * Function to resolve smart defaults for tool parameters based on IDE context.
+	 * Called before tool invocation to pre-populate optional parameters.
+	 * Explicit model-provided parameters will override these defaults.
+	 */
+	resolveDefaults?: (context: ISmartToolContext) => Partial<Record<string, unknown>>;
 }
+
+/**
+ * Context passed to resolveDefaults for smart parameter inference
+ */
+export interface ISmartToolContext {
+	activeFile?: URI;
+	activeFileLanguage?: string;
+	cursorPosition?: { line: number; column: number };
+	selectionText?: string;
+	selectionRange?: { startLine: number; endLine: number; startColumn: number; endColumn: number };
+	visibleRange?: { startLine: number; endLine: number };
+	fileWithMostErrors?: URI;
+	workspaceRoot?: URI;
+}
+
+
 
 export interface IToolProgressStep {
 	readonly message: string | IMarkdownString | undefined;

@@ -11,8 +11,24 @@ export const SearchFilesToolData: IToolData = {
 	id: 'search_files',
 	toolReferenceName: 'searchFiles',
 	displayName: localize('searchFilesTool.displayName', 'Search Files'),
-	modelDescription: localize('searchFilesTool.modelDescription', 'Searches for text patterns in files using ripgrep. Use this to find occurrences of text, code patterns, or regular expressions across the workspace. The includePattern parameter supports fuzzy matching for filenames (e.g., "config" will match "config.json", "config.yaml", etc.).'),
+	modelDescription: localize('searchFilesTool.modelDescription',
+		`Searches for text patterns across files using ripgrep.
+
+USE THIS WHEN:
+- Looking for specific code patterns, function calls, or variable names
+- Finding where something is defined or used
+- Exploring unfamiliar codebase
+- User asks about occurrences of text
+
+PREFER OVER readFile WHEN: You need to find WHERE code exists, not just read a known file.
+PREFER searchCodebase WHEN: You want conceptual/semantic search (e.g., "authentication logic").
+
+EXAMPLES:
+- "Find all uses of getUserData" → search for "getUserData"
+- "Where is the API defined" → search for "api" or specific endpoint names
+- "Find the login handler" → search for "login" with includePattern:"*.ts"`),
 	source: ToolDataSource.Internal,
+	category: 'search',
 	canBeReferencedInPrompt: true,
 	inputSchema: {
 		type: 'object',
@@ -47,6 +63,19 @@ export const SearchFilesToolData: IToolData = {
 			}
 		},
 		required: ['pattern']
+	},
+	// Smart default: use selection text as search pattern if available
+	resolveDefaults: (ctx) => {
+		const defaults: Partial<Record<string, unknown>> = {};
+		// If user has text selected, search for that
+		if (ctx.selectionText && ctx.selectionText.trim().length > 0 && ctx.selectionText.length < 100) {
+			defaults.pattern = ctx.selectionText.trim();
+		}
+		// Default folder to workspace root
+		if (ctx.workspaceRoot) {
+			defaults.folder = ctx.workspaceRoot.fsPath;
+		}
+		return defaults;
 	}
 };
 
@@ -90,9 +119,17 @@ export class SearchFilesTool implements IToolImpl {
 			return {
 				content: [{
 					kind: 'text',
-					value: localize('searchFilesTool.invalidPattern', 'Invalid or missing "pattern" argument. It must be a non-empty string.')
+					value: localize('searchFilesTool.invalidPattern',
+						`Invalid or missing "pattern" argument. The pattern parameter is REQUIRED and must be a non-empty string.
+
+RECOVERY: You must provide a pattern to search for. Examples:
+- searchFiles({ pattern: "function name" })
+- searchFiles({ pattern: "*.tsx", includePattern: "*.tsx" })
+- If looking for a FILE, use the filename as the pattern
+
+ALTERNATIVE: If you cannot determine what to search for, ask the user what text or code they want to find.`)
 				}],
-				toolResultMessage: localize('searchFilesTool.invalidPattern', 'Invalid or missing "pattern" argument.')
+				toolResultMessage: localize('searchFilesTool.invalidPatternShort', 'Missing required "pattern" argument. Please provide a search pattern.')
 			};
 		}
 

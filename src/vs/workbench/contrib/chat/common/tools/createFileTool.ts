@@ -23,6 +23,7 @@ export const CreateFileToolData: IToolData = {
 	displayName: localize('createFileTool.displayName', 'Create File'),
 	modelDescription: localize('createFileTool.modelDescription', 'Creates a new file with the specified content. The uri parameter can be a full path/URI or just a filename. If just a filename is provided, use the directory parameter to specify where to create it, otherwise it defaults to the workspace root.'),
 	source: ToolDataSource.Internal,
+	category: 'file_operations',
 	canBeReferencedInPrompt: true,
 	inputSchema: {
 		type: 'object',

@@ -168,6 +168,8 @@ export class MetricsService extends Disposable implements IMetricsService {
 			if (!response.ok) {
 				const errorText = await response.text();
 				this.logService.warn(`[MetricsService] Request to ${endpoint} failed: ${response.status} - ${errorText}`);
+			} else {
+				this.logService.info(`[MetricsService] Request to ${endpoint} succeeded: ${response.status}`);
 			}
 		} catch (error) {
 			this.logService.warn(`[MetricsService] Failed to send metrics to ${endpoint}:`, error);

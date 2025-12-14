@@ -40,6 +40,7 @@ export const EditToolData: IToolData = {
 	modelDescription:
 		'REQUIRED: Always provide clear, descriptive changelog information. Subject: REQUIRED, 4-10 words, action-oriented (e.g., "Add user authentication module", "Fix memory leak in data processing", "Refactor database connection handling"). Description: REQUIRED, 2-5 sentences explaining what changed and why. UNACCEPTABLE subjects: "Update file", "Make changes", "Fix code", "Edit file" - these are too vague. GOOD examples: "Add error handling for network requests", "Fix race condition in async operations", "Refactor authentication to use JWT tokens". Use the explanation parameter for full context, and provide a clear subject and description for high-quality changelog entries.',
 	source: ToolDataSource.Internal,
+	category: 'file_operations',
 	canBeReferencedInPrompt: true,
 	inputSchema: {
 		type: "object",
@@ -108,6 +109,15 @@ export const EditToolData: IToolData = {
 		},
 		required: ["explanation", "code"],
 	},
+	// Smart default: use active file if user doesn't specify
+	resolveDefaults: (ctx) => {
+		const defaults: Partial<Record<string, unknown>> = {};
+		if (ctx.activeFile) {
+			defaults.path = ctx.activeFile.fsPath;
+			defaults.uri = { scheme: ctx.activeFile.scheme, path: ctx.activeFile.path };
+		}
+		return defaults;
+	},
 	// IMPORTANT: This is the PREFERRED method for making file edits. Agents should:
 	// - Use EditTool for all file modifications (rather than streaming textEdit progress)
 	// - Always provide the 'explanation' parameter with a full description of the change
@@ -147,7 +157,7 @@ export class EditTool implements IToolImpl {
 		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
 		@ISearchService private readonly searchService: ISearchService,
 		@IConfigurationService private readonly configurationService: IConfigurationService
-	) {}
+	) { }
 
 	async invoke(
 		invocation: IToolInvocation,
@@ -455,10 +465,10 @@ export class EditTool implements IToolImpl {
 			// The response model will automatically create/edit groups when we send edits
 			// Note: contextFiles are available in parameters but not yet used by code mapper
 			// They can be used for future enhancements like cross-file awareness
-			
+
 			let editKind: "textEdit" | "notebookEdit" | undefined;
 			let editsWereSent = false;
-			
+
 			const result = await this.codeMapperService.mapCode(
 				{
 					codeBlocks: [
@@ -481,12 +491,12 @@ export class EditTool implements IToolImpl {
 							editKind = "textEdit";
 							editsWereSent = true;
 							// Response model will automatically create/edit group and merge edits
-						model.acceptResponseProgress(request, {
-							kind: "textEdit",
-							uri: target,
-							edits,
+							model.acceptResponseProgress(request, {
+								kind: "textEdit",
+								uri: target,
+								edits,
 								done: false,
-						});
+							});
 						}
 					},
 					notebookEdit(target, edits) {
@@ -494,12 +504,12 @@ export class EditTool implements IToolImpl {
 							editKind = "notebookEdit";
 							editsWereSent = true;
 							// Response model will automatically create/edit group and merge edits
-						model.acceptResponseProgress(request, {
-							kind: "notebookEdit",
-							uri: target,
-							edits,
+							model.acceptResponseProgress(request, {
+								kind: "notebookEdit",
+								uri: target,
+								edits,
 								done: false,
-						});
+							});
 						}
 					},
 				},
@@ -575,14 +585,14 @@ export class EditTool implements IToolImpl {
 
 			// Get workspace root for resolving relative paths
 			const workspace = this.workspaceService.getWorkspace();
-			
+
 			// Check if it's an absolute path
 			// On Windows: C:\ or / (root)
 			// On Unix: / (root)
-			const isAbsolutePath = 
-				uriString.startsWith("/") || 
+			const isAbsolutePath =
+				uriString.startsWith("/") ||
 				(isWindows && /^[A-Za-z]:/.test(uriString));
-			
+
 			if (isAbsolutePath) {
 				// Absolute path - use as-is
 				return URI.file(uriString);
