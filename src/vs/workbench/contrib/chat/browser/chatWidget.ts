@@ -138,6 +138,7 @@ import {
 } from "../common/chatParserTypes.js";
 import { ChatRequestParser } from "../common/chatRequestParser.js";
 import {
+	IChatDetail,
 	IChatLocationData,
 	IChatSendRequestOptions,
 	IChatService,
@@ -291,6 +292,8 @@ interface IChatHistoryListItem {
 	readonly title: string;
 	readonly lastMessageDate: number;
 	readonly isActive: boolean;
+	readonly hasPendingRequest: boolean; // NEW
+	readonly category?: "running" | "recent" | "old"; // NEW: for section grouping
 }
 
 type ChatHandoffClickEvent = {
@@ -1880,13 +1883,59 @@ export class ChatWidget extends Disposable implements IChatWidget {
 		}
 	}
 
+	private isToday(timestamp: number): boolean {
+		const date = new Date(timestamp);
+		const today = new Date();
+		return (
+			date.getDate() === today.getDate() &&
+			date.getMonth() === today.getMonth() &&
+			date.getFullYear() === today.getFullYear()
+		);
+	}
+
 	private async computeHistoryItems(): Promise<IChatHistoryListItem[]> {
 		try {
 			const items = await this.chatService.getHistory();
-			return items
+
+			// Categorize items
+			const running: IChatDetail[] = [];
+			const recent: IChatDetail[] = [];
+			const old: IChatDetail[] = [];
+
+			for (const item of items) {
+				if (item.hasPendingRequest) {
+					running.push(item);
+				} else if (this.isToday(item.lastMessageDate ?? 0)) {
+					recent.push(item);
+				} else {
+					old.push(item);
+				}
+			}
+
+			// Sort each category and take top items
+			running.sort(
+				(a, b) => (b.lastMessageDate ?? 0) - (a.lastMessageDate ?? 0)
+			);
+			recent.sort(
+				(a, b) => (b.lastMessageDate ?? 0) - (a.lastMessageDate ?? 0)
+			);
+			old.sort((a, b) => (b.lastMessageDate ?? 0) - (a.lastMessageDate ?? 0));
+
+			// Combine: running first, then recent, then old (limit total to ~10-12 items)
+			const allItems = [
+				...running
+					.slice(0, 3)
+					.map((item) => ({ ...item, category: "running" as const })),
+				...recent
+					.slice(0, 5)
+					.map((item) => ({ ...item, category: "recent" as const })),
+				...old
+					.slice(0, 4)
+					.map((item) => ({ ...item, category: "old" as const })),
+			];
+
+			return allItems
 				.filter((i) => !i.isActive)
-				.sort((a, b) => (b.lastMessageDate ?? 0) - (a.lastMessageDate ?? 0))
-				.slice(0, 3)
 				.map((item) => ({
 					sessionId: item.sessionId,
 					title: item.title,
@@ -1895,6 +1944,8 @@ export class ChatWidget extends Disposable implements IChatWidget {
 							? item.lastMessageDate
 							: Date.now(),
 					isActive: item.isActive,
+					hasPendingRequest: item.hasPendingRequest,
+					category: item.category,
 				}));
 		} catch (err) {
 			this.logService.error("Failed to compute chat history items", err);
@@ -1911,22 +1962,43 @@ export class ChatWidget extends Disposable implements IChatWidget {
 			return;
 		}
 
+		// Store references in local variables so TypeScript knows they're defined
+		const historyListContainer = this.historyListContainer;
+		const historyItemDisposables = this.historyItemDisposables;
+
 		// Clear existing items
-		dom.clearNode(this.historyListContainer);
+		dom.clearNode(historyListContainer);
 
 		// Create horizontal scrollable container
-		this.historyListContainer.style.display = "flex";
-		this.historyListContainer.style.flexDirection = "row";
-		this.historyListContainer.style.overflowX = "auto";
-		this.historyListContainer.style.overflowY = "hidden";
-		this.historyListContainer.style.gap = "8px";
-		this.historyListContainer.style.padding = "0 8px";
-		this.historyListContainer.style.alignItems = "center";
+		historyListContainer.style.display = "flex";
+		historyListContainer.style.flexDirection = "row";
+		historyListContainer.style.overflowX = "auto";
+		historyListContainer.style.overflowY = "hidden";
+		historyListContainer.style.gap = "8px";
+		historyListContainer.style.padding = "0 8px";
+		historyListContainer.style.alignItems = "center";
 
-		// Render each history item as a horizontal tab
-		for (const item of historyItems) {
+		// Group items by category
+		const running = historyItems.filter((i) => i.category === "running");
+		const recent = historyItems.filter((i) => i.category === "recent");
+		const old = historyItems.filter((i) => i.category === "old");
+
+		let lastCategory: string | undefined = undefined;
+
+		// Helper to render a single item
+		const renderItem = (item: IChatHistoryListItem, category: string) => {
+			// Add section separator if category changed
+			if (lastCategory !== undefined && lastCategory !== category) {
+				const separator = dom.append(
+					historyListContainer,
+					$(".chat-welcome-history-separator")
+				);
+				separator.setAttribute("aria-hidden", "true");
+			}
+			lastCategory = category;
+
 			const itemElement = dom.append(
-				this.historyListContainer,
+				historyListContainer,
 				$(".chat-welcome-history-item")
 			);
 
@@ -1938,6 +2010,27 @@ export class ChatWidget extends Disposable implements IChatWidget {
 			const title = dom.append(itemElement, $(".chat-welcome-history-title"));
 			title.textContent = item.title;
 			title.setAttribute("title", item.title); // Tooltip for truncated text
+
+			// Add running indicator if needed
+			if (item.hasPendingRequest) {
+				const runningIndicator = dom.append(
+					itemElement,
+					$(".chat-welcome-history-running")
+				);
+				runningIndicator.classList.add(
+					"codicon",
+					"codicon-sync",
+					"codicon-modifier-spin"
+				);
+				runningIndicator.setAttribute(
+					"title",
+					localize("chat.running", "Agent is running")
+				);
+				runningIndicator.setAttribute(
+					"aria-label",
+					localize("chat.running", "Agent is running")
+				);
+			}
 
 			// Optional: Add timestamp (can be hidden via CSS)
 			const date = dom.append(itemElement, $(".chat-welcome-history-date"));
@@ -1951,14 +2044,14 @@ export class ChatWidget extends Disposable implements IChatWidget {
 			itemElement.setAttribute("aria-label", item.title);
 
 			// Click handler
-			this.historyItemDisposables.add(
+			historyItemDisposables.add(
 				dom.addDisposableListener(itemElement, dom.EventType.CLICK, () => {
 					this.openHistorySession(item.sessionId);
 				})
 			);
 
 			// Keyboard navigation
-			this.historyItemDisposables.add(
+			historyItemDisposables.add(
 				dom.addStandardDisposableListener(
 					itemElement,
 					dom.EventType.KEY_DOWN,
@@ -1977,13 +2070,24 @@ export class ChatWidget extends Disposable implements IChatWidget {
 				item.lastMessageDate,
 				todayMidnightMs
 			)}`;
-			this.historyItemDisposables.add(
+			historyItemDisposables.add(
 				this.hoverService.setupManagedHover(
 					hoverDelegate,
 					itemElement,
 					hoverContent
 				)
 			);
+		};
+
+		// Render items by category: Running, Recent, Old
+		for (const item of running) {
+			renderItem(item, "running");
+		}
+		for (const item of recent) {
+			renderItem(item, "recent");
+		}
+		for (const item of old) {
+			renderItem(item, "old");
 		}
 	}
 

@@ -927,6 +927,7 @@ export interface IChatDetail {
 	title: string;
 	lastMessageDate: number;
 	isActive: boolean;
+	hasPendingRequest: boolean; // NEW: indicates if agent is currently running
 }
 
 export interface IChatProviderInfo {
@@ -1073,6 +1074,8 @@ export interface IChatService {
 	removeRequest(sessionid: string, requestId: string): Promise<void>;
 	cancelCurrentRequestForSession(sessionId: string): void;
 	clearSession(sessionId: string): Promise<void>;
+	detachSession(sessionId: string): Promise<void>;
+	hasPendingRequest(sessionId: string): boolean;
 	addCompleteRequest(
 		sessionId: string,
 		message: IParsedChatRequest | string,

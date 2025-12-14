@@ -453,6 +453,7 @@ export class ChatService extends Disposable implements IChatService {
 					title,
 					lastMessageDate: session.lastMessageDate,
 					isActive: true,
+					hasPendingRequest: this.hasPendingRequest(session.sessionId), // NEW
 				} satisfies IChatDetail;
 			});
 
@@ -468,6 +469,7 @@ export class ChatService extends Disposable implements IChatService {
 				(entry): IChatDetail => ({
 					...entry,
 					isActive: this._sessionModels.has(entry.sessionId),
+					hasPendingRequest: this.hasPendingRequest(entry.sessionId), // NEW
 				})
 			);
 		return [...liveSessionItems, ...entries];
@@ -1142,21 +1144,21 @@ export class ChatService extends Disposable implements IChatService {
 							variables: [],
 						};
 						request =
-						chatRequest ??
-						model.addRequest(
-							parsedRequest,
-							initVariableData,
-							attempt,
-							options?.modeInfo,
-							agent,
-							command,
-							options?.confirmation,
-							options?.locationData,
-							options?.attachedContext,
-							undefined,
-							options?.userSelectedModelId,
-							options?.replyTo
-						);
+							chatRequest ??
+							model.addRequest(
+								parsedRequest,
+								initVariableData,
+								attempt,
+								options?.modeInfo,
+								agent,
+								command,
+								options?.confirmation,
+								options?.locationData,
+								options?.attachedContext,
+								undefined,
+								options?.userSelectedModelId,
+								options?.replyTo
+							);
 
 						let variableData: IChatRequestVariableData;
 						let message: string;
@@ -1715,6 +1717,39 @@ export class ChatService extends Disposable implements IChatService {
 		this._pendingRequests.get(sessionId)?.cancel();
 		this._pendingRequests.deleteAndDispose(sessionId);
 		this._onDidDisposeSession.fire({ sessionId, reason: "cleared" });
+	}
+
+	async detachSession(sessionId: string): Promise<void> {
+		this.trace("detachSession", `sessionId: ${sessionId}`);
+		const model = this._sessionModels.get(sessionId);
+		if (!model) {
+			return; // Session doesn't exist or already detached
+		}
+
+		// Store session for persistence (same as clearSession)
+		this.trace(`Model input type: ${model.inputType}`);
+		if (
+			!model.inputType &&
+			(model.initialLocation === ChatAgentLocation.Chat ||
+				model.initialLocation === ChatAgentLocation.EditorInline)
+		) {
+			// Always preserve sessions that have custom titles, even if empty
+			if (model.getRequests().length === 0 && !model.customTitle) {
+				await this._chatSessionStore.deleteSession(sessionId);
+			} else {
+				await this._chatSessionStore.storeSessions([model]);
+			}
+		}
+
+		// Do NOT:
+		// - cancel pending requests (let them continue)
+		// - dispose model (keep it alive)
+		// - remove from _sessionModels (keep it active)
+		// - fire onDidDisposeSession (don't trigger cleanup)
+	}
+
+	hasPendingRequest(sessionId: string): boolean {
+		return this._pendingRequests.has(sessionId);
 	}
 
 	public hasSessions(): boolean {

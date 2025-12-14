@@ -393,6 +393,22 @@ div.chat-welcome-view {
 		.chat-welcome-history-date {
 			display: none; /* Hide timestamp in horizontal layout for cleaner look */
 		}
+
+		.chat-welcome-history-running {
+			color: var(--vscode-textLink-foreground);
+			margin-left: 4px;
+			font-size: 12px;
+			display: inline-flex;
+			align-items: center;
+		}
+	}
+
+	.chat-welcome-history-separator {
+		width: 1px;
+		height: 20px;
+		background-color: var(--vscode-widget-border);
+		margin: 0 4px;
+		flex-shrink: 0;
 	}
 
 	.chat-welcome-history-more {
