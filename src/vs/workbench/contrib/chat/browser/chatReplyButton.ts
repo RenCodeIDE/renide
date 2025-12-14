@@ -36,18 +36,12 @@ export class ChatReplyButton extends Disposable {
 		this.button = this._register(
 			new Button(this.buttonContainer, {
 				title: localize("chat.replyButton", "Reply to selection"),
-				buttonBackground: undefined,
-				buttonBorder: undefined,
-				buttonForeground: undefined,
-				buttonHoverBackground: undefined,
-				buttonSecondaryBackground: undefined,
-				buttonSecondaryForeground: undefined,
-				buttonSecondaryHoverBackground: undefined,
+				secondary: true,
 			})
 		);
 
 		this.button.label = localize("chat.reply", "Reply");
-		this.button.icon = Codicon.reply;
+		this.button.icon = Codicon.comment;
 		this.button.element.classList.add("chat-reply-button");
 
 		this._register(
@@ -103,7 +97,7 @@ export class ChatReplyButton extends Disposable {
 		this.buttonContainer.style.opacity = "0";
 		setTimeout(() => {
 			if (this.buttonContainer) {
-				this.buttonContainer.style.transition = "opacity 0.2s ease-in";
+				this.buttonContainer.style.transition = "opacity 0.15s ease-in";
 				this.buttonContainer.style.opacity = "1";
 			}
 		}, 10);

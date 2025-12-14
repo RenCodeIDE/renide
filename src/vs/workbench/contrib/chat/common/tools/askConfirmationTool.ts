@@ -3,41 +3,59 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { CancellationToken } from '../../../../../base/common/cancellation.js';
-import { ContextKeyExpr } from '../../../../../platform/contextkey/common/contextkey.js';
-import { MarkdownString } from '../../../../../base/common/htmlContent.js';
-import { localize } from '../../../../../nls.js';
-import { CountTokensCallback, IPreparedToolInvocation, IToolData, IToolImpl, IToolInvocation, IToolInvocationPreparationContext, IToolResult, ToolDataSource, ToolInvocationPresentation, ToolProgress } from '../languageModelToolsService.js';
+import { CancellationToken } from "../../../../../base/common/cancellation.js";
+import { localize } from "../../../../../nls.js";
+import {
+	CountTokensCallback,
+	IPreparedToolInvocation,
+	IToolData,
+	IToolImpl,
+	IToolInvocation,
+	IToolInvocationPreparationContext,
+	IToolResult,
+	ToolDataSource,
+	ToolInvocationPresentation,
+	ToolProgress,
+} from "../languageModelToolsService.js";
 
-export const AskConfirmationToolId = 'vscode_askConfirmation';
+export const AskConfirmationToolId = "vscode_askConfirmation";
 
 export const AskConfirmationToolData: IToolData = {
 	id: AskConfirmationToolId,
-	toolReferenceName: 'askConfirmation',
-	displayName: localize('askConfirmationTool.displayName', 'Ask Confirmation'),
-	modelDescription: localize('askConfirmationTool.modelDescription', 'Asks the user for confirmation about their understanding via a chat popup. Use this to check if the user understood your explanation or to give them options to continue. The user will see clickable buttons in the chat to respond.'),
+	toolReferenceName: "askConfirmation",
+	displayName: localize("askConfirmationTool.displayName", "Ask Confirmation"),
+	modelDescription: localize(
+		"askConfirmationTool.modelDescription",
+		"Asks the user for confirmation about their understanding via a chat popup. Use this to check if the user understood your explanation or to give them options to continue. The user will see clickable buttons in the chat to respond."
+	),
 	source: ToolDataSource.Internal,
 	canBeReferencedInPrompt: true,
-	tags: ['ask-mode'],
-	when: ContextKeyExpr.equals('chatAgentKind', 'ask'),
+	tags: ["ask-mode"],
+	// Available in all chat modes (ask and agent)
 	inputSchema: {
-		type: 'object',
+		type: "object",
 		properties: {
 			question: {
-				type: 'string',
-				description: localize('askConfirmationTool.question', 'The question to ask the user. Should be clear and concise.')
+				type: "string",
+				description: localize(
+					"askConfirmationTool.question",
+					"The question to ask the user. Should be clear and concise."
+				),
 			},
 			options: {
-				type: 'array',
+				type: "array",
 				items: {
-					type: 'string'
+					type: "string",
 				},
-				description: localize('askConfirmationTool.options', 'Optional: Array of response options for the user. Default: ["Yes, I understand", "No, explain more"]')
-			}
+				description: localize(
+					"askConfirmationTool.options",
+					'Optional: Array of response options for the user. Default: ["Yes, I understand", "No, explain more"]'
+				),
+			},
 		},
-		required: ['question'],
-		additionalProperties: false
-	}
+		required: ["question"],
+		additionalProperties: false,
+	},
 };
 
 export interface IAskConfirmationToolParams {
@@ -46,60 +64,78 @@ export interface IAskConfirmationToolParams {
 }
 
 export class AskConfirmationTool implements IToolImpl {
-	async prepareToolInvocation(context: IToolInvocationPreparationContext, token: CancellationToken): Promise<IPreparedToolInvocation | undefined> {
+	async prepareToolInvocation(
+		context: IToolInvocationPreparationContext,
+		token: CancellationToken
+	): Promise<IPreparedToolInvocation | undefined> {
 		const parameters = context.parameters as IAskConfirmationToolParams;
 
 		if (!parameters.question) {
-			throw new Error('Question is required for AskConfirmationTool');
+			throw new Error("Question is required for AskConfirmationTool");
 		}
 
 		// Use default options if not provided
-		const options = parameters.options && parameters.options.length > 0
-			? parameters.options
-			: [
-				localize('askConfirmationTool.defaultYes', 'Yes, I understand'),
-				localize('askConfirmationTool.defaultNo', 'No, explain more')
-			];
+		const options =
+			parameters.options && parameters.options.length > 0
+				? parameters.options
+				: [
+						localize("askConfirmationTool.defaultYes", "Yes, I understand"),
+						localize("askConfirmationTool.defaultNo", "No, explain more"),
+				  ];
 
 		// Create the confirmation message
 		const title = parameters.question;
-		
+
 		// Create tool actions for each option
 		// We use terminalCustomActions to pass these buttons to the UI
-		const customActions = options.map(option => ({
+		const customActions = options.map((option) => ({
 			label: option,
-			data: option
+			data: option,
 		}));
 
-		// We don't need markdown list anymore as we have real buttons
-		// Just show the question
-		const message = new MarkdownString(parameters.question);
+		// Don't set message since title already shows the question
+		// This prevents duplication in the UI
 
 		return {
 			confirmationMessages: {
 				title,
-				message,
+				message: undefined, // Don't duplicate the question - it's already in the title
 				allowAutoConfirm: false, // Always require user interaction
-				terminalCustomActions: customActions // These will be rendered as primary buttons
+				terminalCustomActions: customActions, // These will be rendered as primary buttons
 			},
-			presentation: ToolInvocationPresentation.HiddenAfterComplete
+			presentation: ToolInvocationPresentation.HiddenAfterComplete,
 		};
 	}
 
-	async invoke(invocation: IToolInvocation, countTokens: CountTokensCallback, progress: ToolProgress, token: CancellationToken): Promise<IToolResult> {
+	async invoke(
+		invocation: IToolInvocation,
+		countTokens: CountTokensCallback,
+		progress: ToolProgress,
+		token: CancellationToken
+	): Promise<IToolResult> {
 		// Get the user's response from toolSpecificData
-		let answer = 'User confirmed execution but no specific option was selected.';
-		
-		if (invocation.toolSpecificData?.kind === 'input' && invocation.toolSpecificData.rawInput?.answer) {
+		let answer =
+			"User confirmed execution but no specific option was selected.";
+
+		if (
+			invocation.toolSpecificData?.kind === "input" &&
+			invocation.toolSpecificData.rawInput?.answer
+		) {
 			answer = invocation.toolSpecificData.rawInput.answer;
 		}
 
 		return {
-			content: [{
-				kind: 'text',
-				value: answer
-			}],
-			toolResultMessage: localize('askConfirmationTool.answered', 'User answered: {0}', answer)
+			content: [
+				{
+					kind: "text",
+					value: answer,
+				},
+			],
+			toolResultMessage: localize(
+				"askConfirmationTool.answered",
+				"User answered: {0}",
+				answer
+			),
 		};
 	}
 }

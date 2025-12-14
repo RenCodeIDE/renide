@@ -259,7 +259,7 @@ import { QuickChatService } from "./chatQuick.js";
 import { ChatResponseAccessibleView } from "./chatResponseAccessibleView.js";
 import { LocalChatSessionsProvider } from "./chatSessions/localChatSessionsProvider.js";
 import {
-	ChatSessionsView,
+	// ChatSessionsView, // Removed - no longer registering view container in sidebar
 	ChatSessionsViewContrib,
 } from "./chatSessions/view/chatSessionsView.js";
 import {
@@ -1324,7 +1324,8 @@ class ChatResolverContribution extends Disposable {
 
 class ChatAgentSettingContribution
 	extends Disposable
-	implements IWorkbenchContribution {
+	implements IWorkbenchContribution
+{
 	static readonly ID = "workbench.contrib.chatAgentSetting";
 
 	constructor(
@@ -1376,7 +1377,7 @@ class ChatAgentSettingContribution
 			Event.runAndSubscribe(
 				Event.debounce(
 					this.entitlementService.onDidChangeEntitlement,
-					() => { },
+					() => {},
 					1000
 				),
 				() => registerMaxRequestsSetting()
@@ -1686,11 +1687,12 @@ registerWorkbenchContribution2(
 	ChatSessionsViewContrib,
 	WorkbenchPhase.AfterRestored
 );
-registerWorkbenchContribution2(
-	ChatSessionsView.ID,
-	ChatSessionsView,
-	WorkbenchPhase.BlockRestore
-);
+// Removed ChatSessionsView registration to hide agent sessions icon from taskbar
+// registerWorkbenchContribution2(
+// 	ChatSessionsView.ID,
+// 	ChatSessionsView,
+// 	WorkbenchPhase.BlockRestore
+// );
 registerWorkbenchContribution2(
 	ChatEditingNotebookFileSystemProviderContrib.ID,
 	ChatEditingNotebookFileSystemProviderContrib,
@@ -1741,7 +1743,8 @@ registerSingleton(
 );
 class ChatAgentNotificationContribution
 	extends Disposable
-	implements IWorkbenchContribution {
+	implements IWorkbenchContribution
+{
 	static readonly ID = "workbench.contrib.chatAgentNotification";
 
 	constructor(@IChatService private readonly chatService: IChatService) {
@@ -1750,15 +1753,15 @@ class ChatAgentNotificationContribution
 			this.chatService.onDidCompleteAgentRequest(async (event) => {
 				const message = event.success
 					? nls.localize(
-						"agentFinished",
-						"Agent {0} finished its work",
-						event.agentName
-					)
+							"agentFinished",
+							"Agent {0} finished its work",
+							event.agentName
+					  )
 					: nls.localize(
-						"agentFinishedError",
-						"Agent {0} finished with an error",
-						event.agentName
-					);
+							"agentFinishedError",
+							"Agent {0} finished with an error",
+							event.agentName
+					  );
 				await triggerNotification(message);
 			})
 		);

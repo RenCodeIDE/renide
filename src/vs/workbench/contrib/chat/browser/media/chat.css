@@ -3748,16 +3748,33 @@ have to be updated for changes to the rules above, or to support more deeply nes
 .chat-reply-button-container .chat-reply-button {
 	padding: 4px 12px;
 	font-size: 12px;
+	font-family: var(--vscode-font-family, inherit);
 	border-radius: 4px;
-	background-color: var(--vscode-button-background);
-	color: var(--vscode-button-foreground);
-	border: 1px solid var(--vscode-button-border, transparent);
 	cursor: pointer;
-	transition: background-color 0.2s ease, opacity 0.2s ease;
+	transition: background-color 0.2s ease;
+	opacity: 1 !important;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+	background-color: var(--vscode-button-secondaryBackground) !important;
+	color: var(--vscode-button-secondaryForeground) !important;
+	border: 1px solid var(--vscode-button-border) !important;
+}
+
+.chat-reply-button-container .chat-reply-button.codicon,
+.chat-reply-button-container .chat-reply-button .codicon {
+	opacity: 1 !important;
+}
+
+.chat-reply-button-container .chat-reply-button .monaco-button-label {
+	font-family: var(--vscode-font-family, inherit);
+}
+
+.chat-reply-button-container .chat-reply-button.codicon::before {
+	opacity: 1 !important;
 }
 
 .chat-reply-button-container .chat-reply-button:hover {
-	background-color: var(--vscode-button-hoverBackground);
+	background-color: var(--vscode-button-secondaryHoverBackground) !important;
+	opacity: 1 !important;
 }
 
 .chat-reply-button-container .chat-reply-button:focus {
@@ -3785,6 +3802,11 @@ have to be updated for changes to the rules above, or to support more deeply nes
 	font-size: 14px;
 	color: var(--vscode-icon-foreground);
 	flex-shrink: 0;
+	opacity: 1 !important;
+}
+
+.chat-reply-icon.codicon {
+	opacity: 1 !important;
 }
 
 .chat-reply-text {
@@ -3792,6 +3814,7 @@ have to be updated for changes to the rules above, or to support more deeply nes
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	font-family: var(--vscode-chat-font-family, inherit);
 }
 
 .chat-reply-cancel {

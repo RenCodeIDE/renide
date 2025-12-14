@@ -7,6 +7,7 @@ import { CancellationToken } from "../../../../../base/common/cancellation.js";
 import { MarkdownString } from "../../../../../base/common/htmlContent.js";
 import { localize } from "../../../../../nls.js";
 import { ILogService } from "../../../../../platform/log/common/log.js";
+import { getDurationString } from "../../../../../base/common/date.js";
 import { ExtensionIdentifier } from "../../../../../platform/extensions/common/extensions.js";
 import {
 	IChatAgentImplementation,
@@ -149,7 +150,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			return token ?? undefined;
 		} catch (error) {
 			this.logService.error(
-				`[chatgpt-server] Error retrieving access token: ${error instanceof Error ? error.message : String(error)
+				`[chatgpt-server] Error retrieving access token: ${
+					error instanceof Error ? error.message : String(error)
 				}`
 			);
 			return undefined;
@@ -158,7 +160,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 
 	private resolveModelFromRequest(userSelectedModelId?: string): string {
 		this.logService.info(
-			`[ChatGPTAgent] resolveModelFromRequest: received userSelectedModelId="${userSelectedModelId || "undefined"
+			`[ChatGPTAgent] resolveModelFromRequest: received userSelectedModelId="${
+				userSelectedModelId || "undefined"
 			}"`
 		);
 
@@ -192,7 +195,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		const defaultModel = CHATGPT_MODELS.find((m) => m.isDefault);
 		const resolvedModelId = defaultModel?.id || "gpt-5-nano-2025-08-07";
 		this.logService.info(
-			`[ChatGPTAgent] resolveModelFromRequest: using DEFAULT model ID="${resolvedModelId}" (isDefault=${!!defaultModel}, identifier="${defaultModel?.identifier || "N/A"
+			`[ChatGPTAgent] resolveModelFromRequest: using DEFAULT model ID="${resolvedModelId}" (isDefault=${!!defaultModel}, identifier="${
+				defaultModel?.identifier || "N/A"
 			}")`
 		);
 		return resolvedModelId;
@@ -268,13 +272,15 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			request.userSelectedModelId
 		);
 		this.logService.info(
-			`[ChatGPTAgent] invoke: resolved modelToUse="${modelToUse}" from userSelectedModelId="${request.userSelectedModelId || "undefined"
+			`[ChatGPTAgent] invoke: resolved modelToUse="${modelToUse}" from userSelectedModelId="${
+				request.userSelectedModelId || "undefined"
 			}"`
 		);
 
 		if (request.userSelectedTools) {
 			this.logService.debug(
-				`[chatgpt] reading tools from request object for request ${request.requestId
+				`[chatgpt] reading tools from request object for request ${
+					request.requestId
 				}: ${JSON.stringify(request.userSelectedTools)}`
 			);
 			this.requestTools.set(request.requestId, request.userSelectedTools);
@@ -401,7 +407,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 				const iterationStartTime = Date.now();
 				const elapsedSinceRequestStart = iterationStartTime - requestStartTime;
 				this.logService.info(
-					`[chatgpt-server] invoke iteration ${iteration + 1}${maxIterations < Number.MAX_SAFE_INTEGER ? `/${maxIterations}` : ""
+					`[chatgpt-server] invoke iteration ${iteration + 1}${
+						maxIterations < Number.MAX_SAFE_INTEGER ? `/${maxIterations}` : ""
 					} (elapsed: ${elapsedSinceRequestStart}ms)`
 				);
 
@@ -506,13 +513,15 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 
 					const iterationEndTime = Date.now();
 					this.logService.info(
-						`[Stream] [${iterationEndTime}] Completed async iteration (duration: ${iterationEndTime - streamIterationStartTime
+						`[Stream] [${iterationEndTime}] Completed async iteration (duration: ${
+							iterationEndTime - streamIterationStartTime
 						}ms)`
 					);
 				} catch (error) {
 					const errorTimestamp = Date.now();
 					this.logService.error(
-						`[Stream] [${errorTimestamp}] Error in async iteration: ${error instanceof Error ? error.message : String(error)
+						`[Stream] [${errorTimestamp}] Error in async iteration: ${
+							error instanceof Error ? error.message : String(error)
 						}`
 					);
 					if (!token.isCancellationRequested) {
@@ -592,7 +601,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						(part) => part.toolCall!.name
 					);
 					this.logService.info(
-						`[chatgpt-server] Executing ${toolCallParts.length
+						`[chatgpt-server] Executing ${
+							toolCallParts.length
 						} tool call(s): ${toolCallNames
 							.map((name, i) => `${name} (${toolCallIds[i]})`)
 							.join(", ")}`
@@ -604,9 +614,12 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 						const toolId = nameToToolId.get(toolName);
 						const toolArgs = part.toolCall!.args ?? {};
 						this.logService.info(
-							`[Tool Call ${index + 1}/${toolCallParts.length
-							}] Name: ${toolName}, ID: ${toolId || "unknown"}, CallID: ${part.toolCall!.id
-							}, Args: ${JSON.stringify(toolArgs).substring(0, 200)}${JSON.stringify(toolArgs).length > 200 ? "..." : ""
+							`[Tool Call ${index + 1}/${
+								toolCallParts.length
+							}] Name: ${toolName}, ID: ${toolId || "unknown"}, CallID: ${
+								part.toolCall!.id
+							}, Args: ${JSON.stringify(toolArgs).substring(0, 200)}${
+								JSON.stringify(toolArgs).length > 200 ? "..." : ""
 							}`
 						);
 					});
@@ -741,7 +754,17 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 							const timer = new Promise<never>((_, reject) => {
 								const id = setTimeout(() => {
 									clearTimeout(id);
-									reject(new Error(`Tool timed out after ${timeoutMs}ms`));
+									const timeoutDuration = getDurationString(timeoutMs, true);
+									reject(
+										new Error(
+											localize(
+												"chatgpt.toolTimeout",
+												"Tool '{0}' timed out after {1}. This may indicate the operation is taking longer than expected or there's a connection issue.",
+												toolName,
+												timeoutDuration
+											)
+										)
+									);
 								}, timeoutMs);
 							});
 
@@ -764,8 +787,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 										textOutput.trim().length > 0
 											? textOutput
 											: result.toolResultError
-												? `Error: ${result.toolResultError}`
-												: "Tool executed successfully but returned no output.";
+											? `Error: ${result.toolResultError}`
+											: "Tool executed successfully but returned no output.";
 
 									return {
 										toolCallId: callId,
@@ -875,10 +898,10 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					const parallelExecutionTime = Date.now() - parallelExecutionStartTime;
 					this.logService.info(
 						`[chatgpt-server] Completed parallel execution of ${tasks.length} tool call(s) in ${parallelExecutionTime}ms ` +
-						`(avg: ${(parallelExecutionTime / tasks.length).toFixed(
-							2
-						)}ms per call, ` +
-						`concurrency: ${maxConcurrency})`
+							`(avg: ${(parallelExecutionTime / tasks.length).toFixed(
+								2
+							)}ms per call, ` +
+							`concurrency: ${maxConcurrency})`
 					);
 
 					// Collect results in input order, ensuring a message per callId
@@ -904,8 +927,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					);
 					this.logService.info(
 						`[chatgpt-server] Collected ${toolResultsForNextRequest.length} tool results for next request. ` +
-						`Expected: ${toolCallIds.join(", ")}, ` +
-						`Got: ${resultCallIds.join(", ")}`
+							`Expected: ${toolCallIds.join(", ")}, ` +
+							`Got: ${resultCallIds.join(", ")}`
 					);
 
 					// Verify all tool calls have results
@@ -914,7 +937,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 					);
 					if (missingResults.length > 0) {
 						this.logService.error(
-							`[chatgpt-server] CRITICAL: ${missingResults.length
+							`[chatgpt-server] CRITICAL: ${
+								missingResults.length
 							} tool call(s) missing results: ${missingResults.join(", ")}`
 						);
 					}
@@ -1161,27 +1185,33 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			// Use getTools(true) to include all tools regardless of context key filtering.
 			// The global context key service doesn't have 'chatAgentKind' set properly,
 			// so we bypass the when-clause check and rely on mode-based filtering below.
-			const allTools = Array.from(this.languageModelToolsService.getTools(true));
+			const allTools = Array.from(
+				this.languageModelToolsService.getTools(true)
+			);
 			this.logService.debug(
 				`[chatgpt] no tools selected for request ${requestId}, using all ${allTools.length} registered tools`
 			);
 			// In Ask mode, filter out edit/write tools but keep ask-mode specific tools
 			if (chatMode === ChatModeKind.Ask) {
 				// Filter to include ask-mode tools (tags include 'ask-mode') and filter out blocked tools
-				const askModeTools = allTools.filter(tool => 
-					tool.tags?.includes('ask-mode') || !ChatGPTAgentImplementation.ASK_MODE_BLOCKED_TOOLS.includes(tool.id)
+				const askModeTools = allTools.filter(
+					(tool) =>
+						tool.tags?.includes("ask-mode") ||
+						!ChatGPTAgentImplementation.ASK_MODE_BLOCKED_TOOLS.includes(tool.id)
 				);
 				return askModeTools;
 			}
 			// In non-ask modes, exclude ask-mode-only tools
-			return allTools.filter(tool => !tool.tags?.includes('ask-mode'));
+			return allTools.filter((tool) => !tool.tags?.includes("ask-mode"));
 		}
 		const allowedIds = Object.keys(selected).filter(
 			(id) => selected[id] === true
 		);
 		if (!allowedIds.length) {
 			// Same fix: use getTools(true) to bypass context key filtering
-			const allTools = Array.from(this.languageModelToolsService.getTools(true));
+			const allTools = Array.from(
+				this.languageModelToolsService.getTools(true)
+			);
 			this.logService.debug(
 				`[chatgpt] tool selection for request ${requestId} contained no enabled entries, using all ${allTools.length} registered tools`
 			);
@@ -1209,7 +1239,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		}
 
 		this.logService.debug(
-			`[chatgpt] resolved ${allowedTools.length
+			`[chatgpt] resolved ${
+				allowedTools.length
 			} tools for request ${requestId}: ${allowedTools
 				.map((tool) => tool.id)
 				.join(", ")}`
@@ -1366,9 +1397,12 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 	): Promise<ChatGPTStreamingResponse> {
 		const toolNames = tools.map((f) => f.function.name);
 		this.logService.info(
-			`[chatgpt-server] performRequest: model=${model}, messages=${messages.length
-			}, tools=${toolNames.join(", ") || "none"
-			}, hasContext=${!!context}, toolResults=${toolResults?.length || 0
+			`[chatgpt-server] performRequest: model=${model}, messages=${
+				messages.length
+			}, tools=${
+				toolNames.join(", ") || "none"
+			}, hasContext=${!!context}, toolResults=${
+				toolResults?.length || 0
 			}, mode=${mode || "unknown"}`
 		);
 
@@ -1456,7 +1490,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		const hasToolResults = toolResults && toolResults.length > 0;
 
 		this.logService.info(
-			`[chatgpt-server] Using endpoint: ${endpoint} (tools=${serverTools.length
+			`[chatgpt-server] Using endpoint: ${endpoint} (tools=${
+				serverTools.length
 			}, toolResults=${toolResults?.length || 0}, mode=${mode || "unknown"})`
 		);
 
@@ -1470,7 +1505,8 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 			projectId,
 		};
 		this.logService.info(
-			`[ChatGPTAgent] performRequest: sending request with modelName="${model || "undefined"
+			`[ChatGPTAgent] performRequest: sending request with modelName="${
+				model || "undefined"
 			}" in options to server`
 		);
 
@@ -1488,13 +1524,15 @@ export class ChatGPTAgentImplementation implements IChatAgentImplementation {
 		response.result.then(
 			(result) => {
 				this.logService.info(
-					`[chatgpt-server] Request completed: ${result.parts.length
+					`[chatgpt-server] Request completed: ${
+						result.parts.length
 					} parts, finishReason=${result.finishReason || "none"}`
 				);
 			},
 			(error) => {
 				this.logService.error(
-					`[chatgpt-server] Streaming request failed: ${error instanceof Error ? error.message : String(error)
+					`[chatgpt-server] Streaming request failed: ${
+						error instanceof Error ? error.message : String(error)
 					}`
 				);
 			}

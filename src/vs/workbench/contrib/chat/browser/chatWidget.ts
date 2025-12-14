@@ -11,10 +11,11 @@ import { IMouseWheelEvent } from "../../../../base/browser/mouseEvent.js";
 import { Button } from "../../../../base/browser/ui/button/button.js";
 import { IHoverOptions } from "../../../../base/browser/ui/hover/hover.js";
 import { HoverPosition } from "../../../../base/browser/ui/hover/hoverWidget.js";
-import {
-	IListRenderer,
-	IListVirtualDelegate,
-} from "../../../../base/browser/ui/list/list.js";
+// Unused - kept for potential future use
+// import {
+// 	IListRenderer,
+// 	IListVirtualDelegate,
+// } from "../../../../base/browser/ui/list/list.js";
 import {
 	ITreeContextMenuEvent,
 	ITreeElement,
@@ -81,10 +82,7 @@ import {
 } from "../../../../platform/hover/browser/hover.js";
 import { IInstantiationService } from "../../../../platform/instantiation/common/instantiation.js";
 import { ServiceCollection } from "../../../../platform/instantiation/common/serviceCollection.js";
-import {
-	WorkbenchList,
-	WorkbenchObjectTree,
-} from "../../../../platform/list/browser/listService.js";
+import { WorkbenchObjectTree } from "../../../../platform/list/browser/listService.js";
 import { ILogService } from "../../../../platform/log/common/log.js";
 import { bindContextKey } from "../../../../platform/observable/common/platformObservableUtils.js";
 import product from "../../../../platform/product/common/product.js";
@@ -350,24 +348,26 @@ type ChatHandoffWidgetShownClassification = {
 	};
 };
 
-class ChatHistoryListDelegate
-	implements IListVirtualDelegate<IChatHistoryListItem>
-{
-	getHeight(element: IChatHistoryListItem): number {
-		return 22;
-	}
+// Unused - kept for potential future use
+// class ChatHistoryListDelegate
+// 	implements IListVirtualDelegate<IChatHistoryListItem>
+// {
+// 	getHeight(element: IChatHistoryListItem): number {
+// 		return 22;
+// 	}
 
-	getTemplateId(element: IChatHistoryListItem): string {
-		return "chatHistoryItem";
-	}
-}
+// 	getTemplateId(element: IChatHistoryListItem): string {
+// 		return "chatHistoryItem";
+// 	}
+// }
 
-interface IChatHistoryTemplate {
-	container: HTMLElement;
-	title: HTMLElement;
-	date: HTMLElement;
-	disposables: DisposableStore;
-}
+// Unused - kept for potential future use
+// interface IChatHistoryTemplate {
+// 	container: HTMLElement;
+// 	title: HTMLElement;
+// 	date: HTMLElement;
+// 	disposables: DisposableStore;
+// }
 
 class ChatHistoryHoverDelegate extends WorkbenchHoverDelegate {
 	constructor(
@@ -414,74 +414,75 @@ class ChatHistoryHoverDelegate extends WorkbenchHoverDelegate {
 	}
 }
 
-class ChatHistoryListRenderer
-	implements IListRenderer<IChatHistoryListItem, IChatHistoryTemplate>
-{
-	readonly templateId = "chatHistoryItem";
+// Unused - kept for potential future use
+// class ChatHistoryListRenderer
+// 	implements IListRenderer<IChatHistoryListItem, IChatHistoryTemplate>
+// {
+// 	readonly templateId = "chatHistoryItem";
 
-	constructor(
-		private readonly onDidClickItem: (item: IChatHistoryListItem) => void,
-		private readonly formatHistoryTimestamp: (
-			timestamp: number,
-			todayMidnightMs: number
-		) => string,
-		private readonly todayMidnightMs: number
-	) {}
+// 	constructor(
+// 		private readonly onDidClickItem: (item: IChatHistoryListItem) => void,
+// 		private readonly formatHistoryTimestamp: (
+// 			timestamp: number,
+// 			todayMidnightMs: number
+// 		) => string,
+// 		private readonly todayMidnightMs: number
+// 	) {}
 
-	renderTemplate(container: HTMLElement): IChatHistoryTemplate {
-		const disposables = new DisposableStore();
+// 	renderTemplate(container: HTMLElement): IChatHistoryTemplate {
+// 		const disposables = new DisposableStore();
 
-		container.classList.add("chat-welcome-history-item");
-		const title = dom.append(container, $(".chat-welcome-history-title"));
-		const date = dom.append(container, $(".chat-welcome-history-date"));
+// 		container.classList.add("chat-welcome-history-item");
+// 		const title = dom.append(container, $(".chat-welcome-history-title"));
+// 		const date = dom.append(container, $(".chat-welcome-history-date"));
 
-		container.tabIndex = 0;
-		container.setAttribute("role", "button");
+// 		container.tabIndex = 0;
+// 		container.setAttribute("role", "button");
 
-		return { container, title, date, disposables };
-	}
+// 		return { container, title, date, disposables };
+// 	}
 
-	renderElement(
-		element: IChatHistoryListItem,
-		index: number,
-		templateData: IChatHistoryTemplate
-	): void {
-		const { container, title, date, disposables } = templateData;
+// 	renderElement(
+// 		element: IChatHistoryListItem,
+// 		index: number,
+// 		templateData: IChatHistoryTemplate
+// 	): void {
+// 		const { container, title, date, disposables } = templateData;
 
-		disposables.clear();
+// 		disposables.clear();
 
-		title.textContent = element.title;
-		date.textContent = this.formatHistoryTimestamp(
-			element.lastMessageDate,
-			this.todayMidnightMs
-		);
-		container.setAttribute("aria-label", element.title);
+// 		title.textContent = element.title;
+// 		date.textContent = this.formatHistoryTimestamp(
+// 			element.lastMessageDate,
+// 			this.todayMidnightMs
+// 		);
+// 		container.setAttribute("aria-label", element.title);
 
-		disposables.add(
-			dom.addDisposableListener(container, dom.EventType.CLICK, () => {
-				this.onDidClickItem(element);
-			})
-		);
+// 		disposables.add(
+// 			dom.addDisposableListener(container, dom.EventType.CLICK, () => {
+// 				this.onDidClickItem(element);
+// 			})
+// 		);
 
-		disposables.add(
-			dom.addStandardDisposableListener(
-				container,
-				dom.EventType.KEY_DOWN,
-				(e) => {
-					if (e.equals(KeyCode.Enter) || e.equals(KeyCode.Space)) {
-						e.preventDefault();
-						e.stopPropagation();
-						this.onDidClickItem(element);
-					}
-				}
-			)
-		);
-	}
+// 		disposables.add(
+// 			dom.addStandardDisposableListener(
+// 				container,
+// 				dom.EventType.KEY_DOWN,
+// 				(e) => {
+// 					if (e.equals(KeyCode.Enter) || e.equals(KeyCode.Space)) {
+// 						e.preventDefault();
+// 						e.stopPropagation();
+// 						this.onDidClickItem(element);
+// 					}
+// 				}
+// 			)
+// 		);
+// 	}
 
-	disposeTemplate(templateData: IChatHistoryTemplate): void {
-		templateData.disposables.dispose();
-	}
-}
+// 	disposeTemplate(templateData: IChatHistoryTemplate): void {
+// 		templateData.disposables.dispose();
+// 	}
+// }
 
 const supportsAllAttachments: Required<IChatAgentAttachmentCapabilities> = {
 	supportsFileAttachments: true,
@@ -584,7 +585,7 @@ export class ChatWidget extends Disposable implements IChatWidget {
 
 	private readonly historyViewStore = this._register(new DisposableStore());
 	private readonly chatSuggestNextWidget: ChatSuggestNextWidget;
-	private historyList: WorkbenchList<IChatHistoryListItem> | undefined;
+	private historyItemDisposables: DisposableStore | undefined;
 
 	private bodyDimension: dom.Dimension | undefined;
 	private visibleChangeCount = 0;
@@ -1700,8 +1701,9 @@ export class ChatWidget extends Disposable implements IChatWidget {
 				this.historyViewStore.clear();
 				dom.clearNode(this.welcomeMessageContainer);
 
-				// Reset history list reference when clearing welcome view
-				this.historyList = undefined;
+				// Reset history item disposables when clearing welcome view
+				this.historyItemDisposables?.dispose();
+				this.historyItemDisposables = undefined;
 
 				// Optional: recent chat history above welcome content when enabled
 				const showHistory = this.configurationService.getValue<boolean>(
@@ -1806,55 +1808,22 @@ export class ChatWidget extends Disposable implements IChatWidget {
 				getViewContainerLocation
 			);
 
-			if (!this.historyList) {
-				const delegate = new ChatHistoryListDelegate();
-
-				const renderer = this.instantiationService.createInstance(
-					ChatHistoryListRenderer,
-					async (item) => await this.openHistorySession(item.sessionId),
-					(timestamp, todayMs) =>
-						this.formatHistoryTimestamp(timestamp, todayMs),
-					todayMidnightMs
-				);
-				this.historyList = this._register(
-					this.instantiationService.createInstance(
-						WorkbenchList<IChatHistoryListItem>,
-						"ChatHistoryList",
-						this.historyListContainer,
-						delegate,
-						[renderer],
-						{
-							horizontalScrolling: false,
-							keyboardSupport: true,
-							mouseSupport: true,
-							multipleSelectionSupport: false,
-							overrideStyles: {
-								listBackground: this.styles.listBackground,
-							},
-							accessibilityProvider: {
-								getAriaLabel: (item: IChatHistoryListItem) => item.title,
-								getWidgetAriaLabel: () =>
-									localize("chat.history.list", "Chat History"),
-							},
-						}
-					)
-				);
-				this.historyList.getHTMLElement().tabIndex = -1;
-			} else {
-				const currentHistoryList = this.historyList.getHTMLElement();
-				if (
-					currentHistoryList &&
-					currentHistoryList.parentElement !== this.historyListContainer
-				) {
-					this.historyListContainer.appendChild(currentHistoryList);
-				}
+			// Dispose previous history item disposables if they exist
+			if (this.historyItemDisposables) {
+				this.historyItemDisposables.dispose();
 			}
+			this.historyItemDisposables = this._register(new DisposableStore());
 
-			this.renderHistoryItems(initialHistoryItems);
+			// Render history items in horizontal layout
+			this.renderHistoryItems(
+				initialHistoryItems,
+				todayMidnightMs,
+				hoverDelegate
+			);
 
-			// Add "Chat history..." link at the end
+			// Add "Chat history..." link at the end of the horizontal bar
 			const previousChatsLink = dom.append(
-				container,
+				this.historyListContainer,
 				$(".chat-welcome-history-more")
 			);
 			previousChatsLink.textContent = localize(
@@ -1873,7 +1842,7 @@ export class ChatWidget extends Disposable implements IChatWidget {
 				"chat.history.showMoreHover",
 				"Show chat history..."
 			);
-			this._register(
+			this.historyItemDisposables.add(
 				this.hoverService.setupManagedHover(
 					hoverDelegate,
 					previousChatsLink,
@@ -1881,7 +1850,7 @@ export class ChatWidget extends Disposable implements IChatWidget {
 				)
 			);
 
-			this._register(
+			this.historyItemDisposables.add(
 				dom.addDisposableListener(
 					previousChatsLink,
 					dom.EventType.CLICK,
@@ -1892,7 +1861,7 @@ export class ChatWidget extends Disposable implements IChatWidget {
 					}
 				)
 			);
-			this._register(
+			this.historyItemDisposables.add(
 				dom.addDisposableListener(
 					previousChatsLink,
 					dom.EventType.KEY_DOWN,
@@ -1933,17 +1902,89 @@ export class ChatWidget extends Disposable implements IChatWidget {
 		}
 	}
 
-	private renderHistoryItems(historyItems: IChatHistoryListItem[]): void {
-		if (!this.historyList) {
+	private renderHistoryItems(
+		historyItems: IChatHistoryListItem[],
+		todayMidnightMs: number,
+		hoverDelegate: ChatHistoryHoverDelegate
+	): void {
+		if (!this.historyListContainer || !this.historyItemDisposables) {
 			return;
 		}
-		const listHeight = historyItems.length * 22;
-		if (this.historyListContainer) {
-			this.historyListContainer.style.height = `${listHeight}px`;
-			this.historyListContainer.style.minHeight = `${listHeight}px`;
+
+		// Clear existing items
+		dom.clearNode(this.historyListContainer);
+
+		// Create horizontal scrollable container
+		this.historyListContainer.style.display = "flex";
+		this.historyListContainer.style.flexDirection = "row";
+		this.historyListContainer.style.overflowX = "auto";
+		this.historyListContainer.style.overflowY = "hidden";
+		this.historyListContainer.style.gap = "8px";
+		this.historyListContainer.style.padding = "0 8px";
+		this.historyListContainer.style.alignItems = "center";
+
+		// Render each history item as a horizontal tab
+		for (const item of historyItems) {
+			const itemElement = dom.append(
+				this.historyListContainer,
+				$(".chat-welcome-history-item")
+			);
+
+			// Set item as active if needed (for future use)
+			if (item.isActive) {
+				itemElement.classList.add("active");
+			}
+
+			const title = dom.append(itemElement, $(".chat-welcome-history-title"));
+			title.textContent = item.title;
+			title.setAttribute("title", item.title); // Tooltip for truncated text
+
+			// Optional: Add timestamp (can be hidden via CSS)
+			const date = dom.append(itemElement, $(".chat-welcome-history-date"));
+			date.textContent = this.formatHistoryTimestamp(
+				item.lastMessageDate,
+				todayMidnightMs
+			);
+
+			itemElement.setAttribute("role", "button");
+			itemElement.setAttribute("tabindex", "0");
+			itemElement.setAttribute("aria-label", item.title);
+
+			// Click handler
+			this.historyItemDisposables.add(
+				dom.addDisposableListener(itemElement, dom.EventType.CLICK, () => {
+					this.openHistorySession(item.sessionId);
+				})
+			);
+
+			// Keyboard navigation
+			this.historyItemDisposables.add(
+				dom.addStandardDisposableListener(
+					itemElement,
+					dom.EventType.KEY_DOWN,
+					(e) => {
+						if (e.equals(KeyCode.Enter) || e.equals(KeyCode.Space)) {
+							e.preventDefault();
+							e.stopPropagation();
+							this.openHistorySession(item.sessionId);
+						}
+					}
+				)
+			);
+
+			// Hover tooltip
+			const hoverContent = `${item.title} - ${this.formatHistoryTimestamp(
+				item.lastMessageDate,
+				todayMidnightMs
+			)}`;
+			this.historyItemDisposables.add(
+				this.hoverService.setupManagedHover(
+					hoverDelegate,
+					itemElement,
+					hoverContent
+				)
+			);
 		}
-		this.historyList.splice(0, this.historyList.length, historyItems);
-		this.historyList.layout(undefined, listHeight);
 	}
 
 	private formatHistoryTimestamp(
@@ -1973,12 +2014,30 @@ export class ChatWidget extends Disposable implements IChatWidget {
 
 	private async refreshHistoryList(): Promise<void> {
 		const numItems = this.viewModel?.getItems().length ?? 0;
-		// Only refresh history list when in empty state (welcome view) and history list exists
-		if (numItems !== 0 || !this.historyList) {
+		// Only refresh history list when in empty state (welcome view) and history container exists
+		if (
+			numItems !== 0 ||
+			!this.historyListContainer ||
+			!this.historyItemDisposables
+		) {
 			return;
 		}
 		const historyItems = await this.computeHistoryItems();
-		this.renderHistoryItems(historyItems);
+		const todayMidnight = new Date();
+		todayMidnight.setHours(0, 0, 0, 0);
+		const todayMidnightMs = todayMidnight.getTime();
+		const getViewContainerLocation = () => {
+			const panelLocation =
+				this.contextKeyService.getContextKeyValue<ViewContainerLocation>(
+					"chatPanelLocation"
+				);
+			return panelLocation ?? ViewContainerLocation.AuxiliaryBar;
+		};
+		const hoverDelegate = this.instantiationService.createInstance(
+			ChatHistoryHoverDelegate,
+			getViewContainerLocation
+		);
+		this.renderHistoryItems(historyItems, todayMidnightMs, hoverDelegate);
 	}
 
 	private _getGenerateInstructionsMessage(): IMarkdownString {
@@ -3323,9 +3382,12 @@ export class ChatWidget extends Disposable implements IChatWidget {
 			return;
 		}
 
-		if (this.historyList) {
-			this.historyList.setFocus([]);
-			this.historyList.setSelection([]);
+		// Clear history focus when switching sessions
+		if (this.historyListContainer) {
+			const focusedElement = this.historyListContainer.querySelector(":focus");
+			if (focusedElement instanceof HTMLElement) {
+				focusedElement.blur();
+			}
 		}
 
 		// Clear history view state when switching sessions to ensure fresh rendering

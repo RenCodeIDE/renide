@@ -15,31 +15,21 @@ export interface GeminiModelConfig {
 
 export const GEMINI_MODELS: GeminiModelConfig[] = [
 	{
-		id: 'gemini-2.5-flash-lite',
-		identifier: 'google/gemini-2.5-flash-lite',
-		name: 'Gemini 2.5 Flash Lite',
-		description: 'Google Gemini 2.5 Flash Lite online model - fastest option.',
+		id: "gemini-2.5-flash",
+		identifier: "google/gemini-2.5-flash",
+		name: "Gemini 2.5 Flash",
+		description: "",
 		maxInputTokens: 128000,
 		maxOutputTokens: 8192,
-		isDefault: false
+		isDefault: true,
 	},
 	{
-		id: 'gemini-2.5-flash',
-		identifier: 'google/gemini-2.5-flash',
-		name: 'Gemini 2.5 Flash',
-		description: 'Google Gemini 2.5 Flash online model - balanced speed and capability.',
+		id: "gemini-2.5-pro",
+		identifier: "google/gemini-2.5-pro",
+		name: "Gemini 2.5 Pro",
+		description: "",
 		maxInputTokens: 128000,
 		maxOutputTokens: 8192,
-		isDefault: true
+		isDefault: false,
 	},
-	{
-		id: 'gemini-2.5-pro',
-		identifier: 'google/gemini-2.5-pro',
-		name: 'Gemini 2.5 Pro',
-		description: 'Google Gemini 2.5 Pro online model - most capable option.',
-		maxInputTokens: 128000,
-		maxOutputTokens: 8192,
-		isDefault: false
-	}
 ];
-

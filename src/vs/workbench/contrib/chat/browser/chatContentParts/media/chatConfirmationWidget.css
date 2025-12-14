@@ -23,13 +23,13 @@
 	margin-bottom: 16px;
 }
 
-.chat-confirmation-widget + .chat-tool-approval-message  {
+.chat-confirmation-widget + .chat-tool-approval-message {
 	margin: -12px 6px 16px;
 	color: var(--vscode-descriptionForeground);
 	font-size: var(--vscode-chat-font-size-body-s);
 }
 
-.chat-confirmation-widget .chat-confirmation-widget-title  {
+.chat-confirmation-widget .chat-confirmation-widget-title {
 	width: 100%;
 	border-radius: 3px;
 	padding: 3px 8px;
@@ -65,12 +65,12 @@
 	margin-left: 0;
 }
 
-.chat-confirmation-widget .chat-confirmation-widget-title-inner  {
+.chat-confirmation-widget .chat-confirmation-widget-title-inner {
 	flex-grow: 1;
 	flex-basis: 0;
 }
 
-.chat-confirmation-widget .chat-confirmation-widget-title-icon  {
+.chat-confirmation-widget .chat-confirmation-widget-title-icon {
 	line-height: 0;
 }
 
@@ -89,7 +89,9 @@
 	color: var(--vscode-errorForeground) !important;
 }
 
-.chat-confirmation-widget .chat-confirmation-widget-title .chat-confirmation-widget-expando {
+.chat-confirmation-widget
+	.chat-confirmation-widget-title
+	.chat-confirmation-widget-expando {
 	display: flex;
 	align-items: center;
 }
@@ -117,7 +119,11 @@
 	font-size: 14px;
 }
 
-.chat-confirmation-widget .chat-confirmation-widget-title .rendered-markdown p a {
+.chat-confirmation-widget
+	.chat-confirmation-widget-title
+	.rendered-markdown
+	p
+	a {
 	color: inherit;
 }
 
@@ -126,7 +132,7 @@
 	opacity: 0.85;
 
 	&::before {
-		content: ' \2013  ';
+		content: " \2013  ";
 	}
 }
 
@@ -162,11 +168,17 @@
 	display: none;
 }
 
-.chat-confirmation-widget .chat-confirmation-widget-message .rendered-markdown p {
+.chat-confirmation-widget
+	.chat-confirmation-widget-message
+	.rendered-markdown
+	p {
 	margin-top: 0;
 }
 
-.chat-confirmation-widget .chat-confirmation-widget-message .rendered-markdown > :last-child {
+.chat-confirmation-widget
+	.chat-confirmation-widget-message
+	.rendered-markdown
+	> :last-child {
 	margin-bottom: 0px;
 }
 
@@ -208,18 +220,29 @@
 .chat-confirmation-widget2 {
 	margin-bottom: 8px;
 	border: 1px solid var(--vscode-chat-requestBorder);
-	border-radius: 4px;
+	border-radius: 6px;
+	background: var(--vscode-editor-background);
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+	overflow: hidden;
 }
 
 .chat-confirmation-widget2 .chat-confirmation-widget-title {
-	border-bottom: 1px solid var(--vscode-chat-requestBorder);
-	padding: 5px 9px;
+	padding: 10px 12px;
 	display: flex;
 	justify-content: space-between;
+	align-items: center;
 	column-gap: 10px;
+	background: var(--vscode-editor-background);
+	min-height: 40px;
+	border-bottom: 1px solid var(--vscode-chat-requestBorder);
+}
+
+.chat-confirmation-widget2 .chat-confirmation-widget-title.no-message {
+	border-bottom: none;
+}
 
 	.rendered-markdown {
-		line-height: 24px !important;
+		line-height: 20px !important;
 		p {
 			margin: 0 !important;
 		}
@@ -233,18 +256,31 @@
 
 .chat-confirmation-widget2 .disclaimer {
 	margin-bottom: 0 !important;
+	margin-top: 8px;
+	padding: 0 12px 8px 12px;
 	font-style: italic;
 	opacity: 0.7 !important;
+	font-size: 12px;
 
 	.chat-markdown-part > p {
 		margin-bottom: 6px !important;
 	}
 }
 
-.chat-confirmation-widget2 .chat-confirmation-widget-message:not(:has(.chat-confirmation-message-terminal)) {
+.chat-confirmation-widget2
+	.chat-confirmation-widget-message:not(
+		:has(.chat-confirmation-message-terminal)
+	) {
 	background: var(--vscode-chat-requestBackground);
 	border-bottom: 1px solid var(--vscode-chat-requestBorder);
-	padding: 6px 9px 0 9px;
+	padding: 12px;
+	line-height: 1.5;
+}
+
+/* Hide message section when empty */
+.chat-confirmation-widget2 .chat-confirmation-widget-message:empty {
+	display: none;
+}
 
 	.tool-postconfirm-display {
 		padding-bottom: 6px;
@@ -252,41 +288,160 @@
 
 	p {
 		margin-top: 0;
-		margin-bottom: 9px;
+		margin-bottom: 8px;
+		line-height: 1.5;
+	}
+
+	> :last-child {
+		margin-bottom: 0;
 	}
 }
 
-.chat-confirmation-widget2 .chat-confirmation-message-terminal .chat-confirmation-message-terminal-editor {
+.chat-confirmation-widget2
+	.chat-confirmation-message-terminal
+	.chat-confirmation-message-terminal-editor {
 	border-bottom: 1px solid var(--vscode-chat-requestBorder);
 }
-.chat-confirmation-widget2 .chat-confirmation-message-terminal .chat-confirmation-message-terminal-editor .interactive-result-code-block {
+.chat-confirmation-widget2
+	.chat-confirmation-message-terminal
+	.chat-confirmation-message-terminal-editor
+	.interactive-result-code-block {
 	border: none !important;
 }
 
-.chat-confirmation-message-terminal .chat-confirmation-message-terminal-disclaimer p:last-child {
+.chat-confirmation-message-terminal
+	.chat-confirmation-message-terminal-disclaimer
+	p:last-child {
 	margin-bottom: 0 !important;
 	padding: 5px 9px 0 9px;
 }
 
-.chat-confirmation-widget-container.hideButtons .chat-confirmation-widget-buttons,
+.chat-confirmation-widget-container.hideButtons
+	.chat-confirmation-widget-buttons,
 .chat-confirmation-widget-container.hideButtons .chat-toolbar-container {
 	display: none;
 }
 
 .chat-confirmation-widget2 .chat-confirmation-widget-buttons {
 	display: flex;
-	padding: 5px 9px;
+	padding: 12px;
 	font-size: var(--vscode-chat-font-size-body-m);
+	background: var(--vscode-editor-background);
+	gap: 8px;
+	justify-content: flex-end;
 
 	.chat-buttons {
 		display: flex;
-		column-gap: 10px;
+		column-gap: 8px;
+		row-gap: 8px;
 		align-items: center;
+		flex-wrap: wrap;
+		width: 100%;
+		justify-content: flex-end;
 
 		.monaco-button {
 			overflow-wrap: break-word;
-			padding: 2px 5px;
+			padding: 6px 16px;
+			min-height: 28px;
+			border-radius: 4px;
+			font-weight: 500;
+			transition: all 0.2s ease;
 			width: inherit;
 		}
+
+		/* Primary button (Allow) - blue styling */
+		.monaco-button:not(.secondary) {
+			background: var(--vscode-button-background);
+			color: var(--vscode-button-foreground);
+			border: 1px solid var(--vscode-button-border, transparent);
+		}
+
+		.monaco-button:not(.secondary):hover {
+			background: var(--vscode-button-hoverBackground);
+		}
+
+		.monaco-button:not(.secondary):active {
+			background: var(--vscode-button-activeBackground);
+		}
+
+		/* Secondary button (Skip) - gray styling */
+		.monaco-button.secondary {
+			background: var(--vscode-button-secondaryBackground);
+			color: var(--vscode-button-secondaryForeground);
+			border: 1px solid var(--vscode-button-secondaryBorder, transparent);
+		}
+
+		.monaco-button.secondary:hover {
+			background: var(--vscode-button-secondaryHoverBackground);
+		}
+
+		.monaco-button.secondary:active {
+			background: var(--vscode-button-secondaryActiveBackground);
+		}
+
+		/* When multiple primary buttons (like answer options), style them consistently */
+		.monaco-button:not(.secondary) + .monaco-button:not(.secondary) {
+			margin-left: 0;
+		}
+
+		/* Button with dropdown styling */
+		.monaco-button-dropdown {
+			display: inline-flex;
+			border-radius: 4px;
+			overflow: hidden;
+		}
+
+		.monaco-button-dropdown .monaco-button:first-child {
+			border-top-right-radius: 0;
+			border-bottom-right-radius: 0;
+			border-right: none;
+		}
+
+		.monaco-button-dropdown .monaco-dropdown-button {
+			border-top-left-radius: 0;
+			border-bottom-left-radius: 0;
+			padding: 6px 8px;
+			min-width: 28px;
+		}
+
+		.monaco-button-dropdown-separator {
+			width: 1px;
+			height: 100%;
+			background: var(--vscode-button-border, rgba(255, 255, 255, 0.2));
+			margin: 0;
+			border: none;
+		}
 	}
+}
+
+/* Dark dropdown menu styling for confirmation widget */
+.chat-confirmation-widget2
+	.monaco-button-dropdown
+	.monaco-dropdown-button:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+/* Context menu styling when opened from confirmation widget */
+.chat-confirmation-widget-container ~ .context-view.monaco-menu-container {
+	background: var(--vscode-menu-background);
+	border: 1px solid var(--vscode-menu-border);
+	border-radius: 6px;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+	padding: 4px 0;
+}
+
+.chat-confirmation-widget-container
+	~ .context-view.monaco-menu-container
+	.monaco-action-bar.vertical
+	.action-menu-item {
+	margin: 0 4px;
+	border-radius: 4px;
+}
+
+.chat-confirmation-widget-container
+	~ .context-view.monaco-menu-container
+	.monaco-action-bar.vertical
+	.action-menu-item:hover {
+	background: var(--vscode-menu-selectionBackground);
+	color: var(--vscode-menu-selectionForeground);
 }

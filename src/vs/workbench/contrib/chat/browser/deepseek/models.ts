@@ -20,22 +20,21 @@ export interface DeepSeekModelConfig {
  */
 export const DEEPSEEK_MODELS: DeepSeekModelConfig[] = [
 	{
-		id: 'deepseek-chat',
-		identifier: 'deepseek/deepseek-chat',
-		name: 'DeepSeek V3.2 Chat',
-		description: 'DeepSeek V3.2 - general purpose model, fast and efficient.',
+		id: "deepseek-chat",
+		identifier: "deepseek/deepseek-chat",
+		name: "DeepSeek V3.2 Chat",
+		description: "",
 		maxInputTokens: 64000,
 		maxOutputTokens: 8192,
-		isDefault: true
+		isDefault: true,
 	},
 	{
-		id: 'deepseek-reasoner',
-		identifier: 'deepseek/deepseek-reasoner',
-		name: 'DeepSeek V3.2 Reasoner',
-		description: 'DeepSeek V3.2 Reasoner - advanced thinking mode with step-by-step reasoning.',
+		id: "deepseek-reasoner",
+		identifier: "deepseek/deepseek-reasoner",
+		name: "DeepSeek V3.2 Reasoner",
+		description: "",
 		maxInputTokens: 64000,
 		maxOutputTokens: 8192,
-		isDefault: false
-	}
+		isDefault: false,
+	},
 ];
-

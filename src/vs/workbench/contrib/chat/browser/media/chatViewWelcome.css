@@ -236,7 +236,11 @@ div.chat-welcome-view {
 		border-radius: 4px;
 		background-color: var(--vscode-editorWidget-background);
 		cursor: pointer;
-		border: 1px solid var(--vscode-chat-requestBorder, var(--vscode-input-background, transparent));
+		border: 1px solid
+			var(
+				--vscode-chat-requestBorder,
+				var(--vscode-input-background, transparent)
+			);
 		max-width: 100%;
 		width: fit-content;
 		margin: 0;
@@ -267,7 +271,8 @@ div.chat-welcome-view {
 
 .chat-welcome-history-root {
 	width: 100%;
-	padding: 8px;
+	padding: 0 8px 8px 8px;
+	background-color: transparent;
 
 	&.chat-welcome-history-hidden {
 		display: none;
@@ -282,7 +287,7 @@ div.chat-welcome-view {
 		text-transform: uppercase;
 		letter-spacing: 0.5px;
 		min-height: 22px;
-		color: var(--vscode-descriptionForeground);
+		color: #858585; /* Muted gray for headers */
 
 		.chat-welcome-history-header-toolbar {
 			padding-right: 15px;
@@ -301,44 +306,92 @@ div.chat-welcome-view {
 		padding-right: 16px;
 	}
 
-
 	.chat-welcome-history {
-		margin: 0 8px 8px 8px;
+		margin: 0;
 		width: 100%;
 	}
 
 	.chat-welcome-history-list {
 		display: flex;
-		flex-direction: column;
-		border-radius: 4px;
-		overflow: hidden;
+		flex-direction: row;
+		overflow-x: auto;
+		overflow-y: hidden;
 		box-sizing: border-box;
-		padding: 0 16px 0 0;
+		padding: 8px 0;
+		background-color: transparent;
+		gap: 8px;
+		align-items: center;
+		scrollbar-width: thin;
+		scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+
+		/* Hide scrollbar for webkit browsers */
+		&::-webkit-scrollbar {
+			height: 4px;
+		}
+
+		&::-webkit-scrollbar-track {
+			background: transparent;
+		}
+
+		&::-webkit-scrollbar-thumb {
+			background: rgba(255, 255, 255, 0.1);
+			border-radius: 2px;
+		}
+
+		&::-webkit-scrollbar-thumb:hover {
+			background: rgba(255, 255, 255, 0.2);
+		}
 	}
 
 	.chat-welcome-history-item {
 		display: flex;
 		flex-direction: row;
-		border-radius: 4px;
+		border-radius: 6px;
 		align-items: center;
-		justify-content: space-between;
-		padding: 2px 12px 4px 12px;
-		gap: 8px;
+		justify-content: center;
+		padding: 6px 14px;
+		gap: 6px;
 		outline: none;
+		color: #858585; /* Muted gray text for inactive items */
+		background-color: transparent;
+		border: none;
+		cursor: pointer;
+		white-space: nowrap;
+		flex-shrink: 0;
+		transition: background-color 0.15s ease, color 0.15s ease;
+		min-height: 32px;
+		box-sizing: border-box;
+		position: relative;
+
+		&:hover {
+			background-color: rgba(255, 255, 255, 0.05);
+			color: #cccccc;
+		}
+
+		&:focus {
+			outline: 1px solid var(--vscode-focusBorder, rgba(255, 255, 255, 0.3));
+			outline-offset: -1px;
+		}
+
+		&.active {
+			background-color: #2d2d30; /* Darker background for active item like Cursor */
+			color: #ffffff; /* White text for active item */
+			font-weight: 500;
+		}
 
 		.chat-welcome-history-title {
 			font-size: 13px;
 			white-space: nowrap;
 			overflow: hidden;
 			text-overflow: ellipsis;
-			flex: 1 1 auto;
+			max-width: 250px; /* Limit width to prevent overly long tabs */
+			color: inherit;
+			font-weight: inherit;
+			line-height: 1.4;
 		}
 
 		.chat-welcome-history-date {
-			font-size: 11px;
-			color: var(--vscode-descriptionForeground);
-			flex: 0 0 auto;
-			margin-left: 8px;
+			display: none; /* Hide timestamp in horizontal layout for cleaner look */
 		}
 	}
 
@@ -346,19 +399,22 @@ div.chat-welcome-view {
 		color: var(--vscode-textLink-foreground);
 		text-decoration: none;
 		cursor: pointer;
-		padding: 2px 12px 4px 12px;
+		padding: 6px 14px;
 		border: none;
 		background: none;
 		text-align: left;
-		height: 22px;
-		display: flex;
+		height: 32px;
+		display: inline-flex;
 		align-items: center;
-		border-radius: 4px;
+		border-radius: 6px;
 		box-sizing: border-box;
-		margin-right: 14px;
+		margin-left: 8px;
+		flex-shrink: 0;
+		white-space: nowrap;
+		transition: background-color 0.15s ease;
 
 		&:hover {
-			background: var(--vscode-list-hoverBackground);
+			background: rgba(255, 255, 255, 0.05);
 		}
 
 		&:focus {
@@ -367,6 +423,8 @@ div.chat-welcome-view {
 		}
 	}
 }
+
+/* Monaco list styles removed - using custom horizontal layout instead */
 
 /* Chat history hover tooltip styling */
 .chat-history-item-hover {

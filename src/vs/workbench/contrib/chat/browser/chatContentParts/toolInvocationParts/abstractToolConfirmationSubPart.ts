@@ -3,23 +3,33 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Separator } from '../../../../../../base/common/actions.js';
-import { assertNever } from '../../../../../../base/common/assert.js';
-import { Codicon } from '../../../../../../base/common/codicons.js';
-import { toDisposable } from '../../../../../../base/common/lifecycle.js';
-import { localize } from '../../../../../../nls.js';
-import { ConfigurationTarget, IConfigurationService } from '../../../../../../platform/configuration/common/configuration.js';
-import { IContextKeyService } from '../../../../../../platform/contextkey/common/contextkey.js';
-import { IInstantiationService } from '../../../../../../platform/instantiation/common/instantiation.js';
-import { IKeybindingService } from '../../../../../../platform/keybinding/common/keybinding.js';
-import { ChatContextKeys } from '../../../common/chatContextKeys.js';
-import { ChatConfiguration } from '../../../common/constants.js';
-import { ConfirmedReason, IChatToolInvocation, ToolConfirmKind } from '../../../common/chatService.js';
-import { ILanguageModelToolsService } from '../../../common/languageModelToolsService.js';
-import { IChatWidgetService } from '../../chat.js';
-import { ChatCustomConfirmationWidget, IChatConfirmationButton } from '../chatConfirmationWidget.js';
-import { IChatContentPartRenderContext } from '../chatContentParts.js';
-import { BaseChatToolInvocationSubPart } from './chatToolInvocationSubPart.js';
+import { Separator } from "../../../../../../base/common/actions.js";
+import { assertNever } from "../../../../../../base/common/assert.js";
+import { Codicon } from "../../../../../../base/common/codicons.js";
+import { toDisposable } from "../../../../../../base/common/lifecycle.js";
+import { localize } from "../../../../../../nls.js";
+import {
+	ConfigurationTarget,
+	IConfigurationService,
+} from "../../../../../../platform/configuration/common/configuration.js";
+import { IContextKeyService } from "../../../../../../platform/contextkey/common/contextkey.js";
+import { IInstantiationService } from "../../../../../../platform/instantiation/common/instantiation.js";
+import { IKeybindingService } from "../../../../../../platform/keybinding/common/keybinding.js";
+import { ChatContextKeys } from "../../../common/chatContextKeys.js";
+import { ChatConfiguration } from "../../../common/constants.js";
+import {
+	ConfirmedReason,
+	IChatToolInvocation,
+	ToolConfirmKind,
+} from "../../../common/chatService.js";
+import { ILanguageModelToolsService } from "../../../common/languageModelToolsService.js";
+import { IChatWidgetService } from "../../chat.js";
+import {
+	ChatCustomConfirmationWidget,
+	IChatConfirmationButton,
+} from "../chatConfirmationWidget.js";
+import { IChatContentPartRenderContext } from "../chatContentParts.js";
+import { BaseChatToolInvocationSubPart } from "./chatToolInvocationSubPart.js";
 
 export const enum ConfirmationOutcome {
 	Allow,
@@ -39,7 +49,9 @@ export interface IToolConfirmationConfig {
 	subtitle?: string;
 }
 
-type AbstractToolPrimaryAction = IChatConfirmationButton<(() => void) | ConfirmationOutcome> | Separator;
+type AbstractToolPrimaryAction =
+	| IChatConfirmationButton<(() => void) | ConfirmationOutcome>
+	| Separator;
 
 /**
  * Base class for a tool confirmation.
@@ -52,119 +64,214 @@ export abstract class AbstractToolConfirmationSubPart extends BaseChatToolInvoca
 	constructor(
 		protected override readonly toolInvocation: IChatToolInvocation,
 		protected readonly context: IChatContentPartRenderContext,
-		@IInstantiationService protected readonly instantiationService: IInstantiationService,
-		@IKeybindingService protected readonly keybindingService: IKeybindingService,
-		@IContextKeyService protected readonly contextKeyService: IContextKeyService,
-		@IChatWidgetService protected readonly chatWidgetService: IChatWidgetService,
-		@ILanguageModelToolsService protected readonly languageModelToolsService: ILanguageModelToolsService,
-		@IConfigurationService protected readonly configurationService: IConfigurationService,
+		@IInstantiationService
+		protected readonly instantiationService: IInstantiationService,
+		@IKeybindingService
+		protected readonly keybindingService: IKeybindingService,
+		@IContextKeyService
+		protected readonly contextKeyService: IContextKeyService,
+		@IChatWidgetService
+		protected readonly chatWidgetService: IChatWidgetService,
+		@ILanguageModelToolsService
+		protected readonly languageModelToolsService: ILanguageModelToolsService,
+		@IConfigurationService
+		protected readonly configurationService: IConfigurationService
 	) {
 		super(toolInvocation);
 
-		if (toolInvocation.kind !== 'toolInvocation') {
-			throw new Error('Confirmation only works with live tool invocations');
+		if (toolInvocation.kind !== "toolInvocation") {
+			throw new Error("Confirmation only works with live tool invocations");
 		}
 	}
 	protected render(config: IToolConfirmationConfig) {
-		const { keybindingService, languageModelToolsService, toolInvocation } = this;
-		const allowKeybinding = keybindingService.lookupKeybinding(config.allowActionId)?.getLabel();
-		const allowTooltip = allowKeybinding ? `${config.allowLabel} (${allowKeybinding})` : config.allowLabel;
-		const skipKeybinding = keybindingService.lookupKeybinding(config.skipActionId)?.getLabel();
-		const skipTooltip = skipKeybinding ? `${config.skipLabel} (${skipKeybinding})` : config.skipLabel;
+		const { keybindingService, languageModelToolsService, toolInvocation } =
+			this;
+		const allowKeybinding = keybindingService
+			.lookupKeybinding(config.allowActionId)
+			?.getLabel();
+		const allowTooltip = allowKeybinding
+			? `${config.allowLabel} (${allowKeybinding})`
+			: config.allowLabel;
+		const skipKeybinding = keybindingService
+			.lookupKeybinding(config.skipActionId)
+			?.getLabel();
+		const skipTooltip = skipKeybinding
+			? `${config.skipLabel} (${skipKeybinding})`
+			: config.skipLabel;
 
-		// Check if "Always Allow All Tools" should be shown prominently
-		const permissionPreference = this.configurationService.getValue<string>(ChatConfiguration.ToolPermissionPreference);
-		const showAlwaysAllowAllTools = permissionPreference !== 'always';
+		// Check if we have custom actions (like askConfirmation tool) - display them directly
+		const customActions =
+			toolInvocation.confirmationMessages?.terminalCustomActions;
+		const buttons: IChatConfirmationButton<
+			ConfirmationOutcome | (() => void)
+		>[] = [];
 
-		const buttons: IChatConfirmationButton<ConfirmationOutcome | (() => void)>[] = [];
-		
-		// Add prominent "Always Allow All Tools" button if preference is not already 'always'
-		if (showAlwaysAllowAllTools && this.toolInvocation.confirmationMessages?.allowAutoConfirm !== false) {
+		if (customActions && customActions.length > 0) {
+			// Display custom actions directly as buttons (like Cursor's questions tool)
+			for (const action of customActions) {
+				if (!(action instanceof Separator)) {
+					buttons.push({
+						label: action.label,
+						tooltip: action.tooltip,
+						data: () => {
+							// Store the user's response in toolSpecificData
+							if (toolInvocation.toolSpecificData?.kind === "input") {
+								toolInvocation.toolSpecificData.rawInput = {
+									answer: action.data,
+								};
+							} else {
+								(toolInvocation as any).toolSpecificData = {
+									kind: "input",
+									rawInput: { answer: action.data },
+								};
+							}
+							this.confirmWith(toolInvocation, {
+								type: ToolConfirmKind.UserAction,
+							});
+						},
+					});
+				}
+			}
+			// Add Skip button as secondary
 			buttons.push({
-				label: localize('alwaysAllowAllTools', "Always Allow All Tools"),
-				tooltip: localize('alwaysAllowAllToolsTooltip', "Always allow all tools to run without asking for confirmation"),
-				data: ConfirmationOutcome.AlwaysAllowAllTools,
-			});
-		}
-
-		buttons.push(
-			{
-				label: config.allowLabel,
-				tooltip: allowTooltip,
-				data: ConfirmationOutcome.Allow,
-				moreActions: this.additionalPrimaryActions(),
-			},
-			{
-				label: localize('skip', "Skip"),
+				label: localize("skip", "Skip"),
 				tooltip: skipTooltip,
 				data: ConfirmationOutcome.Skip,
 				isSecondary: true,
+			});
+		} else {
+			// Default behavior: show Allow and Skip buttons
+			// Check if "Always Allow All Tools" should be shown prominently
+			const permissionPreference = this.configurationService.getValue<string>(
+				ChatConfiguration.ToolPermissionPreference
+			);
+			const showAlwaysAllowAllTools = permissionPreference !== "always";
+
+			// Add prominent "Always Allow All Tools" button if preference is not already 'always'
+			if (
+				showAlwaysAllowAllTools &&
+				this.toolInvocation.confirmationMessages?.allowAutoConfirm !== false
+			) {
+				buttons.push({
+					label: localize("alwaysAllowAllTools", "Always Allow All Tools"),
+					tooltip: localize(
+						"alwaysAllowAllToolsTooltip",
+						"Always allow all tools to run without asking for confirmation"
+					),
+					data: ConfirmationOutcome.AlwaysAllowAllTools,
+				});
 			}
-		);
+
+			buttons.push(
+				{
+					label: config.allowLabel,
+					tooltip: allowTooltip,
+					data: ConfirmationOutcome.Allow,
+					moreActions: this.additionalPrimaryActions(),
+				},
+				{
+					label: localize("skip", "Skip"),
+					tooltip: skipTooltip,
+					data: ConfirmationOutcome.Skip,
+					isSecondary: true,
+				}
+			);
+		}
 
 		const contentElement = this.createContentElement();
 		const tool = languageModelToolsService.getTool(toolInvocation.toolId);
-		const confirmWidget = this._register(this.instantiationService.createInstance(
-			ChatCustomConfirmationWidget<ConfirmationOutcome | (() => void)>,
-			this.context,
-			{
-				title: this.getTitle(),
-				icon: tool?.icon && 'id' in tool.icon ? tool.icon : Codicon.tools,
-				subtitle: config.subtitle,
-				buttons,
-				message: contentElement,
-				toolbarData: {
-					arg: toolInvocation,
-					partType: config.partType,
-					partSource: toolInvocation.source.type
+		const confirmWidget = this._register(
+			this.instantiationService.createInstance(
+				ChatCustomConfirmationWidget<ConfirmationOutcome | (() => void)>,
+				this.context,
+				{
+					title: this.getTitle(),
+					icon: tool?.icon && "id" in tool.icon ? tool.icon : Codicon.tools,
+					subtitle: config.subtitle,
+					buttons,
+					message: contentElement,
+					toolbarData: {
+						arg: toolInvocation,
+						partType: config.partType,
+						partSource: toolInvocation.source.type,
+					},
 				}
-			}
-		));
+			)
+		);
 
-		const hasToolConfirmation = ChatContextKeys.Editing.hasToolConfirmation.bindTo(this.contextKeyService);
+		const hasToolConfirmation =
+			ChatContextKeys.Editing.hasToolConfirmation.bindTo(
+				this.contextKeyService
+			);
 		hasToolConfirmation.set(true);
 
-		this._register(confirmWidget.onDidClick(async button => {
-			const confirm = (reason: ConfirmedReason) => this.confirmWith(toolInvocation, reason);
-			if (typeof button.data === 'function') {
-				button.data();
-			} else {
-				switch (button.data) {
-					case ConfirmationOutcome.AlwaysAllowAllTools:
-						// Set the preference to 'always' and confirm the current tool
-						await this.configurationService.updateValue(ChatConfiguration.ToolPermissionPreference, 'always', ConfigurationTarget.USER);
-						confirm({ type: ToolConfirmKind.Setting, id: ChatConfiguration.ToolPermissionPreference });
-						break;
-					case ConfirmationOutcome.AllowGlobally:
-						confirm({ type: ToolConfirmKind.LmServicePerTool, scope: 'profile' });
-						break;
-					case ConfirmationOutcome.AllowWorkspace:
-						confirm({ type: ToolConfirmKind.LmServicePerTool, scope: 'workspace' });
-						break;
-					case ConfirmationOutcome.AllowSession:
-						confirm({ type: ToolConfirmKind.LmServicePerTool, scope: 'session' });
-						break;
-					case ConfirmationOutcome.Allow:
-						confirm({ type: ToolConfirmKind.UserAction });
-						break;
-					case ConfirmationOutcome.Skip:
-						confirm({ type: ToolConfirmKind.Skipped });
-						break;
-					default:
-						assertNever(button.data);
+		this._register(
+			confirmWidget.onDidClick(async (button) => {
+				const confirm = (reason: ConfirmedReason) =>
+					this.confirmWith(toolInvocation, reason);
+				if (typeof button.data === "function") {
+					button.data();
+				} else {
+					switch (button.data) {
+						case ConfirmationOutcome.AlwaysAllowAllTools:
+							// Set the preference to 'always' and confirm the current tool
+							await this.configurationService.updateValue(
+								ChatConfiguration.ToolPermissionPreference,
+								"always",
+								ConfigurationTarget.USER
+							);
+							confirm({
+								type: ToolConfirmKind.Setting,
+								id: ChatConfiguration.ToolPermissionPreference,
+							});
+							break;
+						case ConfirmationOutcome.AllowGlobally:
+							confirm({
+								type: ToolConfirmKind.LmServicePerTool,
+								scope: "profile",
+							});
+							break;
+						case ConfirmationOutcome.AllowWorkspace:
+							confirm({
+								type: ToolConfirmKind.LmServicePerTool,
+								scope: "workspace",
+							});
+							break;
+						case ConfirmationOutcome.AllowSession:
+							confirm({
+								type: ToolConfirmKind.LmServicePerTool,
+								scope: "session",
+							});
+							break;
+						case ConfirmationOutcome.Allow:
+							confirm({ type: ToolConfirmKind.UserAction });
+							break;
+						case ConfirmationOutcome.Skip:
+							confirm({ type: ToolConfirmKind.Skipped });
+							break;
+						default:
+							assertNever(button.data);
+					}
 				}
-			}
 
-			this.chatWidgetService.getWidgetBySessionId(this.context.element.sessionId)?.focusInput();
-		}));
+				this.chatWidgetService
+					.getWidgetBySessionId(this.context.element.sessionId)
+					?.focusInput();
+			})
+		);
 
-		this._register(confirmWidget.onDidChangeHeight(() => this._onDidChangeHeight.fire()));
+		this._register(
+			confirmWidget.onDidChangeHeight(() => this._onDidChangeHeight.fire())
+		);
 		this._register(toDisposable(() => hasToolConfirmation.reset()));
 
 		this.domNode = confirmWidget.domNode;
 	}
 
-	protected confirmWith(toolInvocation: IChatToolInvocation, reason: ConfirmedReason): void {
+	protected confirmWith(
+		toolInvocation: IChatToolInvocation,
+		reason: ConfirmedReason
+	): void {
 		IChatToolInvocation.confirmWith(toolInvocation, reason);
 	}
 

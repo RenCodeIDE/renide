@@ -355,7 +355,9 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 				const autoConfirmWatch = StopWatch.create(true);
 				autoConfirmed = await autoConfirmPromise;
 				autoConfirmWatch.stop();
-				if (autoConfirmed) {
+				// Only auto-confirm if the tool allows it (allowAutoConfirm !== false)
+				// Tools like askConfirmation set allowAutoConfirm=false to always require user interaction
+				if (autoConfirmed && preparedInvocation?.confirmationMessages?.allowAutoConfirm !== false) {
 					IChatToolInvocation.confirmWith(toolInvocation, autoConfirmed);
 				}
 
@@ -364,7 +366,10 @@ export class LanguageModelToolsService extends Disposable implements ILanguageMo
 				dto.toolSpecificData = toolInvocation?.toolSpecificData;
 				if (preparedInvocation?.confirmationMessages?.title) {
 					const alreadyConfirmed = IChatToolInvocation.executionConfirmedOrDenied(toolInvocation);
-					if (!autoConfirmed && !alreadyConfirmed) {
+					// Wait for user confirmation if not already confirmed
+					// Also wait if tool disallows auto-confirm (even if autoConfirmed is true)
+					const disallowsAutoConfirm = preparedInvocation?.confirmationMessages?.allowAutoConfirm === false;
+					if ((!autoConfirmed || disallowsAutoConfirm) && !alreadyConfirmed) {
 						this.playAccessibilitySignal([toolInvocation]);
 						confirmationTimeWatch = StopWatch.create(true);
 						const userConfirmed = await IChatToolInvocation.awaitConfirmation(toolInvocation, token);

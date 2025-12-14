@@ -8,7 +8,6 @@ import * as dom from "../../../../base/browser/dom.js";
 import { renderFormattedText } from "../../../../base/browser/formattedTextRenderer.js";
 import { StandardKeyboardEvent } from "../../../../base/browser/keyboardEvent.js";
 import { IActionViewItemOptions } from "../../../../base/browser/ui/actionbar/actionViewItems.js";
-import { alert } from "../../../../base/browser/ui/aria/aria.js";
 import {
 	DropdownMenuActionViewItem,
 	IDropdownMenuActionViewItemOptions,
@@ -2241,7 +2240,7 @@ export class ChatListItemRenderer
 
 			return this.renderNoContent((other) => content.kind === other.kind);
 		} catch (err) {
-			alert(`Chat error: ${toErrorMessage(err, false)}`);
+			// Log the error without blocking the UI with alert()
 			this.logService.error(
 				"ChatListItemRenderer#renderChatContentPart: error rendering content",
 				toErrorMessage(err, true)

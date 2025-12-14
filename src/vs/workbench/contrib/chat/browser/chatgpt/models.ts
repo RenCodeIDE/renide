@@ -15,40 +15,21 @@ export interface ChatGPTModelConfig {
 
 export const CHATGPT_MODELS: ChatGPTModelConfig[] = [
 	{
-		id: 'gpt-5-2025-08-07',
-		identifier: 'openai/gpt-5-2025-08-07',
-		name: 'GPT-5',
-		description: 'OpenAI GPT-5 - most advanced model.',
+		id: "gpt-5-2025-08-07",
+		identifier: "openai/gpt-5-2025-08-07",
+		name: "GPT-5",
+		description: "",
 		maxInputTokens: 128000,
 		maxOutputTokens: 16384,
 		isDefault: false,
 	},
 	{
-		id: 'gpt-5-nano-2025-08-07',
-		identifier: 'openai/gpt-5-nano-2025-08-07',
-		name: 'GPT-5 Nano',
-		description: 'OpenAI GPT-5 Nano - fastest and most efficient.',
+		id: "gpt-5-nano-2025-08-07",
+		identifier: "openai/gpt-5-nano-2025-08-07",
+		name: "GPT-5 Nano",
+		description: "",
 		maxInputTokens: 128000,
 		maxOutputTokens: 16384,
 		isDefault: true,
 	},
-	{
-		id: 'gpt-4.1-2025-04-14',
-		identifier: 'openai/gpt-4.1-2025-04-14',
-		name: 'GPT-4.1',
-		description: 'OpenAI GPT-4.1 - balanced performance.',
-		maxInputTokens: 128000,
-		maxOutputTokens: 16384,
-		isDefault: false,
-	},
-	{
-		id: 'chatgpt-4o-latest',
-		identifier: 'openai/chatgpt-4o-latest',
-		name: 'GPT-4o',
-		description: 'OpenAI GPT-4o - optimized for chat.',
-		maxInputTokens: 128000,
-		maxOutputTokens: 16384,
-		isDefault: false,
-	},
 ];
-
