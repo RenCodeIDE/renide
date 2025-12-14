@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
+import { ContextKeyExpr } from '../../../../../platform/contextkey/common/contextkey.js';
 import { localize } from '../../../../../nls.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { IViewsService } from '../../../../services/views/common/viewsService.js';
@@ -20,6 +21,8 @@ export const OpenDocsToolData: IToolData = {
 	modelDescription: localize('openDocsTool.modelDescription', 'Opens the documentation panel in the sidebar and displays AI-generated documentation for a specific file. The docs panel opens without obstructing the main editor view, making it perfect for showing documentation alongside code.'),
 	source: ToolDataSource.Internal,
 	canBeReferencedInPrompt: true,
+	tags: ['ask-mode'],
+	when: ContextKeyExpr.equals('chatAgentKind', 'ask'),
 	inputSchema: {
 		type: 'object',
 		properties: {

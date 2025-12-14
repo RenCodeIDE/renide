@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
+import { ContextKeyExpr } from '../../../../../platform/contextkey/common/contextkey.js';
 import { localize } from '../../../../../nls.js';
 import { IRenViewManager } from '../../../renViews/browser/managers/renViewManager.js';
 import { CountTokensCallback, IPreparedToolInvocation, IToolData, IToolImpl, IToolInvocation, IToolInvocationPreparationContext, IToolResult, ToolDataSource, ToolProgress } from '../languageModelToolsService.js';
@@ -17,6 +18,8 @@ export const SwitchViewToolData: IToolData = {
 	modelDescription: localize('switchViewTool.modelDescription', 'Switches the IDE view between code view (for showing code files) and graph view (for showing dependency graphs and visualizations). Use this when you want to show the user different types of information - code in code view, visualizations in graph view.'),
 	source: ToolDataSource.Internal,
 	canBeReferencedInPrompt: true,
+	tags: ['ask-mode'],
+	when: ContextKeyExpr.equals('chatAgentKind', 'ask'),
 	inputSchema: {
 		type: 'object',
 		properties: {
@@ -62,13 +65,15 @@ export class SwitchViewTool implements IToolImpl {
 		const args = invocation.parameters as ISwitchViewToolParams;
 		console.log('[SwitchViewTool] invoke called with args:', JSON.stringify(args));
 
-		let viewMode = args.viewMode?.toLowerCase?.() as 'code' | 'graph' | undefined;
+		// Normalize and validate
+		const inputMode = args.viewMode?.trim().toLowerCase();
+		let viewMode = (inputMode === 'code' || inputMode === 'graph') ? inputMode : undefined;
 		
-		// If no mode provided, toggle based on current view
+		// If no valid mode provided, toggle based on current view
 		if (!viewMode) {
 			const currentView = this.renViewManager.getCurrentView();
 			viewMode = currentView === 'code' ? 'graph' : 'code';
-			console.log('[SwitchViewTool] No mode provided, toggling from', currentView, 'to', viewMode);
+			console.log('[SwitchViewTool] No valid mode provided (input:', args.viewMode, '), toggling from', currentView, 'to', viewMode);
 		}
 
 		if (viewMode !== 'code' && viewMode !== 'graph') {

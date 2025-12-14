@@ -4,131 +4,215 @@
  *--------------------------------------------------------------------------------------------*/
 
 .ren-account-dashboard-container {
+	height: 100%;
+	overflow: hidden;
 	display: flex;
 	flex-direction: column;
-	padding: 32px;
-	max-width: 800px;
-	margin: 0 auto;
 }
 
-.ren-account-dashboard-header {
+.ren-account-dashboard-body {
+	flex: 1;
+	overflow: hidden;
+	position: relative;
+}
+
+/* Sidebar Styles */
+.ren-account-dashboard-sidebar {
+	display: flex;
+	flex-direction: column;
+	padding: 16px;
+	background: var(--vscode-editor-background);
+	height: 100%;
+	overflow-y: auto;
+	overflow-x: hidden;
+}
+
+.ren-account-dashboard-user-info {
+	padding: 12px 0;
+	border-bottom: 1px solid var(--vscode-panel-border);
+	margin-bottom: 16px;
+}
+
+.ren-account-dashboard-user-email {
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--vscode-foreground);
+	margin-bottom: 4px;
+}
+
+.ren-account-dashboard-user-plan {
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+}
+
+.ren-account-dashboard-search-container {
+	margin-bottom: 16px;
+}
+
+.ren-account-dashboard-search-container .monaco-inputbox {
+	width: 100%;
+}
+
+/* Navigation List Styles */
+.ren-account-dashboard-nav-items {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
+.ren-account-dashboard-nav-item {
 	display: flex;
 	align-items: center;
-	gap: 24px;
-	margin-bottom: 32px;
-	padding-bottom: 24px;
-	border-bottom: 1px solid var(--vscode-panel-border);
+	gap: 8px;
+	padding: 8px 12px;
+	border-radius: 4px;
+	cursor: pointer;
+	color: var(--vscode-foreground);
+	font-size: 13px;
+	user-select: none;
+	transition: background-color 0.1s ease;
 }
 
-.ren-account-dashboard-avatar {
-	width: 80px;
-	height: 80px;
-	border-radius: 50%;
-	background: var(--vscode-badge-background);
+.ren-account-dashboard-nav-item:hover {
+	background-color: var(--vscode-list-hoverBackground);
+}
+
+.ren-account-dashboard-nav-item.selected {
+	background-color: var(--vscode-list-activeSelectionBackground);
+	color: var(--vscode-list-activeSelectionForeground);
+}
+
+.ren-account-dashboard-nav-icon {
+	font-size: 16px;
+	width: 16px;
+	height: 16px;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	font-size: 32px;
-	font-weight: 600;
-	color: var(--vscode-badge-foreground);
-	background-size: cover;
-	background-position: center;
-	flex-shrink: 0;
 }
 
-.ren-account-dashboard-info {
+.ren-account-dashboard-nav-label {
+	flex: 1;
+	line-height: 22px;
+}
+
+/* Content Area Styles */
+.ren-account-dashboard-content {
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
-	flex: 1;
+	height: 100%;
+	overflow-y: auto;
+	overflow-x: hidden;
+	padding: 24px;
+	background: var(--vscode-editor-background);
 }
 
-.ren-account-dashboard-name {
+.ren-account-dashboard-content-title {
 	font-size: 24px;
 	font-weight: 600;
 	color: var(--vscode-foreground);
+	margin-bottom: 32px;
 }
 
-.ren-account-dashboard-username {
-	font-size: 16px;
-	color: var(--vscode-descriptionForeground);
-}
-
-.ren-account-dashboard-email {
-	font-size: 14px;
-	color: var(--vscode-descriptionForeground);
-}
-
-.ren-account-dashboard-details {
+.ren-account-dashboard-content-body {
 	display: flex;
 	flex-direction: column;
-	gap: 16px;
+	gap: 32px;
+}
+
+/* Settings Section Styles */
+.ren-account-dashboard-settings-section {
 	margin-bottom: 32px;
-	padding: 24px;
-	background: var(--vscode-editor-background);
-	border: 1px solid var(--vscode-panel-border);
-	border-radius: 8px;
 }
 
-.ren-account-dashboard-row {
+.ren-account-dashboard-settings-section-title {
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--vscode-foreground);
+	margin-bottom: 16px;
+	text-transform: uppercase;
+	letter-spacing: 0.5px;
+}
+
+/* Settings Item Styles */
+.ren-account-dashboard-settings-item {
 	display: flex;
-	justify-content: space-between;
 	align-items: flex-start;
+	justify-content: space-between;
+	padding: 12px 0;
+	border-bottom: 1px solid var(--vscode-panel-border);
 	gap: 16px;
 }
 
-.ren-account-dashboard-label {
+.ren-account-dashboard-settings-item:last-child {
+	border-bottom: none;
+}
+
+.ren-account-dashboard-settings-item-left {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.ren-account-dashboard-settings-item-label {
 	font-size: 14px;
 	font-weight: 500;
 	color: var(--vscode-foreground);
-	flex-shrink: 0;
+	line-height: 1.4;
 }
 
-.ren-account-dashboard-value {
+.ren-account-dashboard-settings-item-subtitle {
+	font-size: 12px;
+	color: var(--vscode-descriptionForeground);
+	line-height: 1.4;
+}
+
+.ren-account-dashboard-settings-item-right {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+}
+
+.ren-account-dashboard-settings-item-value {
 	font-size: 14px;
 	color: var(--vscode-descriptionForeground);
 	text-align: right;
 	word-break: break-word;
-	flex: 1;
 }
 
-.ren-account-dashboard-actions {
-	display: flex;
-	gap: 12px;
-	flex-wrap: wrap;
+.ren-account-dashboard-upgrade-button {
+	background-color: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
 }
 
-.ren-account-dashboard-button {
-	min-width: 120px;
+.ren-account-dashboard-upgrade-button:hover {
+	background-color: var(--vscode-button-hoverBackground);
 }
 
 /* Responsive adjustments */
-@media (max-width: 600px) {
-	.ren-account-dashboard-container {
+@media (max-width: 800px) {
+	.ren-account-dashboard-content {
 		padding: 16px;
 	}
 
-	.ren-account-dashboard-header {
+	.ren-account-dashboard-content-title {
+		font-size: 20px;
+		margin-bottom: 24px;
+	}
+
+	.ren-account-dashboard-content-body {
+		gap: 24px;
+	}
+
+	.ren-account-dashboard-settings-item {
 		flex-direction: column;
-		align-items: center;
-		text-align: center;
+		align-items: flex-start;
 	}
 
-	.ren-account-dashboard-info {
-		align-items: center;
-	}
-
-	.ren-account-dashboard-row {
-		flex-direction: column;
-		gap: 4px;
-	}
-
-	.ren-account-dashboard-label {
-		text-align: left;
-	}
-
-	.ren-account-dashboard-value {
-		text-align: left;
+	.ren-account-dashboard-settings-item-right {
+		width: 100%;
+		justify-content: flex-start;
 	}
 }
-

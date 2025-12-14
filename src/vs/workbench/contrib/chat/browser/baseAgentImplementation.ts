@@ -864,22 +864,30 @@ Only call a tool if it is necessary; otherwise respond normally.`,
 		const summaries: string[] = [];
 		const usedToolNames = new Set<string>();
 
-		// Filter tools for the current mode
-		const tools = Array.from(this.languageModelToolsService.getTools());
+		// Use getTools(true) to bypass context key filtering.
+		// The global context key service doesn't have 'chatAgentKind' set properly,
+		// so we rely on explicit mode-based filtering below.
+		const allTools = Array.from(this.languageModelToolsService.getTools(true));
+		
+		// Filter tools based on chat mode
+		let tools: IToolData[];
+		if (chatMode === ChatModeKind.Ask) {
+			// In Ask mode, include ask-mode tools (tagged with 'ask-mode')
+			// and general tools (not exclusively for agent mode)
+			tools = allTools.filter(tool => 
+				tool.tags?.includes('ask-mode') || !tool.tags?.includes('agent-only')
+			);
+		} else {
+			// In non-ask modes, exclude ask-mode-only tools
+			tools = allTools.filter(tool => !tool.tags?.includes('ask-mode'));
+		}
+
 		const currentRequestTools = this.requestTools.get(requestId);
 		const toolUserSelection =
 			currentRequestTools === undefined || currentRequestTools === null
 				? true
 				: currentRequestTools;
 
-		// Skip tools mostly if it's not a tool-compatible mode, but keeping logic consistent with original
-		if (chatMode === ChatModeKind.Ask) {
-			// In Ask mode, we usually don't use tools unless specific ones; but original code still built them?
-			// Actually original deepseek agent uses tools for all modes but different endpoint?
-			// Claude/Gemini switch endpoint.
-			// We'll let `performRequest` decide if tools are sent.
-			// But we need to build them to pass to performRequest.
-		}
 
 		let toolIndex = 0;
 		for (const tool of tools) {

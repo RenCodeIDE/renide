@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { CancellationToken } from '../../../../../base/common/cancellation.js';
+import { ContextKeyExpr } from '../../../../../platform/contextkey/common/contextkey.js';
 import { localize } from '../../../../../nls.js';
 import { URI } from '../../../../../base/common/uri.js';
 import { IRenViewManager } from '../../../renViews/browser/managers/renViewManager.js';
@@ -21,6 +22,8 @@ export const GraphControlToolData: IToolData = {
 	modelDescription: localize('graphControlTool.modelDescription', 'Controls the graph view to display different types of visualizations. Can change graph type (file dependencies, folder structure, workspace overview, git heatmap, data flow analysis, evolution timeline, or change impact) and optionally specify a target file or folder to visualize. Automatically switches to graph view if not already active.'),
 	source: ToolDataSource.Internal,
 	canBeReferencedInPrompt: true,
+	tags: ['ask-mode'],
+	when: ContextKeyExpr.equals('chatAgentKind', 'ask'),
 	inputSchema: {
 		type: 'object',
 		properties: {
@@ -34,13 +37,13 @@ export const GraphControlToolData: IToolData = {
 				description: localize('graphControlTool.targetPath', 'Optional: The file or folder path to visualize. Required for "file" and "folder" modes. Can be absolute or workspace-relative path.')
 			}
 		},
-		required: ['graphType'],
+		required: [],
 		additionalProperties: false
 	}
 };
 
 export interface IGraphControlToolParams {
-	graphType: GraphMode;
+	graphType?: GraphMode;
 	targetPath?: string;
 }
 
@@ -53,7 +56,8 @@ export class GraphControlTool implements IToolImpl {
 	async prepareToolInvocation(context: IToolInvocationPreparationContext, token: CancellationToken): Promise<IPreparedToolInvocation | undefined> {
 		const parameters = context.parameters as IGraphControlToolParams;
 		
-		const graphTypeLabel = this.getGraphTypeLabel(parameters.graphType);
+		const graphType = parameters.graphType || 'workspace';
+		const graphTypeLabel = this.getGraphTypeLabel(graphType);
 		const targetInfo = parameters.targetPath ? ` for ${parameters.targetPath}` : '';
 
 		return {
@@ -66,24 +70,27 @@ export class GraphControlTool implements IToolImpl {
 		const args = invocation.parameters as IGraphControlToolParams;
 		console.log('[GraphControlTool] invoke called with args:', JSON.stringify(args));
 
+		// Default to workspace if not provided and normalize
+		const graphType = (args.graphType || 'workspace').trim().toLowerCase() as GraphMode;
+
 		// Validate graph type
 		const validGraphTypes: GraphMode[] = ['file', 'folder', 'workspace', 'architecture', 'gitHeatmap', 'dataFlow', 'evolution', 'changeImpact'];
-		if (!validGraphTypes.includes(args.graphType)) {
+		if (!validGraphTypes.includes(graphType)) {
 			return {
 				content: [{
 					kind: 'text',
-					value: localize('graphControlTool.invalidType', 'Invalid graph type "{0}". Must be one of: {1}', args.graphType, validGraphTypes.join(', '))
+					value: localize('graphControlTool.invalidType', 'Invalid graph type "{0}". Must be one of: {1}', graphType, validGraphTypes.join(', '))
 				}],
-				toolResultMessage: localize('graphControlTool.error', 'Failed to control graph: invalid type "{0}". Must be one of: {1}', args.graphType, validGraphTypes.join(', '))
+				toolResultMessage: localize('graphControlTool.error', 'Failed to control graph: invalid type "{0}". Must be one of: {1}', graphType, validGraphTypes.join(', '))
 			};
 		}
 
 		// Check if target path is required but missing
-		if ((args.graphType === 'file' || args.graphType === 'folder') && !args.targetPath) {
+		if ((graphType === 'file' || graphType === 'folder') && !args.targetPath) {
 			return {
 				content: [{
 					kind: 'text',
-					value: localize('graphControlTool.missingTarget', 'Graph type "{0}" requires a targetPath parameter', args.graphType)
+					value: localize('graphControlTool.missingTarget', 'Graph type "{0}" requires a targetPath parameter', graphType)
 				}],
 				toolResultMessage: localize('graphControlTool.error', 'Failed to control graph: missing target path')
 			};
@@ -116,9 +123,9 @@ export class GraphControlTool implements IToolImpl {
 
 			// Use the programmatic APIs to render the graph directly
 			// This bypasses file pickers and renders immediately
-			await this.triggerRender(graphView, args.graphType, targetUri);
+			await this.triggerRender(graphView, graphType, targetUri);
 
-			const graphTypeLabel = this.getGraphTypeLabel(args.graphType);
+			const graphTypeLabel = this.getGraphTypeLabel(graphType);
 			const targetInfo = args.targetPath ? ` for ${args.targetPath}` : '';
 			const message = localize('graphControlTool.success', 'Graph view showing {0}{1}', graphTypeLabel, targetInfo);
 
