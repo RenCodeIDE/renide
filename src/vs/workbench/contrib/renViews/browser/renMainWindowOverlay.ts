@@ -70,9 +70,11 @@ export class RenMainWindowOverlay {
 				container: HTMLElement;
 			}>;
 			// Only handle events that originated from this container's ViewButtons
+			// Accept both this.container (editor group) and this._overlayElement (from ViewManager dispatch)
 			if (
 				customEvent.detail &&
-				customEvent.detail.container === this.container
+				(customEvent.detail.container === this.container ||
+					customEvent.detail.container === this._overlayElement)
 			) {
 				this._isHandlingEvent = true;
 				try {

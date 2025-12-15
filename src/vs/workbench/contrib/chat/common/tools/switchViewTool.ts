@@ -73,7 +73,7 @@ export interface ISwitchViewToolParams {
 export class SwitchViewTool implements IToolImpl {
 	constructor(
 		@IRenViewManager private readonly renViewManager: IRenViewManager
-	) {}
+	) { }
 
 	async prepareToolInvocation(
 		context: IToolInvocationPreparationContext,

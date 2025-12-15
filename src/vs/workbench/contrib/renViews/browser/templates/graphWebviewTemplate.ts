@@ -523,6 +523,34 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			};
 			const DEFAULT_CATEGORY_STYLE = { color: '#4FC3F7' };
 
+			// Canonical layer order used for layout and edge routing
+			const LAYER_ORDER: Record<string, number> = {
+				// Frontend
+				pages: 0,
+				layouts: 1,
+				features: 2,
+				components: 3,
+				hooks: 4,
+				state: 5,
+				'routing': 6,
+				'api-client': 7,
+				// Backend
+				routes: 0,
+				controllers: 1,
+				services: 2,
+				repositories: 3,
+				models: 4,
+				middleware: 5,
+				infrastructure: 6,
+				jobs: 7,
+				// Shared
+				shared: 10,
+				config: 11,
+				types: 12,
+				external: 13,
+				tests: 14
+			};
+
 		const normalizeCategory = value => (value || '').toString().toLowerCase().replace(/[^a-z0-9]+/g, '-');
 		const titleCase = value => {
 				if (!value) {
@@ -633,7 +661,8 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			}
 			legendEl.innerHTML = '';
 			categoryState.clear();
-			if (!payload || (payload.mode !== 'architecture' && payload.mode !== 'dataFlow')) {
+			const archModes = ['architecture', 'dataFlow', 'frontendArch', 'backendArch', 'fullstackArch', 'smartArch'];
+			if (!payload || !archModes.includes(payload.mode)) {
 				legendEl.classList.remove('visible');
 				return;
 			}
@@ -1128,6 +1157,12 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 							'text-max-width': 200,
 							'text-valign': 'center',
 							'text-halign': 'center',
+							// Apply size to all nodes - parent nodes will override this
+							'width': 'data(visualSize)',
+							'height': 'data(visualSize)'
+						}},
+						// Specific arch-* classes can override with their own sizing if needed
+						{ selector: '.arch-page, .arch-layout, .arch-component, .arch-hook, .arch-context, .arch-store, .arch-utils, .arch-types, .arch-controller, .arch-service, .arch-repository, .arch-middleware, .arch-route', style: {
 							'width': 'data(visualSize)',
 							'height': 'data(visualSize)'
 						}},
@@ -1210,6 +1245,173 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 							'border-color': '#455A64',
 							'color': '#ffffff'
 						}},
+						// Compound/Parent node styles (layer containers)
+						// These are the horizontal boxes that contain component nodes
+						{ selector: ':parent', style: {
+							'background-color': 'data(bgColor)',
+							'background-opacity': 0.15,
+							'border-color': 'data(borderColor)',
+							'border-width': 3,
+							'border-style': 'solid',
+							'border-opacity': 0.6,
+							'shape': 'round-rectangle',
+							'padding': 30,
+							'text-valign': 'top',
+							'text-halign': 'left',
+							'text-margin-x': 15,
+							'text-margin-y': 10,
+							'font-size': 16,
+							'font-weight': 'bold',
+							'color': 'data(borderColor)',
+							'text-background-color': 'rgba(0,0,0,0.7)',
+							'text-background-opacity': 1,
+							'text-background-padding': '6px',
+							'text-background-shape': 'roundrectangle',
+							'min-width': 300,
+							'min-height': 100
+						}},
+						// Group/container node styles (explicit group class)
+						{ selector: 'node.group', style: {
+							'background-color': 'data(bgColor)',
+							'background-opacity': 0.2,
+							'border-color': 'data(borderColor)',
+							'border-width': 3,
+							'border-style': 'solid',
+							'shape': 'round-rectangle',
+							'padding': 30
+						}},
+						// Layer-specific container styles
+						{ selector: 'node.layer-pages', style: {
+							'background-color': '#3B82F6',
+							'border-color': '#1E40AF'
+						}},
+						{ selector: 'node.layer-layouts', style: {
+							'background-color': '#8B5CF6',
+							'border-color': '#5B21B6'
+						}},
+						{ selector: 'node.layer-components', style: {
+							'background-color': '#10B981',
+							'border-color': '#047857'
+						}},
+						{ selector: 'node.layer-hooks', style: {
+							'background-color': '#F59E0B',
+							'border-color': '#B45309'
+						}},
+						{ selector: 'node.layer-state', style: {
+							'background-color': '#6366F1',
+							'border-color': '#4338CA'
+						}},
+						{ selector: 'node.layer-api-client', style: {
+							'background-color': '#14B8A6',
+							'border-color': '#0D9488'
+						}},
+						{ selector: 'node.layer-routes', style: {
+							'background-color': '#3B82F6',
+							'border-color': '#1E40AF'
+						}},
+						{ selector: 'node.layer-controllers', style: {
+							'background-color': '#0EA5E9',
+							'border-color': '#0369A1'
+						}},
+						{ selector: 'node.layer-services', style: {
+							'background-color': '#22C55E',
+							'border-color': '#15803D'
+						}},
+						{ selector: 'node.layer-repositories', style: {
+							'background-color': '#A855F7',
+							'border-color': '#7E22CE'
+						}},
+						{ selector: 'node.layer-models', style: {
+							'background-color': '#F97316',
+							'border-color': '#C2410C'
+						}},
+						{ selector: 'node.layer-middleware', style: {
+							'background-color': '#EF4444',
+							'border-color': '#B91C1C'
+						}},
+						{ selector: 'node.layer-shared', style: {
+							'background-color': '#6B7280',
+							'border-color': '#374151'
+						}},
+						{ selector: 'node.layer-config', style: {
+							'background-color': '#9CA3AF',
+							'border-color': '#4B5563'
+						}},
+						{ selector: 'node.layer-types', style: {
+							'background-color': '#D1D5DB',
+							'border-color': '#6B7280'
+						}},
+						{ selector: 'node.layer-external', style: {
+							'background-color': '#E5E7EB',
+							'border-color': '#9CA3AF'
+						}},
+						// Frontend Architecture component type styles
+						{ selector: 'node.arch-page', style: {
+							'background-color': '#3B82F6',  // Blue
+							'border-color': '#1E40AF',
+							'border-width': 3,
+							'shape': 'round-rectangle',
+							'color': '#ffffff'
+						}},
+						{ selector: 'node.arch-layout', style: {
+							'background-color': '#8B5CF6',  // Purple
+							'border-color': '#5B21B6',
+							'border-width': 3,
+							'shape': 'round-rectangle',
+							'color': '#ffffff'
+						}},
+						{ selector: 'node.arch-component', style: {
+							'background-color': '#10B981',  // Green
+							'border-color': '#047857',
+							'color': '#ffffff'
+						}},
+						{ selector: 'node.arch-hook', style: {
+							'background-color': '#F59E0B',  // Orange
+							'border-color': '#B45309',
+							'shape': 'diamond',
+							'color': '#ffffff'
+						}},
+						{ selector: 'node.arch-context', style: {
+							'background-color': '#EC4899',  // Pink
+							'border-color': '#BE185D',
+							'shape': 'hexagon',
+							'color': '#ffffff'
+						}},
+						{ selector: 'node.arch-store', style: {
+							'background-color': '#6366F1',  // Indigo
+							'border-color': '#4338CA',
+							'shape': 'octagon',
+							'color': '#ffffff'
+						}},
+						// Backend Architecture type styles
+						{ selector: 'node.arch-controller', style: {
+							'background-color': '#0EA5E9',  // Sky
+							'border-color': '#0369A1',
+							'shape': 'round-rectangle',
+							'color': '#ffffff'
+						}},
+						{ selector: 'node.arch-service', style: {
+							'background-color': '#22C55E',  // Green
+							'border-color': '#15803D',
+							'color': '#ffffff'
+						}},
+						{ selector: 'node.arch-repository', style: {
+							'background-color': '#A855F7',  // Purple
+							'border-color': '#7E22CE',
+							'shape': 'barrel',
+							'color': '#ffffff'
+						}},
+						{ selector: 'node.arch-middleware', style: {
+							'background-color': '#F97316',  // Orange
+							'border-color': '#C2410C',
+							'shape': 'rhomboid',
+							'color': '#ffffff'
+						}},
+						{ selector: 'node.arch-route', style: {
+							'background-color': '#14B8A6',  // Teal
+							'border-color': '#0D9488',
+							'color': '#ffffff'
+						}},
 						{ selector: 'edge', style: {
 							'width': 2,
 							'curve-style': 'bezier',
@@ -1226,6 +1428,44 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 							'text-background-opacity': 1,
 							'text-background-padding': '2px',
 							'text-background-shape': 'roundrectangle'
+						}},
+						// Edges that cross layers are slightly stronger
+						{ selector: 'edge.edge-cross-layer', style: {
+							'width': 2.5,
+							'opacity': 0.9
+						}},
+						// Intra-layer edges are de-emphasized
+						{ selector: 'edge.edge-same-layer', style: {
+							'opacity': 0.4
+						}},
+						// Directional endpoints for cross-layer edges (downwards)
+						{ selector: 'edge.edge-dir-down', style: {
+							'source-endpoint': '0.5 1.0',
+							'target-endpoint': '0.5 0.0'
+						}},
+						// Directional endpoints for cross-layer edges (upwards)
+						{ selector: 'edge.edge-dir-up', style: {
+							'source-endpoint': '0.5 0.0',
+							'target-endpoint': '0.5 1.0'
+						}},
+						// Type-specific edge styling for architecture views
+						{ selector: 'edge.edge-type-imports', style: {
+							'line-style': 'solid'
+						}},
+						{ selector: 'edge.edge-type-calls', style: {
+							'width': 3,
+							'line-color': '#81C784',
+							'target-arrow-color': '#81C784'
+						}},
+						{ selector: 'edge.edge-type-uses-state', style: {
+							'line-style': 'dashed',
+							'line-color': '#FFB74D',
+							'target-arrow-color': '#FFB74D'
+						}},
+						{ selector: 'edge.edge-type-fetches', style: {
+							'line-style': 'dotted',
+							'line-color': '#4DD0E1',
+							'target-arrow-color': '#4DD0E1'
 						}},
 						{ selector: 'edge.external', style: {
 							'line-color': '#B39DDB',
@@ -1405,34 +1645,69 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 
 			const applyGraph = payload => {
 				if (!payload) {
+					console.error('[GraphWebview] applyGraph called with null/undefined payload');
 					return;
 				}
-				ensureCy();
-				clearSelectionHighlight();
-				cy.stop();
-				cy.elements().remove();
-				if (payload.mode === 'gitHeatmap' && payload.heatmap) {
-					renderHeatmap(payload.heatmap);
-					return;
-				}
-				heatmapMode = false;
-				heatmapSelection = null;
-				setHeatmapSummary(null);
-				updateControlVisibility();
-				if (selectModeButton) {
-					selectModeButton.disabled = false;
-				}
-				const selectButton = document.getElementById('selectFile');
-				if (selectButton) {
-					if (payload.mode === 'architecture' || payload.mode === 'dataFlow') {
-						selectButton.textContent = 'Refresh Analysis';
-						selectButton.title = 'Re-run architecture detection';
-					} else {
-						selectButton.textContent = 'Select Target...';
-						selectButton.title = 'Select a target to visualize';
+				try {
+					ensureCy();
+					clearSelectionHighlight();
+					cy.stop();
+					cy.elements().remove();
+					if (payload.mode === 'gitHeatmap' && payload.heatmap) {
+						renderHeatmap(payload.heatmap);
+						return;
 					}
-				}
-				const buildDisplayLabel = (node, mode) => {
+					heatmapMode = false;
+					heatmapSelection = null;
+					setHeatmapSummary(null);
+					updateControlVisibility();
+					if (selectModeButton) {
+						selectModeButton.disabled = false;
+					}
+					const selectButton = document.getElementById('selectFile');
+					if (selectButton) {
+						const archModes = ['architecture', 'dataFlow', 'frontendArch', 'backendArch', 'fullstackArch', 'smartArch'];
+						if (archModes.includes(payload.mode)) {
+							selectButton.textContent = 'Refresh Analysis';
+							selectButton.title = 'Re-run architecture detection';
+						} else {
+							selectButton.textContent = 'Select Target...';
+							selectButton.title = 'Select a target to visualize';
+						}
+					}
+
+					const buildDisplayLabel = (node, mode) => {
+						// For architecture modes, use concise labels (filename without extension)
+						const archModes = ['frontendArch', 'backendArch', 'fullstackArch', 'smartArch'];
+						if (archModes.includes(mode)) {
+							// Check for explicit conciseLabel in metadata
+							if (node.metadata?.conciseLabel) {
+								return node.metadata.conciseLabel;
+							}
+							// For group/container nodes, use the label as-is
+							if (node.metadata?.isGroup) {
+								return node.label;
+							}
+							// Extract concise name from file path or label
+							let concise = node.label;
+							// Remove file extension
+							concise = concise.replace(/\\.[^.]+$/, '');
+							// If label looks like a path, get just the filename
+							if (concise.includes('/') || concise.includes('\\\\')) {
+								const parts = concise.split(/[\\\\/]/);
+								concise = parts[parts.length - 1];
+							}
+							// Handle index files - show parent folder name
+							if (concise.toLowerCase() === 'index') {
+								const pathParts = (node.path || node.label).split(/[\\\\/]/);
+								if (pathParts.length >= 2) {
+									concise = pathParts[pathParts.length - 2];
+								}
+							}
+							return concise;
+						}
+
+						// Standard label handling for other modes
 					let label = node.label;
 					if (mode === 'architecture' && typeof node.confidence === 'number' && !Number.isNaN(node.confidence)) {
 						label += ' · ' + Math.round(node.confidence * 100) + '%';
@@ -1440,115 +1715,450 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					if (mode === 'dataFlow' && node.metadata?.isRoot) {
 						label += ' (root)';
 					}
-					return label;
-				};
+						return label;
+					};
 
-			const nodePayloads = payload.nodes || [];
-			const getSizingValue = node => {
-				if (sizingMode === 'imports') {
-					return Math.max(1, node.fanIn !== undefined ? node.fanIn : 1);
-				} else {
-					return Math.max(1, node.fanOut !== undefined ? node.fanOut : 1);
-				}
-			};
-			const weights = nodePayloads.map(node => getSizingValue(node));
-			const maxWeight = weights.length ? Math.max(...weights) : 1;
-			const minWeight = weights.length ? Math.min(...weights) : 1;
-			const computeSize = (node) => {
-				const weight = getSizingValue(node);
-				if (maxWeight === minWeight) {
-					return 90;
-				}
-				const normalized = (weight - minWeight) / (maxWeight - minWeight);
-				return 70 + normalized * 120;
-			};
+					const nodePayloads = payload.nodes || [];
+					console.log('[GraphWebview] Processing graph:', { mode: payload.mode, nodeCount: nodePayloads.length, edgeCount: (payload.edges || []).length });
 
-			const nodes = nodePayloads.map(node => {
-				const displayLabel = buildDisplayLabel(node, payload.mode);
-				const classNames = new Set();
-				if (node.kind) {
-					classNames.add(node.kind);
-				}
-				if (payload.mode === 'architecture') {
-					classNames.add('architecture');
-					if (node.category) {
-						classNames.add('category-' + normalizeCategory(node.category));
+					// Build a map of nodeId -> layerId for edge routing
+					const nodeLayerById = new Map();
+					nodePayloads.forEach(node => {
+						const layer = node.layer || node.category || node.metadata?.layer;
+						if (layer) {
+							nodeLayerById.set(node.id, layer);
+						}
+					});
+
+					if (!nodePayloads || nodePayloads.length === 0) {
+						console.warn('[GraphWebview] No nodes to render');
+						updateStatus('No nodes to display.', 'warning');
+						return;
 					}
-				}
-				if (payload.mode === 'dataFlow') {
-					classNames.add('dataflow');
-					if (node.metadata?.isRoot) {
-						classNames.add('root-function');
+
+					const getSizingValue = node => {
+						if (sizingMode === 'imports') {
+							return Math.max(1, node.fanIn !== undefined ? node.fanIn : 1);
+						} else {
+							return Math.max(1, node.fanOut !== undefined ? node.fanOut : 1);
+						}
+					};
+					const weights = nodePayloads.map(node => getSizingValue(node));
+					const maxWeight = weights.length ? Math.max(...weights) : 1;
+					const minWeight = weights.length ? Math.min(...weights) : 1;
+					const computeSize = (node) => {
+						const weight = getSizingValue(node);
+						if (maxWeight === minWeight) {
+							return 90;
+						}
+						const normalized = (weight - minWeight) / (maxWeight - minWeight);
+						return 70 + normalized * 120;
+					};
+
+					let nodes;
+					try {
+						let debugCount = 0;
+						nodes = nodePayloads.map(node => {
+							const displayLabel = buildDisplayLabel(node, payload.mode);
+							const classNames = new Set();
+							if (node.kind) {
+								classNames.add(node.kind);
+							}
+							// Handle regular architecture mode
+							if (payload.mode === 'architecture') {
+								classNames.add('architecture');
+								if (node.category) {
+									classNames.add('category-' + normalizeCategory(node.category));
+								}
+							}
+							// Handle context-aware architecture modes
+							const archModes = ['frontendArch', 'backendArch', 'fullstackArch', 'smartArch'];
+							if (archModes.includes(payload.mode)) {
+								classNames.add('architecture');
+								// Use metadata.type for original ArchNodeType (page, component, etc.)
+								// Fall back to node.kind if metadata.type is not available
+								const archType = node.metadata?.type || node.kind;
+								if (archType) {
+									const archClass = 'arch-' + archType;
+									classNames.add(archClass);
+									// Debug: log first few nodes to verify classes
+									if (debugCount < 3) {
+										console.log('[GraphWebview] Node', node.id, 'archType:', archType, 'class:', archClass, 'metadata.type:', node.metadata?.type);
+										debugCount++;
+									}
+								}
+								// Also support layer-based styling
+								if (node.layer || node.metadata?.layer) {
+									classNames.add('layer-' + (node.layer || node.metadata.layer));
+								}
+							}
+							if (payload.mode === 'dataFlow') {
+								classNames.add('dataflow');
+								if (node.metadata?.isRoot) {
+									classNames.add('root-function');
+								}
+							}
+							const computedSize = computeSize(node);
+							const finalClasses = Array.from(classNames).concat(node.isGroup ? ['group'] : []).join(' ');
+							const nodeData = {
+								group: 'nodes',
+								data: {
+									id: node.id,
+									label: node.label,
+									displayLabel,
+									path: node.path,
+									kind: node.kind,
+									parent: node.parent, // For Cytoscape compound nodes
+									fanIn: node.fanIn !== undefined ? node.fanIn : 0,
+									fanOut: node.fanOut !== undefined ? node.fanOut : 0,
+									visualSize: computedSize,
+									openable: node.openable !== undefined ? node.openable : true,
+									category: node.category ?? null,
+									confidence: node.confidence ?? null,
+									tags: node.tags ?? [],
+									metadata: node.metadata ?? {},
+									description: node.description ?? '',
+									evidence: node.evidence ?? []
+								},
+								classes: finalClasses
+							};
+							return nodeData;
+						});
+
+						// Debug first few nodes after mapping
+						if (nodes.length > 0) {
+							console.log('[GraphWebview] Sample nodes:', nodes.slice(0, 3).map(n => ({
+								id: n.data.id,
+								label: n.data.label,
+								size: n.data.visualSize,
+								classes: n.classes
+							})));
+						}
+					} catch (nodeError) {
+						console.error('[GraphWebview] Error processing nodes:', nodeError);
+						updateStatus('Error processing graph nodes. Check console for details.', 'error');
+						return;
 					}
+
+					let edges;
+					try {
+						edges = (payload.edges || []).map(edge => {
+							const classNames = new Set();
+							if (edge.kind) {
+								classNames.add(edge.kind);
+							}
+							// Architecture relationship styling
+							if (payload.mode === 'architecture' && edge.category) {
+								classNames.add('relationship-' + normalizeCategory(edge.category));
+							}
+
+							// Edge type (imports, calls, uses-state, fetches, etc.)
+							const edgeType = edge.metadata?.type || edge.category || 'unknown';
+							if (edgeType) {
+								classNames.add('edge-type-' + normalizeCategory(edgeType));
+							}
+
+							// Layer-aware routing: determine source/target layers
+							const sourceLayer = nodeLayerById.get(edge.source) || null;
+							const targetLayer = nodeLayerById.get(edge.target) || null;
+							let sameLayer = false;
+							if (sourceLayer && targetLayer) {
+								if (sourceLayer === targetLayer) {
+									sameLayer = true;
+									classNames.add('edge-same-layer');
+								} else {
+									classNames.add('edge-cross-layer');
+									const srcOrder = LAYER_ORDER[sourceLayer] ?? 0;
+									const tgtOrder = LAYER_ORDER[targetLayer] ?? 0;
+									if (srcOrder < tgtOrder) {
+										classNames.add('edge-dir-down');
+									} else if (srcOrder > tgtOrder) {
+										classNames.add('edge-dir-up');
+									}
+								}
+								classNames.add(
+									'edge-layer-' +
+										normalizeCategory(sourceLayer) +
+										'-' +
+										normalizeCategory(targetLayer)
+								);
+							}
+
+							return {
+								group: 'edges',
+								data: {
+									id: edge.id,
+									source: edge.source,
+									target: edge.target,
+									label: edge.label,
+									specifier: edge.specifier,
+									sourcePath: edge.sourcePath,
+									targetPath: edge.targetPath,
+									symbols: edge.symbols ?? [],
+									category: edge.category ?? null,
+									confidence: edge.confidence ?? null,
+									metadata: edge.metadata ?? {},
+									sourceLayer: sourceLayer || null,
+									targetLayer: targetLayer || null,
+									sameLayer: sameLayer,
+									evidence: edge.evidence ?? []
+								},
+								classes: Array.from(classNames).join(' ')
+							};
+						});
+					} catch (edgeError) {
+						console.error('[GraphWebview] Error processing edges:', edgeError);
+						updateStatus('Error processing graph edges. Check console for details.', 'error');
+						return;
+					}
+
+					console.log('[GraphWebview] Prepared', nodes.length, 'nodes and', edges.length, 'edges for rendering');
+
+					try {
+						console.log('[GraphWebview] Adding', nodes.length, 'nodes and', edges.length, 'edges to Cytoscape');
+						const addedElements = cy.add([...nodes, ...edges]);
+						console.log('[GraphWebview] Added elements:', addedElements.length, 'total (nodes:', cy.nodes().length, ', edges:', cy.edges().length, ')');
+
+						// Verify nodes have proper data and canvas container
+						const container = document.getElementById('cy');
+						console.log('[GraphWebview] Canvas container:', {
+							exists: !!container,
+							width: container?.offsetWidth || 0,
+							height: container?.offsetHeight || 0,
+							clientWidth: container?.clientWidth || 0,
+							clientHeight: container?.clientHeight || 0
+						});
+						console.log('[GraphWebview] Cytoscape instance:', {
+							width: cy.width(),
+							height: cy.height(),
+							extent: cy.extent(),
+							nodeCount: cy.nodes().length,
+							edgeCount: cy.edges().length
+						});
+
+						// Debug: Log detailed node information
+						const allNodes = cy.nodes();
+						console.log('[GraphWebview] Total nodes in graph:', allNodes.length);
+
+						// Check parent/child relationships
+						const parentNodes = allNodes.filter(n => n.isParent());
+						const childNodes = allNodes.filter(n => n.isChild());
+						console.log('[GraphWebview] Parent nodes:', parentNodes.length);
+						parentNodes.forEach(p => {
+							console.log('  - Parent "' + p.id() + '" (' + p.data('label') + '): ' + p.children().length + ' children');
+						});
+						console.log('[GraphWebview] Child nodes:', childNodes.length);
+
+						// Group nodes by parent to check for overlap issues
+						const nodesByParent = {};
+						allNodes.forEach(n => {
+							const parentId = n.data('parent') || 'none';
+							if (!nodesByParent[parentId]) nodesByParent[parentId] = [];
+							nodesByParent[parentId].push({
+								id: n.id(),
+								label: n.data('label'),
+								type: n.data('kind'),
+								category: n.data('category')
+							});
+						});
+						console.log('[GraphWebview] Nodes grouped by parent:', JSON.stringify(nodesByParent, null, 2));
+
+						// Count nodes by category
+						const nodesByCategory = {};
+						allNodes.forEach(n => {
+							const cat = n.data('category') || 'none';
+							nodesByCategory[cat] = (nodesByCategory[cat] || 0) + 1;
+						});
+						console.log('[GraphWebview] Nodes by category:', JSON.stringify(nodesByCategory, null, 2));
+
+						// Sample a few nodes with different types
+						const sampleNodes = allNodes.slice(0, 10).map(n => ({
+							id: n.id(),
+							label: n.data('label'),
+							parent: n.data('parent') || null,
+							category: n.data('category'),
+							classes: n.classes(),
+							visible: n.visible()
+						}));
+						console.log('[GraphWebview] Sample nodes (first 10):', JSON.stringify(sampleNodes, null, 2));
+
+						// Resize Cytoscape to match container before layout
+						cy.resize();
+						console.log('[GraphWebview] Container size before layout:', 'width=' + (container?.offsetWidth || 0) + ', height=' + (container?.offsetHeight || 0));
+						console.log('[GraphWebview] Cytoscape size before layout:', 'width=' + cy.width() + ', height=' + cy.height());
+
+						// Initialize categoryState for all categories BEFORE rendering legend
+						// This ensures nodes aren't hidden when applyCategoryVisibility is called
+						categoryState.clear();
+						(payload.nodes || []).forEach(node => {
+							if (node.category) {
+								categoryState.set(node.category, true); // Default to visible
+							}
+						});
+						console.log('[GraphWebview] Category state initialized:', Array.from(categoryState.entries()));
+						renderLegend(payload);
+						applyCategoryVisibility();
+						const visibleNodes = cy.nodes().filter(n => n.style('display') !== 'none').length;
+						console.log('[GraphWebview] After visibility filter:', visibleNodes, 'visible nodes out of', cy.nodes().length);
+
+						const rootIds = nodes.filter(n => n.classes === 'root').map(n => n.data.id);
+						const isArchMode = ['frontendArch', 'backendArch', 'fullstackArch', 'smartArch'].includes(payload.mode);
+
+						// For architecture modes, use custom layered horizontal box layout
+						if (isArchMode) {
+							try {
+								console.log('[GraphWebview] Starting layered architecture layout');
+
+								// Get parent (layer container) nodes and child nodes
+								const parentNodes = cy.nodes(':parent');
+								const childNodes = cy.nodes(':child');
+								const orphanNodes = cy.nodes().filter(n => !n.isParent() && !n.isChild());
+
+								console.log('[GraphWebview] Layout stats:', {
+									parentNodes: parentNodes.length,
+									childNodes: childNodes.length,
+									orphanNodes: orphanNodes.length
+								});
+
+								// Layout configuration
+								const config = {
+									layerHeight: 180,           // Height of each layer container
+									layerPadding: 40,           // Padding inside layer containers
+									layerGap: 60,               // Gap between layer containers
+									nodeWidth: 100,             // Width of child nodes
+									nodeHeight: 50,             // Height of child nodes
+									nodeGap: 20,                // Gap between nodes in a layer
+									startX: 100,                // Starting X position
+									startY: 100,                // Starting Y position
+								};
+
+								// Group children by parent
+								const childrenByParent = new Map();
+								childNodes.forEach(child => {
+									const parentId = child.data('parent');
+									if (parentId) {
+										if (!childrenByParent.has(parentId)) {
+											childrenByParent.set(parentId, []);
+										}
+										childrenByParent.get(parentId).push(child);
+									}
+								});
+
+								// Sort parent nodes by their order (from metadata)
+								const sortedParents = parentNodes.toArray().sort((a, b) => {
+									const orderA = a.data('order') || a.data('metadata')?.order || 0;
+									const orderB = b.data('order') || b.data('metadata')?.order || 0;
+									return orderA - orderB;
+								});
+
+								console.log('[GraphWebview] Sorted parents:', sortedParents.map(p => ({
+									id: p.id(),
+									order: p.data('order') || p.data('metadata')?.order || 0,
+									childCount: childrenByParent.get(p.id())?.length || 0
+								})));
+
+								// Position each layer and its children
+								let currentY = config.startY;
+
+								sortedParents.forEach((parent, layerIndex) => {
+									const children = childrenByParent.get(parent.id()) || [];
+									const childCount = children.length;
+
+									// Calculate layer width based on children
+									const layerWidth = Math.max(
+										400, // Minimum width
+										childCount * (config.nodeWidth + config.nodeGap) + config.layerPadding * 2
+									);
+
+									// Position children in a horizontal row inside the layer
+									let childX = config.startX + config.layerPadding;
+									const childY = currentY + config.layerHeight / 2;
+
+									children.forEach((child, childIndex) => {
+										child.position({
+											x: childX + config.nodeWidth / 2,
+											y: childY
+										});
+										childX += config.nodeWidth + config.nodeGap;
+									});
+
+									// Parent position is center of its children (Cytoscape auto-sizes parent)
+									// We just need to ensure children are positioned correctly
+
+									console.log('[GraphWebview] Layer "' + parent.id() + '" positioned at y=' + currentY + ' with ' + childCount + ' children');
+
+									// Move to next layer
+									currentY += config.layerHeight + config.layerGap;
+								});
+
+								// Position any orphan nodes (nodes without a parent)
+								if (orphanNodes.length > 0) {
+									console.log('[GraphWebview] Positioning ' + orphanNodes.length + ' orphan nodes');
+									let orphanX = config.startX;
+									orphanNodes.forEach(node => {
+										node.position({
+											x: orphanX + config.nodeWidth / 2,
+											y: currentY + config.nodeHeight / 2
+										});
+										orphanX += config.nodeWidth + config.nodeGap;
+									});
+								}
+
+								// Apply preset layout (positions already set)
+								cy.layout({ name: 'preset' }).run();
+
+								// Fit the graph with padding
+								cy.resize();
+								cy.fit(cy.elements(), 80);
+
+								console.log('[GraphWebview] Layered layout complete');
+									send('REN_GRAPH_APPLIED', { nodes: nodes.length, edges: edges.length });
+
+							} catch (layoutError) {
+								console.error('[GraphWebview] Layered layout error:', layoutError);
+								// Fallback to cose layout
+								const layout = cy.layout({
+									name: 'cose',
+									padding: 80,
+									animate: false,
+									fit: true,
+									nodeRepulsion: 400000,
+									nodeOverlap: 10,
+									idealEdgeLength: 80,
+									nestingFactor: 1.2,
+									gravity: 0.4,
+									randomize: true,
+									componentSpacing: 80,
+									numIter: 1000
+								});
+								layout.one('layoutstop', () => {
+										cy.fit(undefined, 60);
+										send('REN_GRAPH_APPLIED', { nodes: nodes.length, edges: edges.length });
+								});
+								layout.run();
+							}
+						} else {
+							// Use standard layout for non-architecture modes
+							const layoutName = (payload.mode === 'architecture' || payload.mode === 'dataFlow') ? 'cose' : (nodes.length > 14 ? 'cose' : 'breadthfirst');
+							const layoutOptions = layoutName === 'breadthfirst'
+								? { name: 'breadthfirst', directed: true, padding: 80, spacingFactor: 1.2, roots: rootIds }
+								: { name: 'cose', padding: 60, animate: false };
+
+							const layout = cy.layout(layoutOptions);
+							layout.one('layoutstop', () => {
+								cy.fit(undefined, 80);
+								send('REN_GRAPH_APPLIED', { nodes: nodes.length, edges: edges.length });
+							});
+							layout.run();
+						}
+					} catch (renderError) {
+						console.error('[GraphWebview] Error rendering graph:', renderError);
+						updateStatus('Error rendering graph. Check console for details.', 'error');
+					}
+				} catch (outerError) {
+					console.error('[GraphWebview] Error in applyGraph:', outerError);
+					updateStatus('Error applying graph. Check console for details.', 'error');
 				}
-				return {
-					group: 'nodes',
-					data: {
-						id: node.id,
-						label: node.label,
-						displayLabel,
-						path: node.path,
-						kind: node.kind,
-						fanIn: node.fanIn !== undefined ? node.fanIn : 0,
-						fanOut: node.fanOut !== undefined ? node.fanOut : 0,
-						visualSize: computeSize(node),
-						openable: node.openable !== undefined ? node.openable : true,
-						category: node.category ?? null,
-						confidence: node.confidence ?? null,
-						tags: node.tags ?? [],
-						metadata: node.metadata ?? {},
-						description: node.description ?? '',
-						evidence: node.evidence ?? []
-					},
-					classes: Array.from(classNames).join(' ')
-				};
-			});
-
-			const edges = (payload.edges || []).map(edge => {
-				const classNames = new Set();
-				if (edge.kind) {
-					classNames.add(edge.kind);
-				}
-				if (payload.mode === 'architecture' && edge.category) {
-					classNames.add('relationship-' + normalizeCategory(edge.category));
-				}
-				return {
-					group: 'edges',
-					data: {
-						id: edge.id,
-						source: edge.source,
-						target: edge.target,
-						label: edge.label,
-						specifier: edge.specifier,
-						sourcePath: edge.sourcePath,
-						targetPath: edge.targetPath,
-						symbols: edge.symbols ?? [],
-						category: edge.category ?? null,
-						confidence: edge.confidence ?? null,
-						metadata: edge.metadata ?? {},
-						evidence: edge.evidence ?? []
-					},
-					classes: Array.from(classNames).join(' ')
-				};
-			});
-
-				cy.add([...nodes, ...edges]);
-				cy.resize();
-				renderLegend(payload);
-				applyCategoryVisibility();
-
-				const rootIds = nodes.filter(n => n.classes === 'root').map(n => n.data.id);
-				const layoutName = (payload.mode === 'architecture' || payload.mode === 'dataFlow') ? 'cose' : (nodes.length > 14 ? 'cose' : 'breadthfirst');
-				const layoutOptions = layoutName === 'breadthfirst'
-					? { name: 'breadthfirst', directed: true, padding: 80, spacingFactor: 1.2, roots: rootIds }
-					: { name: 'cose', padding: 60, animate: false };
-
-				const layout = cy.layout(layoutOptions);
-				layout.one('layoutstop', () => {
-					cy.fit(undefined, 80);
-					send('REN_GRAPH_APPLIED', { nodes: nodes.length, edges: edges.length });
-				});
-				layout.run();
 			};
 
 			window.addEventListener('message', event => {

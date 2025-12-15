@@ -27,15 +27,22 @@ import { Range } from '../../../../../../editor/common/core/range.js';
 import { escapeRegExpCharacters } from '../../../../../../base/common/strings.js';
 import { URI } from '../../../../../../base/common/uri.js';
 import { isCodeEditor, isDiffEditor } from '../../../../../../editor/browser/editorBrowser.js';
+import { IRequestService } from '../../../../../../platform/request/common/request.js';
+import { IConfigurationService } from '../../../../../../platform/configuration/common/configuration.js';
+import { ICommandService } from '../../../../../../platform/commands/common/commands.js';
+import { ILanguageFeaturesService } from '../../../../../../editor/common/services/languageFeatures.js';
 
 import { buildGraphWebviewHTML } from '../../templates/graphWebviewTemplate.js';
 import { GraphWorkspaceContext } from './graphContext.js';
 import { GraphDataBuilder } from './graphDataBuilder.js';
 import { GraphPickers } from './graphPickers.js';
-import { GitHeatmapCommitSummary, GitHeatmapGranularity, GitHeatmapPayload, GraphEdgePayload, GraphMode, GraphNodePayload, GraphStatusLevel, GraphWebviewPayload, FunctionDefinition } from './graphTypes.js';
+import { GitHeatmapCommitSummary, GitHeatmapGranularity, GitHeatmapPayload, GraphEdgePayload, GraphEdgeKind, GraphMode, GraphNodeKind, GraphNodePayload, GraphStatusLevel, GraphWebviewPayload, FunctionDefinition, getPayloadNodes, getPayloadEdges } from './graphTypes.js';
 import { isExcludedPath } from './graphConstants.js';
 import { ViewButtons } from '../../components/viewButtons.js';
 import { IGitHeatmapService } from '../../../../../../platform/gitHeatmap/common/gitHeatmapService.js';
+import { ContextAwareArchBuilder } from './contextAwareArchBuilder.js';
+import { CancellationTokenSource } from '../../../../../../base/common/cancellation.js';
+import { IArchitectureService, ArchitectureAnalysis } from '../../services/architectureService.js';
 
 export class GraphView extends Disposable implements IRenView {
 	private _mainContainer: HTMLElement | null = null;
@@ -49,6 +56,7 @@ export class GraphView extends Disposable implements IRenView {
 	private _renderRequestId = 0;
 	private _mode: GraphMode = 'file';
 	private _isUpdatingProgrammatically = false;
+	private _programmaticTargetPending = false;
 	private _selectedFile: URI | undefined;
 	private _selectedFolder: URI | undefined;
 	private _selectedFunction: FunctionDefinition | undefined;
@@ -77,6 +85,7 @@ export class GraphView extends Disposable implements IRenView {
 	private readonly context: GraphWorkspaceContext;
 	private readonly dataBuilder: GraphDataBuilder;
 	private readonly pickers: GraphPickers;
+	private _contextAwareBuilder: ContextAwareArchBuilder | undefined;
 
 	constructor(
 		@ILogService private readonly logService: ILogService,
@@ -85,11 +94,16 @@ export class GraphView extends Disposable implements IRenView {
 		@IWorkspaceContextService workspaceService: IWorkspaceContextService,
 		@IUriIdentityService uriIdentityService: IUriIdentityService,
 		@IQuickInputService private readonly quickInputService: IQuickInputService,
-		@ISearchService searchService: ISearchService,
+		@ISearchService private readonly searchService: ISearchService,
 		@IEditorService private readonly editorService: IEditorService,
 		@IEditorGroupsService private readonly editorGroupsService: IEditorGroupsService,
 		@IGitHeatmapService gitHeatmapService: IGitHeatmapService,
-		@IInstantiationService private readonly instantiationService: IInstantiationService
+		@IInstantiationService private readonly instantiationService: IInstantiationService,
+		@IRequestService private readonly requestService: IRequestService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@ICommandService private readonly commandService: ICommandService,
+		@ILanguageFeaturesService private readonly languageFeaturesService: ILanguageFeaturesService,
+		@IArchitectureService private readonly architectureService: IArchitectureService
 	) {
 		super();
 		this.context = new GraphWorkspaceContext(workspaceService, uriIdentityService);
@@ -161,11 +175,39 @@ export class GraphView extends Disposable implements IRenView {
 	}
 
 	/**
+	 * Set the programmatic target pending flag.
+	 * Called by RenViewManager BEFORE show() to prevent auto-prompting.
+	 */
+	public setProgrammaticTargetPending(value: boolean): void {
+		this._programmaticTargetPending = value;
+	}
+
+	/**
+	 * Wait for the graph webview to be ready.
+	 * Returns immediately if already ready, otherwise polls until ready or timeout.
+	 */
+	public async waitForReady(timeoutMs: number = 5000): Promise<boolean> {
+		if (this._graphReady && this._webview) {
+			return true;
+		}
+		const startTime = Date.now();
+		while (Date.now() - startTime < timeoutMs) {
+			if (this._graphReady && this._webview) {
+				return true;
+			}
+			await new Promise(resolve => setTimeout(resolve, 100));
+		}
+		this.logService.warn('[GraphView] waitForReady timed out');
+		return false;
+	}
+
+	/**
 	 * Public method to render a specific target (file, folder, or workspace).
 	 * Called by RenViewManager when switching to graph view with a target.
 	 */
 	public async renderTarget(targetPath: string, targetType: 'file' | 'folder' | 'workspace'): Promise<void> {
 		this.logService.info(`[GraphView] renderTarget called: path=${targetPath}, type=${targetType}`);
+		this._programmaticTargetPending = true;
 
 		// Wait for webview to be ready
 		if (!this._graphReady) {
@@ -204,6 +246,7 @@ export class GraphView extends Disposable implements IRenView {
 			this.logService.error(`[GraphView] renderTarget failed: ${error}`);
 			await this.sendStatus(`Failed to render ${targetType} graph: ${error instanceof Error ? error.message : String(error)}`, 'error');
 		}
+		// Note: _programmaticTargetPending is reset in REN_GRAPH_READY handler
 	}
 
 	private async loadWebview(container: HTMLElement): Promise<void> {
@@ -257,7 +300,12 @@ export class GraphView extends Disposable implements IRenView {
 					this._graphReady = true;
 					this._promptInFlight = false;
 					void this.sendStatus(this.getReadyMessage(), 'info');
-					void this.promptForTargetAndRender();
+					if (this._programmaticTargetPending) {
+						// Programmatic render in progress - don't prompt, just reset flag
+						this._programmaticTargetPending = false;
+					} else {
+						void this.promptForTargetAndRender();
+					}
 					break;
 				}
 				case 'REN_SELECT_FILE':
@@ -331,7 +379,7 @@ export class GraphView extends Disposable implements IRenView {
 		const modeSelect = document.createElement('select');
 		modeSelect.id = 'renGraphModeSelect';
 		modeSelect.className = 'ren-graph-toolbar-select';
-		(['file', 'folder', 'workspace', 'gitHeatmap', 'dataFlow'] as GraphMode[]).forEach(mode => {
+		(['file', 'folder', 'workspace', 'gitHeatmap', 'dataFlow', 'smartArch', 'frontendArch', 'backendArch', 'fullstackArch'] as GraphMode[]).forEach(mode => {
 			const option = document.createElement('option');
 			option.value = mode;
 			option.textContent = this.getModeLabel(mode);
@@ -506,9 +554,12 @@ export class GraphView extends Disposable implements IRenView {
 			this._selectedFunction = undefined;
 		}
 		this.updateToolbarUI();
+
 		void this.sendStatus(this.getReadyMessage(), 'info');
 		// Auto-render for modes that don't require user selection
-		if (this._graphReady && (this._mode === 'workspace' || this._mode === 'gitHeatmap' || this._mode === 'dataFlow' || this._mode === 'architecture')) {
+		// But skip if programmatic render is already in progress
+		const autoRenderModes: GraphMode[] = ['workspace', 'gitHeatmap', 'dataFlow', 'architecture', 'smartArch', 'frontendArch', 'backendArch', 'fullstackArch'];
+		if (!this._programmaticTargetPending && this._graphReady && autoRenderModes.includes(this._mode)) {
 			void this.promptForTargetAndRender();
 		}
 	}
@@ -636,6 +687,18 @@ export class GraphView extends Disposable implements IRenView {
 					break;
 				case 'architecture':
 					await this.renderArchitectureGraph(requestId);
+					break;
+				case 'smartArch':
+					await this.renderContextAwareArch(requestId, 'auto');
+					break;
+				case 'frontendArch':
+					await this.renderContextAwareArch(requestId, 'frontend');
+					break;
+				case 'backendArch':
+					await this.renderContextAwareArch(requestId, 'backend');
+					break;
+				case 'fullstackArch':
+					await this.renderContextAwareArch(requestId, 'fullstack');
 					break;
 				case 'dataFlow': {
 					// Use existing file if available, otherwise prompt for file
@@ -873,6 +936,380 @@ export class GraphView extends Disposable implements IRenView {
 				await this.sendStatus('Failed to analyze architecture. Check logs for details.', 'error');
 			}
 		} finally {
+			progressListeners.dispose();
+		}
+	}
+
+	/**
+	 * Render context-aware architecture graph using IArchitectureService (background agent)
+	 * Falls back to ContextAwareArchBuilder if architecture service has no cached data
+	 */
+	private async renderContextAwareArch(requestId: number, mode: 'auto' | 'frontend' | 'backend' | 'fullstack'): Promise<void> {
+		const modeLabel = mode === 'auto' ? 'Smart' : mode.charAt(0).toUpperCase() + mode.slice(1);
+		await this.sendStatus(`Analyzing ${modeLabel.toLowerCase()} architecture…`, 'loading');
+
+		const progressListeners = new DisposableStore();
+
+		try {
+			// Try to use the background architecture service first
+			let analysis: ArchitectureAnalysis | undefined;
+
+			// Subscribe to progress updates from architecture service
+			progressListeners.add(this.architectureService.onAnalysisProgress(progress => {
+				if (typeof progress.message === 'string' && progress.message.trim().length) {
+					void this.sendStatus(`${progress.message} (${progress.progress}%)`, 'loading');
+				}
+			}));
+
+			// Check if we have a cached analysis or if one is being computed
+			analysis = this.architectureService.getArchitectureAnalysis();
+
+			if (!analysis) {
+				// Trigger analysis if not available
+				this.logService.info('[GraphView] No cached architecture analysis, triggering background analysis');
+				await this.sendStatus('Starting architecture analysis...', 'loading');
+
+				try {
+					analysis = await this.architectureService.analyzeWorkspace(mode);
+				} catch (serviceError) {
+					this.logService.warn('[GraphView] Architecture service failed, falling back to ContextAwareArchBuilder:', serviceError);
+					// Fall back to legacy builder
+					return this.renderContextAwareArchLegacy(requestId, mode);
+				}
+			}
+
+			if (requestId !== this._renderRequestId) {
+				return;
+			}
+
+			if (!analysis) {
+				// Still no analysis, fall back to legacy
+				return this.renderContextAwareArchLegacy(requestId, mode);
+			}
+
+			// Convert ArchitectureAnalysis to GraphWebviewPayload
+			const graphPayload = this.convertArchitectureAnalysisToPayload(analysis);
+
+			this.storeGraphPayload(graphPayload);
+			this.logService.info('[GraphView] Sending architecture graph to webview', {
+				mode: graphPayload.mode,
+				nodeCount: graphPayload.nodes?.length || 0,
+				edgeCount: graphPayload.edges?.length || 0,
+				codebaseType: analysis.codebaseType,
+				aiGenerated: analysis.aiGenerated
+			});
+			await this._webview?.postMessage({ type: 'REN_GRAPH_DATA', payload: graphPayload });
+
+			const nodeCount = analysis.nodes.length;
+			if (nodeCount === 0) {
+				await this.sendStatus('No architecture components detected. Try a different mode.', 'warning', 6000);
+			} else {
+				const confidenceStr = analysis.aiGenerated ? '(AI-enhanced)' : '(static analysis)';
+				await this.sendStatus(
+					`${modeLabel} architecture: ${nodeCount} components (${analysis.codebaseType}) ${confidenceStr}`,
+					'success',
+					5000
+				);
+			}
+		} catch (error) {
+			this.logService.error('[GraphView] failed to build context-aware architecture', error);
+			if (requestId === this._renderRequestId) {
+				await this.sendStatus(`Failed to analyze ${modeLabel.toLowerCase()} architecture. Check logs for details.`, 'error');
+			}
+		} finally {
+			progressListeners.dispose();
+		}
+	}
+
+	/**
+	 * Convert ArchitectureAnalysis to GraphWebviewPayload with layer containers
+	 */
+	private convertArchitectureAnalysisToPayload(analysis: ArchitectureAnalysis): GraphWebviewPayload {
+		// Build edge index for computing fanIn/fanOut
+		const fanInCount = new Map<string, number>();
+		const fanOutCount = new Map<string, number>();
+		for (const edge of analysis.edges) {
+			fanOutCount.set(edge.source, (fanOutCount.get(edge.source) || 0) + 1);
+			fanInCount.set(edge.target, (fanInCount.get(edge.target) || 0) + 1);
+		}
+
+		// Helper function to map ArchNodeType to GraphNodeKind
+		const mapNodeKind = (nodeType: string): GraphNodeKind => {
+			if (nodeType === 'external' || nodeType === 'package') {
+				return 'external';
+			}
+			return 'relative';
+		};
+
+		// Create layer container nodes (parent nodes for compound layout)
+		const layerNodes: GraphNodePayload[] = analysis.layers.map(layer => ({
+			id: `layer-${layer.id}`,
+			label: layer.label,
+			path: '',
+			kind: 'relative' as GraphNodeKind,
+			weight: layer.nodeCount,
+			fanIn: 0,
+			fanOut: 0,
+			openable: false,
+			category: layer.id,
+			metadata: {
+				isGroup: true,
+				layer: layer.id,
+				order: layer.order,
+				bgColor: layer.color,
+				borderColor: layer.borderColor
+			}
+		}));
+
+		// Create node payloads with parent references
+		const componentNodes: GraphNodePayload[] = analysis.nodes.map(n => {
+			const fanIn = fanInCount.get(n.id) || 0;
+			const fanOut = fanOutCount.get(n.id) || 0;
+			const weight = Math.max(fanIn, fanOut, 1);
+
+			// Determine if node is openable
+			let openable = false;
+			if (n.filePath) {
+				try {
+					const nodeUri = URI.file(n.filePath);
+					openable = this.context.isWithinWorkspace(nodeUri);
+				} catch {
+					openable = false;
+				}
+			}
+
+			return {
+				id: n.id,
+				label: n.label,
+				path: n.filePath,
+				kind: mapNodeKind(n.type),
+				weight: weight,
+				fanIn: fanIn,
+				fanOut: fanOut,
+				openable: openable,
+				description: n.description,
+				category: n.layerId,
+				metadata: {
+					type: n.type,
+					layer: n.layerId,
+					conciseLabel: n.conciseLabel,
+					imports: n.metadata.imports,
+					exports: n.metadata.exports,
+					isGroup: false
+				},
+				// Parent reference for compound node layout
+				parent: `layer-${n.layerId}`
+			} as GraphNodePayload & { parent?: string };
+		});
+
+		// Create edge payloads
+		const edgePayloads: GraphEdgePayload[] = analysis.edges.map(e => ({
+			id: e.id,
+			source: e.source,
+			target: e.target,
+			label: e.label || e.type || '',
+			specifier: e.label || e.type || '',
+			kind: 'relative' as GraphEdgeKind,
+			metadata: {
+				type: e.type,
+				animated: e.animated
+			}
+		}));
+
+		return {
+			mode: this._mode,
+			nodes: [...layerNodes, ...componentNodes],
+			edges: edgePayloads,
+			summary: analysis.summary,
+			metadata: {
+				codebaseType: analysis.codebaseType,
+				primaryFramework: analysis.primaryFramework,
+				aiGenerated: analysis.aiGenerated,
+				generatedAt: analysis.generatedAt
+			}
+		};
+	}
+
+	/**
+	 * Legacy render method using ContextAwareArchBuilder (fallback)
+	 */
+	private async renderContextAwareArchLegacy(requestId: number, mode: 'auto' | 'frontend' | 'backend' | 'fullstack'): Promise<void> {
+		const modeLabel = mode === 'auto' ? 'Smart' : mode.charAt(0).toUpperCase() + mode.slice(1);
+		await this.sendStatus(`Analyzing ${modeLabel.toLowerCase()} architecture (legacy)…`, 'loading');
+
+		const cts = new CancellationTokenSource();
+		const progressListeners = new DisposableStore();
+
+		try {
+			// Lazily create the context-aware builder
+			if (!this._contextAwareBuilder) {
+				this._contextAwareBuilder = new ContextAwareArchBuilder(
+					this.logService,
+					this.fileService,
+					this.searchService,
+					this.commandService,
+					this.languageFeaturesService,
+					this.requestService,
+					this.configurationService,
+					this.context,
+					this.dataBuilder['architectureAnalyzer']
+				);
+			}
+
+			// Subscribe to progress updates
+			progressListeners.add(this._contextAwareBuilder.onProgress(progress => {
+				if (typeof progress.message === 'string' && progress.message.trim().length) {
+					void this.sendStatus(`${progress.message} (${progress.progress}%)`, 'loading');
+				}
+			}));
+
+			// Build the context-aware architecture
+			const result = await this._contextAwareBuilder.build(
+				{
+					force: false,
+					enableAI: true,
+					mode: mode
+				},
+				cts.token
+			);
+
+			if (requestId !== this._renderRequestId) {
+				return;
+			}
+
+			// Convert to webview payload format
+			const nodes = getPayloadNodes(result.data);
+			const edges = getPayloadEdges(result.data);
+
+			// Build edge index for computing fanIn/fanOut
+			const fanInCount = new Map<string, number>();
+			const fanOutCount = new Map<string, number>();
+			for (const edge of edges) {
+				fanOutCount.set(edge.source, (fanOutCount.get(edge.source) || 0) + 1);
+				fanInCount.set(edge.target, (fanInCount.get(edge.target) || 0) + 1);
+			}
+
+			// Create a map of node IDs to their file paths for edge mapping
+			const nodePathMap = new Map<string, string>();
+			for (const node of nodes) {
+				if (node.filePath) {
+					nodePathMap.set(node.id, node.filePath);
+				}
+			}
+
+			// Helper function to map ArchNodeType to GraphNodeKind
+			const mapNodeKind = (nodeType: string, isGroup: boolean | undefined): GraphNodeKind => {
+				if (isGroup) {
+					return 'relative';
+				}
+				if (nodeType === 'external' || nodeType === 'package') {
+					return 'external';
+				}
+				return 'relative';
+			};
+
+			// Create a GraphWebviewPayload from the context-aware result
+			const graphPayload: GraphWebviewPayload = {
+				mode: this._mode,
+				nodes: nodes.map(n => {
+					const fanIn = fanInCount.get(n.id) || 0;
+					const fanOut = fanOutCount.get(n.id) || 0;
+					const weight = Math.max(fanIn, fanOut, 1);
+
+					let openable = false;
+					if (n.filePath) {
+						try {
+							const nodeUri = URI.file(n.filePath);
+							openable = this.context.isWithinWorkspace(nodeUri);
+						} catch {
+							openable = false;
+						}
+					}
+
+					const nodePayload: GraphNodePayload & { parent?: string; layer?: string; isGroup?: boolean } = {
+						id: n.id,
+						label: n.label,
+						path: n.filePath || '',
+						kind: mapNodeKind(n.type, n.isGroup),
+						weight: weight,
+						fanIn: fanIn,
+						fanOut: fanOut,
+						openable: openable,
+						description: n.description,
+						category: n.layer,
+						metadata: {
+							...n.metadata,
+							type: n.type,
+							layer: n.layer,
+							isGroup: n.isGroup
+						},
+						parent: n.parent,
+						layer: n.layer,
+						isGroup: n.isGroup
+					};
+					return nodePayload;
+				}),
+				edges: edges.map(e => {
+					const sourcePath = nodePathMap.get(e.source);
+					const targetPath = nodePathMap.get(e.target);
+
+					return {
+						id: e.id,
+						source: e.source,
+						target: e.target,
+						label: e.label || e.type || '',
+						specifier: e.label || e.type || '',
+						kind: 'relative' as GraphEdgeKind,
+						sourcePath: sourcePath,
+						targetPath: targetPath,
+						metadata: {
+							type: e.type,
+							animated: e.animated
+						}
+					} as GraphEdgePayload;
+				}),
+				summary: result.data.summary,
+				metadata: {
+					codebaseType: result.codebaseType,
+					confidence: result.confidence,
+					primaryFramework: result.primaryFramework,
+					aiEnhanced: result.aiEnhanced,
+					generatedAt: result.generatedAt
+				}
+			};
+
+			this.storeGraphPayload(graphPayload);
+			this.logService.info('[GraphView] Sending legacy graph data to webview', {
+				mode: graphPayload.mode,
+				nodeCount: graphPayload.nodes?.length || 0,
+				edgeCount: graphPayload.edges?.length || 0
+			});
+			await this._webview?.postMessage({ type: 'REN_GRAPH_DATA', payload: graphPayload });
+
+			const nodeCount = nodes.length;
+			this.logService.info('[GraphView] legacy context-aware arch result', {
+				mode,
+				codebaseType: result.codebaseType,
+				nodes: nodeCount,
+				edges: edges.length
+			});
+
+			if (nodeCount === 0) {
+				await this.sendStatus('No architecture components detected. Try a different mode.', 'warning', 6000);
+			} else {
+				await this.sendStatus(
+					`${modeLabel} architecture: ${nodeCount} components (${result.codebaseType}, ${(result.confidence * 100).toFixed(0)}% confidence)`,
+					'success',
+					5000
+				);
+			}
+		} catch (error) {
+			this.logService.error('[GraphView] failed to build legacy context-aware architecture', error);
+			if (requestId === this._renderRequestId) {
+				await this.sendStatus(`Failed to analyze ${modeLabel.toLowerCase()} architecture. Check logs for details.`, 'error');
+			}
+		} finally {
+			cts.dispose();
 			progressListeners.dispose();
 		}
 	}
@@ -1621,6 +2058,14 @@ export class GraphView extends Disposable implements IRenView {
 				return 'Git Heatmap';
 			case 'dataFlow':
 				return 'Data Flow';
+			case 'smartArch':
+				return 'Smart Architecture';
+			case 'frontendArch':
+				return 'Frontend Architecture';
+			case 'backendArch':
+				return 'Backend Architecture';
+			case 'fullstackArch':
+				return 'Fullstack Architecture';
 			case 'file':
 			default:
 				return 'File';
@@ -1637,6 +2082,14 @@ export class GraphView extends Disposable implements IRenView {
 				return 'Generate a Git co-change heatmap for your workspace.';
 			case 'dataFlow':
 				return 'Select a function to visualize its data flow.';
+			case 'smartArch':
+				return 'Analyzing architecture (auto-detecting codebase type)…';
+			case 'frontendArch':
+				return 'Analyzing frontend architecture…';
+			case 'backendArch':
+				return 'Analyzing backend architecture…';
+			case 'fullstackArch':
+				return 'Analyzing fullstack architecture…';
 			case 'file':
 			default:
 				return 'Select a file to visualize its imports.';

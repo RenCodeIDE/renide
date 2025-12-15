@@ -131,14 +131,18 @@ export class RenViewManager extends Disposable implements IRenViewManager {
 		this._currentView = mode;
 		const newView = this._views.get(mode);
 		if (newView && this._contentArea) {
+			// If switching to graph view with target options, set the programmatic flag BEFORE show()
+			// This prevents the auto-prompt from appearing when REN_GRAPH_READY fires
+			const graphView = mode === 'graph' ? this.getGraphView() : undefined;
+			if (graphView && options?.targetPath && options?.targetType) {
+				graphView.setProgrammaticTargetPending(true);
+			}
+
 			newView.show(this._contentArea);
 
 			// If switching to graph view with target options, render the target
-			if (mode === "graph" && options?.targetPath && options?.targetType) {
-				const graphView = this.getGraphView();
-				if (graphView) {
-					void graphView.renderTarget(options.targetPath, options.targetType);
-				}
+			if (graphView && options?.targetPath && options?.targetType) {
+				void graphView.renderTarget(options.targetPath, options.targetType);
 			}
 
 			// Dispatch event to sync UI components (Overlay, Buttons) that listen for this

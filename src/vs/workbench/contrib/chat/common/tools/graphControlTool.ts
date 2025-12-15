@@ -108,13 +108,7 @@ export class GraphControlTool implements IToolImpl {
 		}
 
 		try {
-			// Ensure we're in graph view
-			const currentView = this.renViewManager.getCurrentView();
-			if (currentView !== 'graph') {
-				this.renViewManager.switchToView('graph');
-			}
-
-			// Get the graph view instance
+			// Get the graph view instance FIRST to set the flag before showing
 			const graphView = this.renViewManager.getGraphView();
 			if (!graphView) {
 				return {
@@ -126,10 +120,31 @@ export class GraphControlTool implements IToolImpl {
 				};
 			}
 
+			// Set the flag to suppress auto-prompt BEFORE switching views
+			graphView.setProgrammaticTargetPending(true);
+
+			// Ensure we're in graph view
+			const currentView = this.renViewManager.getCurrentView();
+			if (currentView !== 'graph') {
+				this.renViewManager.switchToView('graph');
+			}
+
 			// Parse target path if provided
 			let targetUri: URI | undefined;
 			if (args.targetPath) {
 				targetUri = this.parseTargetPath(args.targetPath);
+			}
+
+			// Wait for the webview to be ready before rendering
+			const isReady = await graphView.waitForReady();
+			if (!isReady) {
+				return {
+					content: [{
+						kind: 'text',
+						value: localize('graphControlTool.notReady', 'Graph view failed to initialize')
+					}],
+					toolResultMessage: localize('graphControlTool.error', 'Graph view failed to initialize')
+				};
 			}
 
 			// Use the programmatic APIs to render the graph directly
