@@ -104,7 +104,6 @@
 	color: var(--vscode-button-secondaryForeground);
 }
 
-
 /* Graph view styles */
 .ren-graph-container {
 	width: 100%;
@@ -396,4 +395,17 @@
 	border: 1px solid var(--vscode-input-border);
 	border-radius: 4px;
 	padding: 6px 8px;
+}
+
+/* MonitorX view - hide scrollbar but keep scrolling */
+.ren-monitorx-content {
+	/* Firefox */
+	scrollbar-width: none;
+	/* IE and Edge */
+	-ms-overflow-style: none;
+}
+
+.ren-monitorx-content::-webkit-scrollbar {
+	/* Chrome, Safari, Opera */
+	display: none;
 }

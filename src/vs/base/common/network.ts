@@ -261,7 +261,7 @@ export type AppResourcePath = (
 	| `y${string}` | `z${string}`
 );
 
-export const builtinExtensionsPath: AppResourcePath = 'vs/../../extensions';
+export const builtinExtensionsPath: AppResourcePath = 'vs/../../.build/extensions';
 export const nodeModulesPath: AppResourcePath = 'vs/../../node_modules';
 export const nodeModulesAsarPath: AppResourcePath = 'vs/../../node_modules.asar';
 export const nodeModulesAsarUnpackedPath: AppResourcePath = 'vs/../../node_modules.asar.unpacked';

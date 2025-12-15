@@ -1,0 +1,15 @@
+log.ts:460   ERR CodeExpectedError: No default agent contributed
+    at ChatService2.activateDefaultAgent (chatServiceImpl.ts:552:10)
+error	@	log.ts:460
+error	@	log.ts:565
+error	@	logService.ts:51
+(anonymous)	@	chatServiceImpl.ts:541
+log.ts:460   ERR lock() request could not be registered.: InvalidStateError: lock() request could not be registered.
+error	@	log.ts:460
+error	@	log.ts:565
+error	@	logService.ts:51
+handleUnexpectedError	@	workbench.ts:123
+(anonymous)	@	workbench.ts:104
+onUnexpectedError	@	errors.ts:65
+onUnexpectedError	@	errors.ts:110
+(anonymous)	@	workbench.ts:97

@@ -21,7 +21,7 @@ export interface IMonitorXChangelogFilter {
 	maxFiles?: number;
 }
 
-export function matchesFilter(entry: { subject: string; description: string; files: readonly { path: string }[]; metadata?: Record<string, unknown>; timestamp?: number; createdAt?: number; updatedAt?: number }, filter: IMonitorXChangelogFilter): boolean {
+export function matchesFilter(entry: { sessionId?: string; subject: string; description: string; files: readonly { path: string }[]; metadata?: Record<string, unknown>; timestamp?: number; createdAt?: number; updatedAt?: number }, filter: IMonitorXChangelogFilter): boolean {
 	if (filter.text) {
 		const searchText = filter.text.toLowerCase();
 		const matchesSubject = entry.subject.toLowerCase().includes(searchText);
@@ -40,7 +40,8 @@ export function matchesFilter(entry: { subject: string; description: string; fil
 	}
 
 	if (filter.sessionId) {
-		const entrySessionId = entry.metadata?.sessionId as string | undefined;
+		// Check top-level sessionId first, then fall back to metadata for backwards compatibility
+		const entrySessionId = entry.sessionId ?? (entry.metadata?.sessionId as string | undefined);
 		if (entrySessionId !== filter.sessionId) {
 			return false;
 		}

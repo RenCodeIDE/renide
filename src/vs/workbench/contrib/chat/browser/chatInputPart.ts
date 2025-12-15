@@ -1999,8 +1999,18 @@ export class ChatInputPart
 						const chords = keybinding.getDispatchChords();
 						const isPlainEnter = chords.length === 1 && chords[0] === "[Enter]";
 						if (isPlainEnter) {
-							// Do NOT call stopPropagation() so the keybinding service can still process this event
-							e.preventDefault();
+							// Only prevent default if the action precondition is met
+							// Check if inputHasText is true and requestInProgress is false
+							const inputHasText = this.inputEditorHasText.get() ?? false;
+							const requestInProgress = this.contextKeyService.getContextKeyValue<boolean>(
+								ChatContextKeys.requestInProgress.key
+							) ?? false;
+							
+							// Only prevent default behavior if precondition is met (action will actually run)
+							if (inputHasText && !requestInProgress) {
+								// Do NOT call stopPropagation() so the keybinding service can still process this event
+								e.preventDefault();
+							}
 							break;
 						}
 					}

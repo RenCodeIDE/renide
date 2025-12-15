@@ -66,6 +66,24 @@ rm -rf out
 cp -r out-vscode out
 echo "✅ Bundled output copied to out/"
 
+# CRITICAL: Bundle extensions for production
+echo "📦 Bundling extensions for production..."
+npx gulp compile-extensions-build
+
+# Verify extension bundling succeeded
+if [ ! -d ".build/extensions" ]; then
+    echo "❌ Error: Extension bundling failed. .build/extensions directory not found!"
+    exit 1
+fi
+echo "✅ Extensions bundled to .build/extensions"
+
+# Copy bundled extensions to out/extensions for electron-builder
+echo "📋 Copying bundled extensions..."
+rm -rf out/extensions 2>/dev/null || true
+mkdir -p out/extensions
+cp -r .build/extensions/* out/extensions/
+echo "✅ Bundled extensions ready"
+
 echo "🍎 Packaging for macOS with electron-builder..."
 npm run dist:mac
 

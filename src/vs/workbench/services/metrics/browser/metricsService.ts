@@ -24,7 +24,7 @@ import { ISecretStorageService } from '../../../../platform/secrets/common/secre
 import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
 import { mainWindow } from '../../../../base/browser/window.js';
 
-const PROJECT_CONFIG_FOLDER = '.ren-ide';
+const PROJECT_CONFIG_FOLDER = '.ren';
 const PROJECT_CONFIG_FILE = 'project.json';
 
 export class MetricsService extends Disposable implements IMetricsService {
@@ -146,6 +146,15 @@ export class MetricsService extends Disposable implements IMetricsService {
 		return undefined;
 	}
 
+	private _normalizeEndpoint(serverAddress: string, endpoint: string): string {
+		const normalizedAddress = serverAddress.trim().replace(/\/+$/, "");
+		// If serverAddress already ends with /api and endpoint starts with /api/, remove the duplicate /api
+		if (normalizedAddress.endsWith("/api") && endpoint.startsWith("/api/")) {
+			return `${normalizedAddress}${endpoint.substring(4)}`;
+		}
+		return `${normalizedAddress}${endpoint}`;
+	}
+
 	private async _sendMetricsRequest(endpoint: string, data: unknown): Promise<void> {
 		const accessToken = await this.secretStorageService.get('ren.auth.accessToken');
 		if (!accessToken) {
@@ -159,7 +168,9 @@ export class MetricsService extends Disposable implements IMetricsService {
 		}
 
 		try {
-			const response = await fetch(`${this._serverAddress}${endpoint}`, {
+			// Normalize endpoint to avoid duplicate /api in URL
+			const normalizedEndpoint = this._normalizeEndpoint(this._serverAddress, endpoint);
+			const response = await fetch(`${normalizedEndpoint}`, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',

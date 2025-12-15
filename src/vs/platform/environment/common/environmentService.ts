@@ -5,7 +5,7 @@
 
 import { toLocalISOString } from '../../../base/common/date.js';
 import { memoize } from '../../../base/common/decorators.js';
-import { FileAccess, Schemas } from '../../../base/common/network.js';
+import { builtinExtensionsPath as builtinExtensionsPathConst, FileAccess, Schemas } from '../../../base/common/network.js';
 import { dirname, join, normalize, resolve } from '../../../base/common/path.js';
 import { env } from '../../../base/common/process.js';
 import { joinPath } from '../../../base/common/resources.js';
@@ -114,7 +114,17 @@ export abstract class AbstractNativeEnvironmentService implements INativeEnviron
 			return resolve(cliBuiltinExtensionsDir);
 		}
 
-		return normalize(join(FileAccess.asFileUri('').fsPath, '..', 'extensions'));
+		// Use the builtinExtensionsPath constant which correctly navigates from
+		// out/vs/ up to the extensions/ directory using 'vs/../../extensions'
+		let extensionsPath = FileAccess.asFileUri(builtinExtensionsPathConst).fsPath;
+
+		// In packaged applications, extensions are unpacked to app.asar.unpacked
+		// Transform the path if it contains app.asar
+		if (extensionsPath.includes('app.asar') && !extensionsPath.includes('app.asar.unpacked')) {
+			extensionsPath = extensionsPath.replace('app.asar', 'app.asar.unpacked');
+		}
+
+		return extensionsPath;
 	}
 
 	get extensionsDownloadLocation(): URI {

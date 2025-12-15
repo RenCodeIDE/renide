@@ -17,7 +17,6 @@
 		"src/**/*",
 		"src/completions/index.d.ts",
 		"../../src/vscode-dts/vscode.d.ts",
-		"../../src/vscode-dts/vscode.proposed.terminalCompletionProvider.d.ts",
 		"../../src/vscode-dts/vscode.proposed.terminalShellEnv.d.ts"
 	]
 }

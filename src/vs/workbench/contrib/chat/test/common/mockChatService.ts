@@ -120,6 +120,18 @@ export class MockChatService implements IChatService {
 	hasPendingRequest(sessionId: string): boolean {
 		return false;
 	}
+	isSessionDetached(sessionId: string): boolean {
+		return false;
+	}
+	async reattachSession(sessionId: string): Promise<void> {
+		// No-op for mock
+	}
+	getBackgroundAgentSessions(): string[] {
+		return [];
+	}
+	hasBackgroundAgent(sessionId: string): boolean {
+		return false;
+	}
 	addCompleteRequest(
 		sessionId: string,
 		message: IParsedChatRequest | string,

@@ -135,7 +135,7 @@ export class MdDocumentRenderer {
 			const incompleteTodos = todos.filter(t => !t.completed);
 			
 			planFileHeader = `
-				<div class="plan-execution-header" style="position: sticky; top: 0; z-index: 1000; background: var(--vscode-editor-background); padding: 12px; border-bottom: 1px solid var(--vscode-panel-border); margin-bottom: 16px;">
+				<div class="plan-execution-header" style="background: var(--vscode-editor-background); padding: 12px; border-bottom: 1px solid var(--vscode-panel-border); margin-bottom: 16px; border-radius: 6px; border: 1px solid var(--vscode-panel-border);">
 					<div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 12px;">
 						<button id="start-execution-btn" style="background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500;">
 							▶ Start Execution
@@ -329,11 +329,16 @@ export class MdDocumentRenderer {
 
 	/**
 	 * Escape HTML to prevent XSS
+	 * Note: Uses manual string replacement since this runs in Node.js context,
+	 * not browser context where document.createElement would be available.
 	 */
 	private escapeHtml(text: string): string {
-		const div = document.createElement('div');
-		div.textContent = text;
-		return div.innerHTML;
+		return text
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#039;');
 	}
 
 	public renderFileNotFoundDocument(resource: vscode.Uri): string {

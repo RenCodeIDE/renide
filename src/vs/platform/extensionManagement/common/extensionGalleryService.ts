@@ -1037,9 +1037,10 @@ export abstract class AbstractExtensionGalleryService
 			if (!fixedPath) {
 				return "";
 			}
-			// Remove leading "/" if present to avoid double slash when concatenating
-			// serverAddress ends with /api (no trailing slash), so path shouldn't start with /
-			return fixedPath.startsWith("/") ? fixedPath.substring(1) : fixedPath;
+			// Keep the leading "/" since serverAddress ends with /api (no trailing slash)
+			// This ensures: /api + /openvsx/... = /api/openvsx/... (correct)
+			// Without the leading "/", we'd get: /api + openvsx/... = /apiopenvsx/... (wrong!)
+			return fixedPath.startsWith("/") ? fixedPath : `/${fixedPath}`;
 		}
 		// Handle case where serverAddress ends with /api (no trailing slash) and path starts with /
 		// This prevents double slashes: /api + /extensionquery = /api//extensionquery (wrong!)

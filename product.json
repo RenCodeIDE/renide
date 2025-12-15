@@ -36,6 +36,9 @@
 	"reportIssueUrl": "https://github.com/microsoft/vscode/issues/new",
 	"nodejsRepository": "https://nodejs.org",
 	"urlProtocol": "ren",
+	"configurationDefaults": {
+		"workbench.iconTheme": "vs-seti"
+	},
 	"extensionsGallery": {
 		"serviceUrl": "https://open-vsx.org/vscode/gallery",
 		"itemUrl": "https://open-vsx.org/vscode/item",
@@ -98,8 +101,8 @@
 		}
 	],
 	"defaultChatAgent": {
-		"extensionId": "core.qwen",
-		"chatExtensionId": "core.qwen",
+		"extensionId": "core.deepseek",
+		"chatExtensionId": "core.deepseek",
 		"documentationUrl": "",
 		"termsStatementUrl": "",
 		"privacyStatementUrl": "",

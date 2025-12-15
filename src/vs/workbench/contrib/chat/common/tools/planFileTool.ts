@@ -18,6 +18,7 @@ import { IWorkspaceContextService } from '../../../../../platform/workspace/comm
 import { CountTokensCallback, IPreparedToolInvocation, IToolData, IToolImpl, IToolInvocation, IToolInvocationPreparationContext, IToolResult, ToolDataSource, ToolProgress } from '../languageModelToolsService.js';
 
 const DEFAULT_PLAN_FILE_NAME = 'plan.plan.md';
+const PLAN_ROOT_DIRECTORY = '.ren/plans';
 
 export interface IPlanFileToolInput {
 	filename?: string;
@@ -85,6 +86,16 @@ export class PlanFileTool extends Disposable implements IToolImpl {
 		const mode = args.mode ?? 'overwrite';
 
 		try {
+			// Ensure the plan directory exists before writing
+			const parentDir = uri.with({ path: uri.path.substring(0, uri.path.lastIndexOf('/')) });
+			try {
+				await this.fileService.createFolder(parentDir);
+			} catch (error) {
+				if (!(error instanceof Error && error.message.includes('already exists'))) {
+					this.logService.debug(`[PlanFileTool] Error creating parent directory: ${error}`);
+				}
+			}
+
 			let contentToWrite = args.content;
 			const exists = await this.fileService.exists(uri);
 			if (exists && mode === 'append') {
@@ -142,17 +153,33 @@ export class PlanFileTool extends Disposable implements IToolImpl {
 		const sanitizedName = this.sanitizeFilename(filename ?? DEFAULT_PLAN_FILE_NAME);
 		const workspace = this.workspaceService.getWorkspace();
 		const workspaceUri = workspace.folders[0]?.uri ?? URI.file('/');
-		if (!directory) {
-			return workspaceUri.with({ path: this.joinPath(workspaceUri.path, sanitizedName) });
-		}
-		const normalizedDirectory = directory.replace(/\\/g, '/').replace(/^\.\//, '');
-		return workspaceUri.with({ path: this.joinPath(workspaceUri.path, normalizedDirectory, sanitizedName) });
+		const basePlanPath = this.joinPath(workspaceUri.path, PLAN_ROOT_DIRECTORY);
+		const normalizedDirectory = this.normalizeDirectory(directory);
+
+		const targetPath = normalizedDirectory
+			? this.joinPath(basePlanPath, normalizedDirectory, sanitizedName)
+			: this.joinPath(basePlanPath, sanitizedName);
+
+		return workspaceUri.with({ path: targetPath });
 	}
 
 	private sanitizeFilename(name: string): string {
 		const trimmed = name.trim().toLowerCase();
 		const normalized = trimmed.endsWith('.plan.md') ? trimmed : (trimmed.endsWith('.md') ? trimmed.replace(/\.md$/, '.plan.md') : `${trimmed}.plan.md`);
 		return normalized.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '-');
+	}
+
+	private normalizeDirectory(directory: string | undefined): string {
+		if (!directory) {
+			return '';
+		}
+		// Keep paths inside the plan root by stripping traversal attempts
+		return directory
+			.replace(/\\/g, '/')
+			.replace(/^\.\//, '')
+			.split('/')
+			.filter(segment => segment && segment !== '..')
+			.join('/');
 	}
 
 	private joinPath(...segments: string[]): string {

@@ -28,10 +28,28 @@ import {
 } from "../../../common/renWorkspaceStore.js";
 import { IEditorService } from "../../../../../services/editor/common/editorService.js";
 import { URI } from "../../../../../../base/common/uri.js";
+import { ILanguageService } from "../../../../../../editor/common/languages/language.js";
+import { IModelService } from "../../../../../../editor/common/services/model.js";
+import { ITextModelService } from "../../../../../../editor/common/services/resolverService.js";
+import { IWorkspaceContextService } from "../../../../../../platform/workspace/common/workspace.js";
+import { basename, relative as pathRelative } from "../../../../../../base/common/path.js";
+import { ChatViewId } from "../../../../../contrib/chat/browser/chat.js";
+import { ChatViewPane } from "../../../../../contrib/chat/browser/chatViewPane.js";
+import { IViewsService } from "../../../../../services/views/common/viewsService.js";
+import { ICodeEditor, isCodeEditor } from "../../../../../../editor/browser/editorBrowser.js";
+import { Range } from "../../../../../../editor/common/core/range.js";
+import { ITextModel } from "../../../../../../editor/common/model.js";
+import { INotificationService } from "../../../../../../platform/notification/common/notification.js";
 
 export class MonitorXViewPane extends ViewPane {
+	private static readonly changelogScheme = "ren-changelog";
+	private static stylesInjected = false;
+
 	private contentContainer: HTMLElement | undefined;
 	private filter: IMonitorXChangelogFilter = {};
+	private readonly diffContent = new Map<string, string>();
+	private readonly diffDecorations = new Map<string, string[]>();
+
 
 	constructor(
 		options: IViewPaneOptions,
@@ -44,10 +62,16 @@ export class MonitorXViewPane extends ViewPane {
 		@IOpenerService openerService: IOpenerService,
 		@IThemeService themeService: IThemeService,
 		@IHoverService hoverService: IHoverService,
+		@ITextModelService private readonly textModelService: ITextModelService,
+		@IModelService private readonly modelService: IModelService,
+		@ILanguageService private readonly languageService: ILanguageService,
+		@IWorkspaceContextService private readonly workspaceService: IWorkspaceContextService,
+		@IViewsService private readonly viewsService: IViewsService,
 		@IRenMonitorXChangelogBuffer
 		private readonly changelogBuffer: IRenMonitorXChangelogBuffer,
 		@IRenWorkspaceStore private readonly workspaceStore: IRenWorkspaceStore,
-		@IEditorService private readonly editorService: IEditorService
+		@IEditorService private readonly editorService: IEditorService,
+		@INotificationService private readonly notificationService: INotificationService
 	) {
 		super(
 			options,
@@ -62,11 +86,41 @@ export class MonitorXViewPane extends ViewPane {
 			hoverService
 		);
 
+		this.ensureLineHighlightStyles();
+
 		this._register(
 			this.changelogBuffer.onDidChangeDraft(() => this.updateView())
 		);
 		this._register(
 			this.workspaceStore.onDidChangeChangelog(() => this.updateView())
+		);
+
+		this._register(
+			this.textModelService.registerTextModelContentProvider(
+				MonitorXViewPane.changelogScheme,
+				{
+					provideTextContent: async (resource) => {
+						const key = resource.toString();
+						const content = this.diffContent.get(key);
+						if (!content) {
+							return null;
+						}
+
+						const existing = this.modelService.getModel(resource);
+						if (existing) {
+							return existing;
+						}
+
+						const languageSelection = this.languageService.createById("diff");
+						return this.modelService.createModel(
+							content,
+							languageSelection,
+							resource,
+							false
+						);
+					},
+				}
+			)
 		);
 	}
 
@@ -74,12 +128,13 @@ export class MonitorXViewPane extends ViewPane {
 		super.renderBody(container);
 
 		// Use flex layout for the main container to handle filter section + content
-		container.style.display = 'flex';
-		container.style.flexDirection = 'column';
+		container.style.display = "flex";
+		container.style.flexDirection = "column";
 
 		this.renderFilters(container);
 
 		this.contentContainer = document.createElement("div");
+		this.contentContainer.className = "ren-monitorx-content";
 		this.contentContainer.style.flex = "1";
 		this.contentContainer.style.overflow = "auto";
 		this.contentContainer.style.padding = "10px";
@@ -99,26 +154,34 @@ export class MonitorXViewPane extends ViewPane {
 		filterSection.style.backgroundColor = "var(--vscode-sideBar-background)";
 
 		// Row 1: Text Search
-		const searchWrapper = this.createInputWithIcon("codicon-search", "Search changes...", (val) => {
-			this.filter.text = val;
-			this.updateView();
-		});
+		const searchWrapper = this.createInputWithIcon(
+			"codicon-search",
+			"Search changes...",
+			(val) => {
+				this.filter.text = val;
+				this.updateView();
+			}
+		);
 		filterSection.appendChild(searchWrapper);
 
 		// Row 2: File + Time
 		const row2 = document.createElement("div");
 		row2.style.display = "flex";
 		row2.style.gap = "8px";
-		
-		const fileWrapper = this.createInputWithIcon("codicon-file", "Filter files...", (val) => {
-			this.filter.filePath = val;
-			this.updateView();
-		});
+
+		const fileWrapper = this.createInputWithIcon(
+			"codicon-file",
+			"Filter files...",
+			(val) => {
+				this.filter.filePath = val;
+				this.updateView();
+			}
+		);
 		fileWrapper.style.flex = "1";
-		
+
 		const timeSelect = this.createTimeSelect();
 		timeSelect.style.flex = "1";
-		
+
 		row2.appendChild(fileWrapper);
 		row2.appendChild(timeSelect);
 		filterSection.appendChild(row2);
@@ -126,12 +189,18 @@ export class MonitorXViewPane extends ViewPane {
 		container.appendChild(filterSection);
 	}
 
-	private createInputWithIcon(iconClass: string, placeholder: string, onChange: (val: string) => void): HTMLElement {
+
+
+	private createInputWithIcon(
+		iconClass: string,
+		placeholder: string,
+		onChange: (val: string) => void
+	): HTMLElement {
 		const wrapper = document.createElement("div");
 		wrapper.style.position = "relative";
 		wrapper.style.display = "flex";
 		wrapper.style.alignItems = "center";
-		
+
 		const icon = document.createElement("div");
 		icon.className = `codicon ${iconClass}`;
 		icon.style.position = "absolute";
@@ -141,7 +210,7 @@ export class MonitorXViewPane extends ViewPane {
 		icon.style.color = "var(--vscode-input-placeholderForeground)";
 		icon.style.pointerEvents = "none";
 		wrapper.appendChild(icon);
-		
+
 		const input = document.createElement("input");
 		input.type = "text";
 		input.placeholder = placeholder;
@@ -155,13 +224,15 @@ export class MonitorXViewPane extends ViewPane {
 		input.style.outline = "none";
 		input.style.fontSize = "12px";
 		input.style.boxSizing = "border-box";
-		
+
 		// Focus styles
-		input.onfocus = () => input.style.border = "1px solid var(--vscode-focusBorder)";
-		input.onblur = () => input.style.border = "1px solid var(--vscode-input-border)";
-		
+		input.onfocus = () =>
+			(input.style.border = "1px solid var(--vscode-focusBorder)");
+		input.onblur = () =>
+			(input.style.border = "1px solid var(--vscode-input-border)");
+
 		input.oninput = () => onChange(input.value);
-		
+
 		wrapper.appendChild(input);
 		return wrapper;
 	}
@@ -169,7 +240,7 @@ export class MonitorXViewPane extends ViewPane {
 	private createTimeSelect(): HTMLElement {
 		const wrapper = document.createElement("div");
 		wrapper.style.position = "relative";
-		
+
 		const select = document.createElement("select");
 		select.style.width = "100%";
 		select.style.height = "26px";
@@ -187,10 +258,10 @@ export class MonitorXViewPane extends ViewPane {
 			{ label: "All Time", value: "all" },
 			{ label: "Last 24 Hours", value: "24h" },
 			{ label: "Last 7 Days", value: "7d" },
-			{ label: "Last 30 Days", value: "30d" }
+			{ label: "Last 30 Days", value: "30d" },
 		];
 
-		options.forEach(opt => {
+		options.forEach((opt) => {
 			const option = document.createElement("option");
 			option.value = opt.value;
 			option.textContent = opt.label;
@@ -214,33 +285,44 @@ export class MonitorXViewPane extends ViewPane {
 			}
 			this.updateView();
 		};
-		
+
 		// Focus styles
-		select.onfocus = () => select.style.border = "1px solid var(--vscode-focusBorder)";
-		select.onblur = () => select.style.border = "1px solid var(--vscode-dropdown-border)";
-		
+		select.onfocus = () =>
+			(select.style.border = "1px solid var(--vscode-focusBorder)");
+		select.onblur = () =>
+			(select.style.border = "1px solid var(--vscode-dropdown-border)");
+
 		wrapper.appendChild(select);
 		return wrapper;
 	}
-
 
 	private async updateView(): Promise<void> {
 		if (!this.contentContainer) {
 			return;
 		}
 
+		// Preserve scroll position before clearing content
+		const scrollTop = this.contentContainer.scrollTop;
+		// Capture reference for closure in requestAnimationFrame
+		const contentContainer = this.contentContainer;
+
 		try {
 			// Get all pending drafts (not just one with hardcoded sessionId)
 			const drafts = this.changelogBuffer.listDrafts(this.filter);
-			const entries = await this.workspaceStore.getAllChangelogEntries(this.filter);
+			const entries = await this.workspaceStore.getAllChangelogEntries(
+				this.filter
+			);
 
 			// Debug logging
-			if (typeof process !== 'undefined' && process.env?.['VSCODE_DEV'] === 'true') {
-				console.log('[MonitorXViewPane] updateView', { 
-					draftsCount: drafts.length, 
+			if (
+				typeof process !== "undefined" &&
+				process.env?.["VSCODE_DEV"] === "true"
+			) {
+				console.log("[MonitorXViewPane] updateView", {
+					draftsCount: drafts.length,
 					entriesCount: entries.length,
-					draftSessionIds: drafts.map(d => d.sessionId),
-					entryIds: entries.map(e => e.id)
+					draftSessionIds: drafts.map((d) => d.sessionId),
+					entryIds: entries.map((e) => e.id),
 				});
 			}
 
@@ -254,7 +336,9 @@ export class MonitorXViewPane extends ViewPane {
 			if (drafts.length > 0) {
 				this.renderSectionHeader("Pending Drafts", drafts.length);
 				// Sort drafts by updatedAt descending (most recent first)
-				const sortedDrafts = [...drafts].sort((a, b) => b.updatedAt - a.updatedAt);
+				const sortedDrafts = [...drafts].sort(
+					(a, b) => b.updatedAt - a.updatedAt
+				);
 				for (const draft of sortedDrafts) {
 					this.renderDraftItem(draft);
 				}
@@ -283,6 +367,14 @@ export class MonitorXViewPane extends ViewPane {
 			if (drafts.length === 0 && entries.length === 0) {
 				this.renderEmptyState();
 			}
+
+			// Defer scroll position restoration to next animation frame
+			// This ensures the browser has finished layout calculations after DOM updates
+			requestAnimationFrame(() => {
+				if (contentContainer.isConnected) {
+					contentContainer.scrollTop = scrollTop;
+				}
+			});
 		} catch (error) {
 			// Ensure we still have a container to render error into
 			if (!this.contentContainer) {
@@ -295,22 +387,29 @@ export class MonitorXViewPane extends ViewPane {
 			errorDiv.style.padding = "20px";
 			errorDiv.style.textAlign = "center";
 			errorDiv.style.color = "var(--vscode-errorForeground)";
-			
+
 			const errorTitle = document.createElement("div");
 			errorTitle.style.fontWeight = "600";
 			errorTitle.style.marginBottom = "8px";
 			errorTitle.textContent = "Failed to load changelog";
 			errorDiv.appendChild(errorTitle);
-			
+
 			const errorMessage = document.createElement("div");
 			errorMessage.style.fontSize = "12px";
 			errorMessage.style.color = "var(--vscode-descriptionForeground)";
 			const errorText = error instanceof Error ? error.message : String(error);
 			errorMessage.textContent = errorText || "Unknown error occurred";
 			errorDiv.appendChild(errorMessage);
-			
+
 			this.contentContainer.appendChild(errorDiv);
-			
+
+			// Defer scroll position restoration in error case too
+			requestAnimationFrame(() => {
+				if (contentContainer.isConnected) {
+					contentContainer.scrollTop = scrollTop;
+				}
+			});
+
 			// Log error for debugging
 			console.error("[MonitorXViewPane] Failed to load changelog:", error);
 		}
@@ -401,7 +500,10 @@ export class MonitorXViewPane extends ViewPane {
 		this.contentContainer!.appendChild(item);
 	}
 
-	private renderFileList(container: HTMLElement, files: readonly { path: string; diff: string }[]): void {
+	private renderFileList(
+		container: HTMLElement,
+		files: readonly { path: string; diff: string }[]
+	): void {
 		if (!files || files.length === 0) {
 			return;
 		}
@@ -418,29 +520,55 @@ export class MonitorXViewPane extends ViewPane {
 			row.style.display = "flex";
 			row.style.justifyContent = "space-between";
 			row.style.alignItems = "center";
-			row.style.padding = "2px 4px";
+			row.style.padding = "6px 8px";
 			row.style.backgroundColor = "var(--vscode-textBlockQuote-background)";
-			row.style.borderRadius = "2px";
+			row.style.borderRadius = "4px";
+			row.style.border = "1px solid var(--vscode-panel-border)";
 
-			// Extract filename from path (handle both forward and backslashes)
-			const fileName = file.path.split(/[/\\]/).pop() || file.path;
+			const { displayPath, tooltip } = this.toRelativePath(file.path);
 
 			const path = document.createElement("span");
-			path.textContent = fileName;
+			path.textContent = displayPath;
 			path.style.fontFamily = "var(--vscode-editor-font-family)";
 			path.style.overflow = "hidden";
 			path.style.textOverflow = "ellipsis";
 			path.style.whiteSpace = "nowrap";
 			// Show full path on hover
-			path.title = file.path;
+			path.title = tooltip;
 			row.appendChild(path);
+
+			const counts = this.countChanges(file.diff);
+			const chips = document.createElement("div");
+			chips.style.display = "flex";
+			chips.style.alignItems = "center";
+			chips.style.gap = "6px";
+
+			const addChip = document.createElement("span");
+			addChip.textContent = `+${counts.additions}`;
+			addChip.style.background = "var(--vscode-diffEditor-insertedTextBackground)";
+			addChip.style.color = "var(--vscode-diffEditor-insertedLineForeground, var(--vscode-foreground))";
+			addChip.style.padding = "2px 6px";
+			addChip.style.borderRadius = "6px";
+			addChip.style.fontWeight = "600";
+			chips.appendChild(addChip);
+
+			const delChip = document.createElement("span");
+			delChip.textContent = `-${counts.deletions}`;
+			delChip.style.background = "var(--vscode-diffEditor-removedTextBackground)";
+			delChip.style.color = "var(--vscode-diffEditor-removedLineForeground, var(--vscode-foreground))";
+			delChip.style.padding = "2px 6px";
+			delChip.style.borderRadius = "6px";
+			delChip.style.fontWeight = "600";
+			chips.appendChild(delChip);
 
 			const ranges = document.createElement("span");
 			ranges.textContent = this.getLineRanges(file.diff);
 			ranges.style.opacity = "0.7";
 			ranges.style.marginLeft = "8px";
 			ranges.style.flexShrink = "0";
-			row.appendChild(ranges);
+			chips.appendChild(ranges);
+
+			row.appendChild(chips);
 
 			list.appendChild(row);
 		}
@@ -450,48 +578,93 @@ export class MonitorXViewPane extends ViewPane {
 
 	private getLineRanges(diff: string): string {
 		if (!diff) return "";
-		
+
 		const ranges: string[] = [];
 		// More robust regex to handle spacing in diff headers
 		const regex = /^@@\s+-[0-9,]+\s+\+(\d+)(?:,(\d+))?\s+@@/gm;
 		let match;
-		
+
 		// Check first few lines of diff for headers
 		while ((match = regex.exec(diff)) !== null) {
 			const start = parseInt(match[1], 10);
 			const count = match[2] ? parseInt(match[2], 10) : 1;
 			if (count === 0) continue;
-			
+
 			const end = start + count - 1;
 			if (start === end) {
 				ranges.push(`${start}`);
 			} else {
 				ranges.push(`${start}-${end}`);
 			}
-			
+
 			// Limit to first few ranges to keep UI clean
 			if (ranges.length >= 3) {
 				ranges.push("...");
 				break;
 			}
 		}
-		
+
 		return ranges.length > 0 ? `:${ranges.join(", ")}` : "";
+	}
+
+	private countChanges(diff: string): { additions: number; deletions: number } {
+		let additions = 0;
+		let deletions = 0;
+		for (const line of diff.split(/\r?\n/)) {
+			if (line.startsWith("+") && !line.startsWith("+++")) {
+				additions++;
+			} else if (line.startsWith("-") && !line.startsWith("---")) {
+				deletions++;
+			}
+		}
+		return { additions, deletions };
 	}
 
 	private renderDiffActions(
 		container: HTMLElement,
 		entry: IMonitorXChangelogDraft | IMonitorXChangelogEntry
 	): void {
-		if (!entry.files || entry.files.length === 0) {
-			return;
-		}
-
 		const actions = document.createElement("div");
 		actions.style.display = "flex";
 		actions.style.gap = "10px";
 		actions.style.marginTop = "8px";
 		actions.style.fontSize = "11px";
+
+		const sessionId = entry.sessionId;
+		if (sessionId) {
+			const chatLink = document.createElement("a");
+			chatLink.style.cursor = "pointer";
+			chatLink.style.textDecoration = "none";
+			chatLink.style.color = "var(--vscode-textLink-foreground)";
+			chatLink.style.display = "inline-flex";
+			chatLink.style.alignItems = "center";
+			chatLink.style.gap = "4px";
+			chatLink.title = `Open chat session ${sessionId.substring(0, 8)}...`;
+
+			// Add chat icon
+			const chatIcon = document.createElement("span");
+			chatIcon.className = "codicon codicon-comment-discussion";
+			chatIcon.style.fontSize = "12px";
+			chatLink.appendChild(chatIcon);
+
+			// Add link text
+			const linkText = document.createElement("span");
+			linkText.textContent = "Go to Chat";
+			linkText.style.textDecoration = "underline";
+			chatLink.appendChild(linkText);
+
+			chatLink.onclick = (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				this.openChatSession(sessionId);
+			};
+			actions.appendChild(chatLink);
+		}
+
+		if (!entry.files || entry.files.length === 0) {
+			container.appendChild(actions);
+			return;
+		}
 
 		const diffLink = document.createElement("a");
 		diffLink.textContent = "Show Diffs";
@@ -511,25 +684,227 @@ export class MonitorXViewPane extends ViewPane {
 	private async openDiffs(
 		entry: IMonitorXChangelogDraft | IMonitorXChangelogEntry
 	): Promise<void> {
-		const id = "sessionId" in entry ? entry.sessionId : entry.id;
-		const content = entry.files
-			.map(
-				(f) => `File: ${f.path}\n${"=".repeat(f.path.length + 6)}\n${f.diff}`
-			)
-			.join("\n\n");
-
+		// For drafts use sessionId, for entries use id (both may be sessionId from the new implementation)
+		const entryId = "id" in entry ? entry.id : entry.sessionId;
+		const id = entryId || "unknown";
+		const titleLabel = entryId ? `Changelog ${entryId}` : "Changelog";
 		const resource = URI.from({
-			scheme: "untitled",
-			path: `Changelog-Diff-${id.substring(0, 8)}.diff`,
+			scheme: MonitorXViewPane.changelogScheme,
+			path: `/Changelog-${id}.diff`,
 		});
 
-		await this.editorService.openEditor({
+		const content = this.buildDiffDocument(titleLabel, entry);
+		this.diffContent.set(resource.toString(), content);
+
+		const editorPane = await this.editorService.openEditor({
 			resource,
-			contents: content,
 			options: {
 				pinned: true,
-			},
+				revealIfOpened: true,
+				readOnly: true,
+				// Keep preview off so the tab is stable
+				preview: false,
+				// Avoid "save" prompts for readonly virtual docs
+				forceEditable: false,
+			} as any,
 		});
+
+		const control = editorPane?.getControl?.();
+		const codeEditor = control && isCodeEditor(control) ? (control as ICodeEditor) : undefined;
+		const model = codeEditor?.getModel();
+		if (codeEditor && model && model.uri.toString() === resource.toString()) {
+			const previous = this.diffDecorations.get(resource.toString()) ?? [];
+			const next = codeEditor.deltaDecorations(
+				previous,
+				this.computeLineDecorations(model)
+			);
+			this.diffDecorations.set(resource.toString(), next);
+		}
+	}
+
+	private buildDiffDocument(
+		titleLabel: string,
+		entry: IMonitorXChangelogDraft | IMonitorXChangelogEntry
+	): string {
+		const timestamp =
+			"timestamp" in entry
+				? entry.timestamp
+				: (entry as IMonitorXChangelogDraft).updatedAt;
+		const header = [
+			`# ${titleLabel}`,
+			`Subject: ${entry.subject ?? "Changelog"}`,
+			`Description: ${entry.description ?? "No description provided."}`,
+			`Timestamp: ${this.formatTimestamp(timestamp)}`,
+			"",
+			"Files:",
+			...entry.files.map((f) => `- ${this.toRelativePath(f.path).displayPath}`),
+		];
+
+		const body = entry.files
+			.map((file) => this.formatFileDiffSection(file))
+			.join("\n\n");
+
+		return `${header.join("\n")}\n\n${body}`.trimEnd();
+	}
+
+	private formatFileDiffSection(file: { path: string; diff: string }): string {
+		const counts = this.countChanges(file.diff);
+		const { displayPath } = this.toRelativePath(file.path);
+		const fileHeader = [
+			`## ${displayPath}`,
+			`Changes: +${counts.additions} / -${counts.deletions}`,
+			"".padEnd(32, "-"),
+		];
+
+		const diffBody = this.collapseUnchangedContext(file.diff);
+
+		return `${fileHeader.join("\n")}\n${diffBody}`;
+	}
+
+	private collapseUnchangedContext(diff: string): string {
+		const lines = diff.split(/\r?\n/);
+		const output: string[] = [];
+		let unchangedBuffer: string[] = [];
+
+		const flushBuffer = () => {
+			if (!unchangedBuffer.length) {
+				return;
+			}
+			if (unchangedBuffer.length <= 6) {
+				output.push(...unchangedBuffer);
+			} else {
+				output.push(
+					`… ${unchangedBuffer.length} unchanged lines hidden …`
+				);
+			}
+			unchangedBuffer = [];
+		};
+
+		for (const line of lines) {
+			const isChange =
+				line.startsWith("+") ||
+				line.startsWith("-") ||
+				line.startsWith("@@") ||
+				line.startsWith("diff ") ||
+				line.startsWith("index ") ||
+				line.startsWith("---") ||
+				line.startsWith("+++");
+
+			if (!isChange && line.trim() !== "") {
+				unchangedBuffer.push(line);
+				continue;
+			}
+
+			flushBuffer();
+			output.push(line);
+		}
+
+		flushBuffer();
+		return output.join("\n");
+	}
+
+	private formatTimestamp(timestamp: number | undefined): string {
+		if (!timestamp) {
+			return "Unknown time";
+		}
+		try {
+			return new Date(timestamp).toLocaleString();
+		} catch {
+			return `${timestamp}`;
+		}
+	}
+
+	private toRelativePath(
+		absolutePath: string
+	): { displayPath: string; tooltip: string } {
+		try {
+			const workspace = this.workspaceService.getWorkspace();
+			const folder = workspace.folders?.[0];
+			if (folder) {
+				const root = folder.uri.fsPath;
+				const rel = pathRelative(root, absolutePath);
+				if (rel && !rel.startsWith("..")) {
+					return { displayPath: rel, tooltip: absolutePath };
+				}
+			}
+		} catch {
+			// fall through
+		}
+
+		const displayPath = basename(absolutePath) || absolutePath;
+		return { displayPath, tooltip: absolutePath };
+	}
+
+	private async openChatSession(sessionId: string): Promise<void> {
+		if (!sessionId) {
+			return;
+		}
+		try {
+			const chatView = (await this.viewsService.openView(
+				ChatViewId,
+				true
+			)) as ChatViewPane | undefined;
+			if (chatView) {
+				try {
+					await chatView.loadSession(sessionId);
+					chatView.focusInput();
+				} catch (loadError) {
+					// Session may have been deleted - show notification
+					console.warn("[MonitorXViewPane] Failed to load chat session", loadError);
+					this.notificationService.info(
+						'This chat session is no longer available. It may have been deleted.'
+					);
+				}
+			}
+		} catch (error) {
+			console.error("[MonitorXViewPane] Failed to open chat view", error);
+			this.notificationService.error('Failed to open chat view');
+		}
+	}
+
+	private computeLineDecorations(model: ITextModel) {
+		const decorations = [];
+		for (let line = 1; line <= model.getLineCount(); line++) {
+			const text = model.getLineContent(line);
+			if (text.startsWith("+") && !text.startsWith("+++")) {
+				decorations.push({
+					range: new Range(line, 1, line, 1),
+					options: {
+						description: "ren.changelog.lineAdded",
+						isWholeLine: true,
+						className: "ren-changelog-line-added",
+					},
+				});
+			} else if (text.startsWith("-") && !text.startsWith("---")) {
+				decorations.push({
+					range: new Range(line, 1, line, 1),
+					options: {
+						description: "ren.changelog.lineRemoved",
+						isWholeLine: true,
+						className: "ren-changelog-line-removed",
+					},
+				});
+			}
+		}
+		return decorations;
+	}
+
+	private ensureLineHighlightStyles(): void {
+		if (MonitorXViewPane.stylesInjected) {
+			return;
+		}
+		const style = document.createElement("style");
+		style.id = "ren-changelog-line-highlights";
+		style.textContent = `
+			.ren-changelog-line-added {
+				background-color: var(--vscode-diffEditor-insertedLineBackground, rgba(76, 175, 80, 0.18));
+			}
+			.ren-changelog-line-removed {
+				background-color: var(--vscode-diffEditor-removedLineBackground, rgba(244, 67, 54, 0.18));
+			}
+		`;
+		(document.head ?? document.body).appendChild(style);
+		MonitorXViewPane.stylesInjected = true;
 	}
 
 	private renderEmptyState(): void {
@@ -542,6 +917,13 @@ export class MonitorXViewPane extends ViewPane {
 	}
 
 	protected override layoutBody(height: number, width: number): void {
-		// No-op
+		super.layoutBody(height, width);
+		// Set explicit height on container to enable proper flex layout calculations
+		// The container is the parent of contentContainer and has display: flex
+		if (this.contentContainer?.parentElement) {
+			const container = this.contentContainer.parentElement as HTMLElement;
+			container.style.height = `${height}px`;
+			container.style.width = `${width}px`;
+		}
 	}
 }

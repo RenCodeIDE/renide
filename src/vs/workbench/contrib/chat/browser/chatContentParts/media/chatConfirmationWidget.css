@@ -241,6 +241,7 @@
 	border-bottom: none;
 }
 
+.chat-confirmation-widget2 .chat-confirmation-widget-title {
 	.rendered-markdown {
 		line-height: 20px !important;
 		p {
@@ -282,6 +283,7 @@
 	display: none;
 }
 
+.chat-confirmation-widget2 .chat-confirmation-widget-message {
 	.tool-postconfirm-display {
 		padding-bottom: 6px;
 	}

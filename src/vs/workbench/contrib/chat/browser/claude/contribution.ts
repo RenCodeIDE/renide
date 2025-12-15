@@ -3,55 +3,56 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Disposable, toDisposable } from '../../../../../base/common/lifecycle.js';
-import { Event } from '../../../../../base/common/event.js';
-import { env } from '../../../../../base/common/process.js';
-import { localize } from '../../../../../nls.js';
-import { ILogService } from '../../../../../platform/log/common/log.js';
-import { ExtensionIdentifier } from '../../../../../platform/extensions/common/extensions.js';
+import {
+	Disposable,
+	toDisposable,
+} from "../../../../../base/common/lifecycle.js";
+import { Event } from "../../../../../base/common/event.js";
+import { env } from "../../../../../base/common/process.js";
+import { localize } from "../../../../../nls.js";
+import { ILogService } from "../../../../../platform/log/common/log.js";
+import { ExtensionIdentifier } from "../../../../../platform/extensions/common/extensions.js";
 import {
 	registerWorkbenchContribution2,
 	IWorkbenchContribution,
 	WorkbenchPhase,
-} from '../../../../common/contributions.js';
+} from "../../../../common/contributions.js";
 import {
 	IChatAgentService,
 	IChatAgentResult,
-} from '../../common/chatAgents.js';
-import { ChatAgentLocation, ChatModeKind } from '../../common/constants.js';
-import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
-import { ChatContextKeys } from '../../common/chatContextKeys.js';
+} from "../../common/chatAgents.js";
+import { ChatAgentLocation, ChatModeKind } from "../../common/constants.js";
+import { IContextKeyService } from "../../../../../platform/contextkey/common/contextkey.js";
+import { ChatContextKeys } from "../../common/chatContextKeys.js";
 import {
 	ILanguageModelChatMetadataAndIdentifier,
 	ILanguageModelChatProvider,
 	ILanguageModelsService,
 	IChatResponsePart,
-} from '../../common/languageModels.js';
-import {
-	ITextModelService,
-} from '../../../../../editor/common/services/resolverService.js';
-import {
-	ILanguageModelToolsService,
-} from '../../common/languageModelToolsService.js';
-import { IRequestService } from '../../../../../platform/request/common/request.js';
-import { ISecretStorageService } from '../../../../../platform/secrets/common/secrets.js';
-import { IConfigurationService } from '../../../../../platform/configuration/common/configuration.js';
-import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
-import { ILanguageFeaturesService } from '../../../../../editor/common/services/languageFeatures.js';
-import { CLAUDE_MODELS } from './models.js';
-import { ClaudeAgentImplementation } from './agent.js';
-import { reduceMessageParts } from './conversion.js';
+} from "../../common/languageModels.js";
+import { ITextModelService } from "../../../../../editor/common/services/resolverService.js";
+import { ILanguageModelToolsService } from "../../common/languageModelToolsService.js";
+import { IRequestService } from "../../../../../platform/request/common/request.js";
+import { ISecretStorageService } from "../../../../../platform/secrets/common/secrets.js";
+import { IConfigurationService } from "../../../../../platform/configuration/common/configuration.js";
+import { IInstantiationService } from "../../../../../platform/instantiation/common/instantiation.js";
+import { ILanguageFeaturesService } from "../../../../../editor/common/services/languageFeatures.js";
+import { IProductService } from "../../../../../platform/product/common/productService.js";
+import { CLAUDE_MODELS } from "./models.js";
+import { ClaudeAgentImplementation } from "./agent.js";
+import { reduceMessageParts } from "./conversion.js";
 // @ts-ignore - Module resolution error is false positive, files exist
-import { sendChatGPTRequest } from '../chatgpt/request.js';
+import { sendChatGPTRequest } from "../chatgpt/request.js";
 // @ts-ignore - Module resolution error is false positive, files exist
-import { validateIDEFormatStatic } from '../chatgpt/validation.js';
-import { IMetricsService } from '../../../../services/metrics/common/metricsService.js';
-import { IToolContextResolverService } from '../toolContextResolverService.js';
+import { validateIDEFormatStatic } from "../chatgpt/validation.js";
+import { IMetricsService } from "../../../../services/metrics/common/metricsService.js";
+import { IToolContextResolverService } from "../toolContextResolverService.js";
 
 class ClaudeAgentContribution
 	extends Disposable
-	implements IWorkbenchContribution {
-	static readonly ID = 'workbench.contrib.claudeAgent';
+	implements IWorkbenchContribution
+{
+	static readonly ID = "workbench.contrib.claudeAgent";
 
 	constructor(
 		@IChatAgentService private readonly chatAgentService: IChatAgentService,
@@ -60,56 +61,113 @@ class ClaudeAgentContribution
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@ILanguageModelsService languageModelsService: ILanguageModelsService,
 		@ITextModelService textModelService: ITextModelService,
-		@ILanguageModelToolsService languageModelToolsService: ILanguageModelToolsService,
-		@ISecretStorageService private readonly secretStorageService: ISecretStorageService,
-		@IConfigurationService private readonly configurationService: IConfigurationService,
-		@IInstantiationService private readonly instantiationService: IInstantiationService,
+		@ILanguageModelToolsService
+		languageModelToolsService: ILanguageModelToolsService,
+		@ISecretStorageService
+		private readonly secretStorageService: ISecretStorageService,
+		@IConfigurationService
+		private readonly configurationService: IConfigurationService,
+		@IInstantiationService
+		private readonly instantiationService: IInstantiationService,
+		@IProductService private readonly productService: IProductService
 	) {
 		super();
 
+		// Try SERVER_ADDRESS from environment first, then fall back to product.json
+		let serverAddress = env["SERVER_ADDRESS"];
+		if (!serverAddress) {
+			serverAddress = this.productService.renAccount?.apiBaseUrl;
+		}
 
-		const serverAddress = env['SERVER_ADDRESS'];
 		logService.info(
-			`[claude-server] Environment check: SERVER_ADDRESS=${serverAddress ? 'present' : 'missing'}`,
+			`[claude-server] Environment check: SERVER_ADDRESS=${
+				env["SERVER_ADDRESS"] ? "present" : "missing"
+			}, product.json apiBaseUrl=${
+				this.productService.renAccount?.apiBaseUrl || "missing"
+			}`
 		);
 
 		if (!serverAddress) {
-			logService.warn('[claude-server] No server address configured. Set SERVER_ADDRESS environment variable.');
+			logService.warn(
+				"[claude-server] No server address configured. Set SERVER_ADDRESS environment variable or configure apiBaseUrl in product.json."
+			);
 			// Don't register if no server address to avoid "No default agent" errors
 			return;
 		}
 
-		logService.info(`[claude-server] registering online agent using Claude models`);
+		// Normalize server address (add protocol if missing, remove trailing slashes)
+		let normalizedServerAddress = serverAddress.trim();
+		if (
+			!normalizedServerAddress.startsWith("http://") &&
+			!normalizedServerAddress.startsWith("https://")
+		) {
+			logService.warn(
+				`[claude-server] SERVER_ADDRESS missing protocol, assuming https://. Original: ${normalizedServerAddress}`
+			);
+			normalizedServerAddress = `https://${normalizedServerAddress}`;
+		}
+		normalizedServerAddress = normalizedServerAddress.replace(/\/+$/, "");
 
-		const agentId = 'claude.local';
+		serverAddress = normalizedServerAddress;
+
+		logService.info(
+			`[claude-server] registering online agent using Claude models`
+		);
+
+		const agentId = "claude.local";
 		const registration = this.chatAgentService.registerAgent(agentId, {
 			id: agentId,
-			name: 'claude',
-			fullName: localize('claude.agent.name', "Claude"),
-			description: localize('claude.agent.description', "Use Claude online models."),
+			name: "claude",
+			fullName: localize("claude.agent.name", "Claude"),
+			description: localize(
+				"claude.agent.description",
+				"Use Claude online models."
+			),
 			isCore: true,
 			isDefault: false,
 			locations: [ChatAgentLocation.Chat, ChatAgentLocation.EditorInline],
 			modes: [ChatModeKind.Agent, ChatModeKind.Ask, ChatModeKind.Edit],
 			slashCommands: [
-				{ name: 'explain', description: localize('claude.command.explain', "Explain the current selection."), when: undefined },
-				{ name: 'review', description: localize('claude.command.review', "Review the shown changes."), when: undefined }
+				{
+					name: "explain",
+					description: localize(
+						"claude.command.explain",
+						"Explain the current selection."
+					),
+					when: undefined,
+				},
+				{
+					name: "review",
+					description: localize(
+						"claude.command.review",
+						"Review the shown changes."
+					),
+					when: undefined,
+				},
 			],
 			metadata: {
-				followupPlaceholder: localize('claude.followup.placeholder', "Ask Claude..."),
-				additionalWelcomeMessage: localize('claude.welcome', "Claude is ready.")
+				followupPlaceholder: localize(
+					"claude.followup.placeholder",
+					"Ask Claude..."
+				),
+				additionalWelcomeMessage: localize(
+					"claude.welcome",
+					"Claude is ready."
+				),
 			},
 			disambiguation: [],
-			extensionId: new ExtensionIdentifier('core.claude'),
-			extensionVersion: '0.0.0',
-			extensionPublisherId: 'core',
-			extensionDisplayName: 'Core'
+			extensionId: new ExtensionIdentifier("core.claude"),
+			extensionVersion: "0.0.0",
+			extensionPublisherId: "core",
+			extensionDisplayName: "Core",
 		});
 		this._register(registration);
 
 		let languageFeaturesService: ILanguageFeaturesService | undefined;
 		try {
-			languageFeaturesService = this.instantiationService.invokeFunction(accessor => accessor.get(ILanguageFeaturesService));
+			languageFeaturesService = this.instantiationService.invokeFunction(
+				(accessor) => accessor.get(ILanguageFeaturesService)
+			);
 		} catch {
 			// Service not available
 		}
@@ -117,7 +175,9 @@ class ClaudeAgentContribution
 		// Get metrics service for project tracking
 		let metricsService: IMetricsService | undefined;
 		try {
-			metricsService = this.instantiationService.invokeFunction(accessor => accessor.get(IMetricsService));
+			metricsService = this.instantiationService.invokeFunction((accessor) =>
+				accessor.get(IMetricsService)
+			);
 		} catch {
 			// Service not available
 		}
@@ -125,7 +185,9 @@ class ClaudeAgentContribution
 		// Get tool context resolver service for smart defaults
 		let toolContextResolverService: IToolContextResolverService | undefined;
 		try {
-			toolContextResolverService = this.instantiationService.invokeFunction(accessor => accessor.get(IToolContextResolverService));
+			toolContextResolverService = this.instantiationService.invokeFunction(
+				(accessor) => accessor.get(IToolContextResolverService)
+			);
 		} catch {
 			// Service not available
 		}
@@ -142,69 +204,110 @@ class ClaudeAgentContribution
 			this.configurationService,
 			languageFeaturesService,
 			metricsService,
-			toolContextResolverService,
+			toolContextResolverService
 		);
-		this._register(this.chatAgentService.registerAgentImplementation(agentId, implementation));
+		this._register(
+			this.chatAgentService.registerAgentImplementation(agentId, implementation)
+		);
 
-		const enabledKey = contextKeyService.createKey(ChatContextKeys.enabled.key, true);
-		const panelRegisteredKey = contextKeyService.createKey(ChatContextKeys.panelParticipantRegistered.key, true);
-		const extensionRegisteredKey = contextKeyService.createKey(ChatContextKeys.extensionParticipantRegistered.key, true);
-		this._register(toDisposable(() => {
-			enabledKey.reset();
-			panelRegisteredKey.reset();
-			extensionRegisteredKey.reset();
-		}));
+		const enabledKey = contextKeyService.createKey(
+			ChatContextKeys.enabled.key,
+			true
+		);
+		const panelRegisteredKey = contextKeyService.createKey(
+			ChatContextKeys.panelParticipantRegistered.key,
+			true
+		);
+		const extensionRegisteredKey = contextKeyService.createKey(
+			ChatContextKeys.extensionParticipantRegistered.key,
+			true
+		);
+		this._register(
+			toDisposable(() => {
+				enabledKey.reset();
+				panelRegisteredKey.reset();
+				extensionRegisteredKey.reset();
+			})
+		);
 
-		const vendor = 'claude';
+		const vendor = "claude";
 		const requestServiceInstance = this.requestService; // Capture for use in provider
 		const secretStorageInstance = this.secretStorageService; // Capture for use in provider
 		const serverAddressInstance = serverAddress; // Capture for use in provider
 		const logServiceInstance = logService; // Capture for use in provider
 		const provider: ILanguageModelChatProvider = {
 			onDidChange: Event.None,
-			async provideLanguageModelChatInfo(_options, _token): Promise<ILanguageModelChatMetadataAndIdentifier[]> {
-				return CLAUDE_MODELS.map(modelConfig => ({
+			async provideLanguageModelChatInfo(
+				_options,
+				_token
+			): Promise<ILanguageModelChatMetadataAndIdentifier[]> {
+				return CLAUDE_MODELS.map((modelConfig) => ({
 					identifier: modelConfig.identifier,
 					metadata: {
-						extension: new ExtensionIdentifier('core.claude'),
+						extension: new ExtensionIdentifier("core.claude"),
 						name: modelConfig.name,
 						id: modelConfig.identifier,
 						vendor,
-						version: '1.0.0',
-						family: 'claude',
+						version: "1.0.0",
+						family: "claude",
 						detail: modelConfig.description,
 						maxInputTokens: modelConfig.maxInputTokens,
 						maxOutputTokens: modelConfig.maxOutputTokens,
-						modelPickerCategory: { label: 'Anthropic Models', order: 1 },
+						modelPickerCategory: { label: "Anthropic Models", order: 1 },
 						isDefault: modelConfig.isDefault,
 						isUserSelectable: true,
-						capabilities: { agentMode: true, toolCalling: true }
-					}
+						capabilities: { agentMode: true, toolCalling: true },
+					},
 				}));
 			},
 			async sendChatRequest(modelId, messages, _from, _options, token) {
-				const selectedModelConfig = CLAUDE_MODELS.find(m => m.identifier === modelId);
-				const modelToUse = selectedModelConfig?.id || CLAUDE_MODELS.find(m => m.isDefault)?.id || 'claude-3-5-sonnet-20241022';
+				const selectedModelConfig = CLAUDE_MODELS.find(
+					(m) => m.identifier === modelId
+				);
+				const modelToUse =
+					selectedModelConfig?.id ||
+					CLAUDE_MODELS.find((m) => m.isDefault)?.id ||
+					"claude-3-5-sonnet-20241022";
 
 				// Get access token for server authentication
 				let accessToken: string | undefined;
 				try {
-					accessToken = await secretStorageInstance.get('ren.auth.accessToken') ?? undefined;
+					accessToken =
+						(await secretStorageInstance.get("ren.auth.accessToken")) ??
+						undefined;
 					if (!accessToken) {
-						throw new Error(localize('claude.noAuthToken', 'Authentication token is missing. Please sign in to use Claude.'));
+						throw new Error(
+							localize(
+								"claude.noAuthToken",
+								"Authentication token is missing. Please sign in to use Claude."
+							)
+						);
 					}
 				} catch (error) {
-					logServiceInstance.error(`[claude-provider] Error retrieving access token: ${error instanceof Error ? error.message : String(error)}`);
-					throw new Error(localize('claude.noAuthToken', 'Authentication token is missing. Please sign in to use Claude.'));
+					logServiceInstance.error(
+						`[claude-provider] Error retrieving access token: ${
+							error instanceof Error ? error.message : String(error)
+						}`
+					);
+					throw new Error(
+						localize(
+							"claude.noAuthToken",
+							"Authentication token is missing. Please sign in to use Claude."
+						)
+					);
 				}
 
 				// Validate messages are in IDE format
 				validateIDEFormatStatic(messages, logServiceInstance);
-				logServiceInstance.debug(`[claude-provider] Message format validation passed: ${messages.length} messages in IDE format`);
+				logServiceInstance.debug(
+					`[claude-provider] Message format validation passed: ${messages.length} messages in IDE format`
+				);
 
 				// Route through server instead of calling Claude API directly
-				const endpoint: '/api/agent/tools' = '/api/agent/tools';
-				logServiceInstance.info(`[claude-provider] Using endpoint: ${endpoint} for model: ${modelToUse}`);
+				const endpoint: "/api/agent/tools" = "/api/agent/tools";
+				logServiceInstance.info(
+					`[claude-provider] Using endpoint: ${endpoint} for model: ${modelToUse}`
+				);
 
 				const response = await sendChatGPTRequest(
 					requestServiceInstance,
@@ -219,13 +322,15 @@ class ClaudeAgentContribution
 						tools: undefined,
 					},
 					logServiceInstance,
-					'claude',
+					"claude"
 				);
 
 				let sawText = false;
 				let functionCallName: string | undefined;
 
-				const stream = (async function* (): AsyncIterable<IChatResponsePart | IChatResponsePart[]> {
+				const stream = (async function* (): AsyncIterable<
+					IChatResponsePart | IChatResponsePart[]
+				> {
 					for await (const chunk of response.stream) {
 						if (token.isCancellationRequested) {
 							break;
@@ -236,12 +341,14 @@ class ClaudeAgentContribution
 								if (part.text.length) {
 									sawText = true;
 								}
-								chatParts.push({ type: 'text', value: part.text });
+								chatParts.push({ type: "text", value: part.text });
 							} else if (part.toolCall) {
 								functionCallName = part.toolCall.name;
 								// Note: Tool calls are not supported in language model provider mode
 								// This should not happen if server is configured correctly
-								logServiceInstance.warn(`[claude-provider] Received tool call ${part.toolCall.name} in non-agent mode`);
+								logServiceInstance.warn(
+									`[claude-provider] Received tool call ${part.toolCall.name} in non-agent mode`
+								);
 							}
 						}
 						if (chatParts.length === 1) {
@@ -251,28 +358,42 @@ class ClaudeAgentContribution
 						}
 					}
 					if (!sawText && functionCallName && !token.isCancellationRequested) {
-						yield { type: 'text', value: localize('claude.provider.functionCall', "Claude wants to run tool {0}, but tools are only available in agent mode. Retry there or disable tool usage.", functionCallName) };
+						yield {
+							type: "text",
+							value: localize(
+								"claude.provider.functionCall",
+								"Claude wants to run tool {0}, but tools are only available in agent mode. Retry there or disable tool usage.",
+								functionCallName
+							),
+						};
 					}
 				})();
 
 				return {
 					stream,
-					result: response.result.then((result): IChatAgentResult => ({
-						details: 'claude-response',
-						metadata: { model: modelToUse }
-					}))
+					result: response.result.then(
+						(result): IChatAgentResult => ({
+							details: "claude-response",
+							metadata: { model: modelToUse },
+						})
+					),
 				};
 			},
 			async provideTokenCount(_modelId, message, _token) {
-				if (typeof message === 'string') {
+				if (typeof message === "string") {
 					return message.length;
 				}
 				return reduceMessageParts(message).length;
-			}
+			},
 		};
-		this._register(languageModelsService.registerLanguageModelProvider(vendor, provider));
+		this._register(
+			languageModelsService.registerLanguageModelProvider(vendor, provider)
+		);
 	}
 }
 
-registerWorkbenchContribution2(ClaudeAgentContribution.ID, ClaudeAgentContribution, WorkbenchPhase.AfterRestored);
-
+registerWorkbenchContribution2(
+	ClaudeAgentContribution.ID,
+	ClaudeAgentContribution,
+	WorkbenchPhase.AfterRestored
+);

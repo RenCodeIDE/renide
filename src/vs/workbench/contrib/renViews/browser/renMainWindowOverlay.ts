@@ -66,7 +66,7 @@ export class RenMainWindowOverlay {
 		// Listen for custom view switch events from ViewButtons in this container only
 		const handleCustomSwitch = (e: Event) => {
 			const customEvent = e as CustomEvent<{
-				mode: "code" | "graph";
+				mode: RenViewMode;
 				container: HTMLElement;
 			}>;
 			// Only handle events that originated from this container's ViewButtons
@@ -121,6 +121,9 @@ export class RenMainWindowOverlay {
 				this.showCodeView();
 				break;
 			case "graph":
+				this.showOverlayView();
+				break;
+			case "monitor":
 				this.showOverlayView();
 				break;
 		}

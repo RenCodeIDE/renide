@@ -183,8 +183,11 @@ export class RenMonitorXChangelogBuffer extends Disposable implements IRenMonito
 	finalizeDraft(sessionId: string): IMonitorXChangelogEntryInput | undefined {
 		const draft = this.drafts.get(sessionId);
 		let entry: IMonitorXChangelogEntryInput | undefined;
+		// Extract the actual chat session ID from the key (format: "chatSessionId:fileUri")
+		const chatSessionId = sessionId.includes(':') ? sessionId.split(':')[0] : sessionId;
 		if (draft) {
 			entry = {
+				sessionId: chatSessionId,
 				subject: draft.subject,
 				description: draft.description,
 				files: draft.files.map(file => ({ ...file })),
@@ -196,6 +199,7 @@ export class RenMonitorXChangelogBuffer extends Disposable implements IRenMonito
 			const seed = this.seeds.get(sessionId);
 			if (seed) {
 				entry = {
+					sessionId: chatSessionId,
 					subject: seed.subject,
 					description: seed.description,
 					files: seed.files.map(file => ({ ...file })),

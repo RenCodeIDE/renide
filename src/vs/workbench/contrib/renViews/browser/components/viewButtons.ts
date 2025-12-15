@@ -14,7 +14,7 @@ export class ViewButtons implements IDisposable {
 	private readonly _container: HTMLElement;
 
 	constructor(container: HTMLElement) {
-		console.log('[ViewButtons] Constructor called with container:', container);
+		console.log("[ViewButtons] Constructor called with container:", container);
 		this._container = container;
 		this.element.className = "ren-view-buttons";
 		this.element.style.position = "absolute";
@@ -25,15 +25,21 @@ export class ViewButtons implements IDisposable {
 		this.element.style.zIndex = "1000";
 		this.createButtons();
 		container.appendChild(this.element);
-		console.log('[ViewButtons] Buttons created and appended to DOM. Element:', this.element, 'Parent:', this.element.parentElement);
+		console.log(
+			"[ViewButtons] Buttons created and appended to DOM. Element:",
+			this.element,
+			"Parent:",
+			this.element.parentElement
+		);
 	}
 
 	private createButtons(): void {
-		console.log('[ViewButtons] Creating buttons...');
-		const views: RenViewMode[] = ["code", "graph"];
+		console.log("[ViewButtons] Creating buttons...");
+		const views: RenViewMode[] = ["code", "graph", "monitor"];
 		const labels: Record<RenViewMode, string> = {
 			code: "Code",
 			graph: "Graph",
+			monitor: "Monitor",
 		};
 
 		views.forEach((view) => {

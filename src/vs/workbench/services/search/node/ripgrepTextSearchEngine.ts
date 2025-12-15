@@ -16,13 +16,12 @@ import { Progress } from '../../../../platform/progress/common/progress.js';
 import { DEFAULT_MAX_SEARCH_RESULTS, IExtendedExtensionSearchOptions, ITextSearchPreviewOptions, SearchError, SearchErrorCode, serializeSearchError, TextSearchMatch } from '../common/search.js';
 import { Range, TextSearchComplete2, TextSearchContext2, TextSearchMatch2, TextSearchProviderOptions, TextSearchQuery2, TextSearchResult2 } from '../common/searchExtTypes.js';
 import { AST as ReAST, RegExpParser, RegExpVisitor } from 'vscode-regexpp';
-import { rgPath } from '@vscode/ripgrep';
 import { anchorGlob, IOutputChannel, Maybe, rangeToSearchRange, searchRangeToRange } from './ripgrepSearchUtils.js';
 import type { RipgrepTextSearchOptions } from '../common/searchExtTypesInternal.js';
 import { newToOldPreviewOptions } from '../common/searchExtConversionTypes.js';
+import { rgDiskPath } from './ripgrepPathResolver.js';
 
-// If @vscode/ripgrep is in an .asar file, then the binary is unpacked.
-const rgDiskPath = rgPath.replace(/\bnode_modules\.asar\b/, 'node_modules.asar.unpacked');
+
 
 export class RipgrepTextSearchEngine {
 

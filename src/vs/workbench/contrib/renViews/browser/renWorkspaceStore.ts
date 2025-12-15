@@ -196,6 +196,7 @@ export class RenWorkspaceStore extends Disposable implements IRenWorkspaceStore 
 		const metadata = entry.metadata ? this.sanitizeMetadata(entry.metadata) : undefined;
 		const finalizedEntry: IMonitorXChangelogEntry = {
 			id: generateUuid(),
+			...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
 			subject,
 			description,
 			timestamp: entry.timestamp ?? Date.now(),
@@ -243,6 +244,10 @@ export class RenWorkspaceStore extends Disposable implements IRenWorkspaceStore 
 			return entries;
 		}
 		return entries.filter(entry => matchesFilter(entry, filter));
+	}
+
+	async getChangelogEntriesBySessionId(sessionId: string): Promise<IMonitorXChangelogEntry[]> {
+		return this.getAllChangelogEntries({ sessionId });
 	}
 
 	// Helper method to get storage key with prefix
@@ -455,10 +460,12 @@ export class RenWorkspaceStore extends Disposable implements IRenWorkspaceStore 
 		const subject = typeof value.subject === 'string' && value.subject.trim().length ? value.subject.trim() : this.deriveSubject(files, value);
 		const description = typeof value.description === 'string' ? value.description : (typeof value.reason === 'string' ? value.reason : '');
 		const id = typeof value.id === 'string' ? value.id : generateUuid();
+		const sessionId = typeof value.sessionId === 'string' ? value.sessionId : undefined;
 		const graph = this.sanitizeGraphReference(value.graph);
 		const metadata = this.sanitizeMetadata(value.metadata);
 		return {
 			id,
+			...(sessionId ? { sessionId } : {}),
 			subject,
 			description,
 			timestamp: timestampCandidate,

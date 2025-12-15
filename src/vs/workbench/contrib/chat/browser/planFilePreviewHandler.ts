@@ -213,6 +213,8 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 
 	/**
 	 * Internal method to execute the plan
+	 * Uses the current active chat if available, otherwise opens chat view.
+	 * Directly adds todos and provides plan as context.
 	 */
 	private async executePlanInternal(
 		planFileUri: URI,
@@ -223,20 +225,21 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 		widget: any
 	): Promise<void> {
 		try {
-			// Get or create widget
+			// Priority: Use current active chat widget first, then show chat view
+			if (!widget) {
+				widget = this.chatWidgetService.lastFocusedWidget;
+			}
 			if (!widget) {
 				widget = await showChatView(this.viewsService, this.layoutService);
-				if (!widget) {
-					widget = this.chatWidgetService.lastFocusedWidget;
-				}
 			}
 
 			if (!widget) {
 				this.logService.warn('[PlanFilePreviewHandler] Could not get chat widget');
+				this.notificationService.error(localize('planExecution.noChatWidget', 'Could not open chat. Please open chat manually and try again.'));
 				return;
 			}
 
-			// Switch to Agent mode (preserve conversation if possible)
+			// Switch to Agent mode if needed (preserve conversation)
 			const agentMode = ChatMode.Agent;
 			const currentMode = widget.input.currentModeKind;
 			
@@ -259,10 +262,7 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 
 				widget.input.setChatMode(agentMode.id);
 
-				// Only clear session if absolutely necessary (e.g., Edit mode conflicts)
-				// For Plan → Agent switch, typically should NOT require clearing
 				if (chatModeCheck.needToClearSession) {
-					// Show confirmation before clearing session
 					const confirmed = await this.dialogService.confirm({
 						type: 'info',
 						title: localize('planExecution.clearSessionTitle', 'Start new session?'),
@@ -283,52 +283,33 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 			// Get session ID
 			const sessionId = widget.viewModel?.model.sessionId || 'default';
 			
-			// Start execution tracking
+			// Extract incomplete todos and directly add them to the session
 			const incompleteTodos = todos.filter(t => !t.completed);
+			
+			// Directly create the todos in the todo service (don't ask agent to do it)
+			if (incompleteTodos.length > 0) {
+				const chatTodos: IChatTodo[] = incompleteTodos.map((todo, index) => ({
+					id: index + 1,
+					title: todo.text,
+					description: todo.section ? `Section: ${todo.section}` : undefined,
+					status: 'not-started' as const
+				}));
+				this.todoListService.setTodos(sessionId, chatTodos);
+				this.logService.info(`[PlanFilePreviewHandler] Created ${chatTodos.length} todos directly`);
+			}
+			
+			// Start execution tracking
 			this.executionTracker.startExecution(planFileUri.toString(), sessionId, incompleteTodos.length);
 			
-			// Prepare enhanced message that instructs agent to create todos using ManageTodoListTool
+			// Prepare a simple, focused message with plan as context
 			const workspaceRelativePath = this.getWorkspaceRelativePath(planFileUri);
 			const planTitle = planMetadata?.title || workspaceRelativePath || planFileUri.fsPath;
 			
-			let message = `Please implement the plan: ${planTitle}\n\n`;
-			
-			if (planMetadata?.status) {
-				message += `Plan Status: ${planMetadata.status}\n\n`;
-			}
-			
-			if (validationResult.score < 70) {
-				message += `Note: Plan quality score is ${validationResult.score}/100. ${validationResult.suggestions.slice(0, 2).join(' ')}\n\n`;
-			}
-			
-			message += `Plan file: ${workspaceRelativePath || planFileUri.fsPath}\n\n`;
-			
-			// Instruct agent to create todos using ManageTodoListTool (more explicit format)
-			if (incompleteTodos.length > 0) {
-				message += `=== REQUIRED: Create Todo List First ===\n\n`;
-				message += `Before starting implementation, you MUST call the 'todos' tool to create the todo list.\n\n`;
-				message += `Tool: todos\n`;
-				message += `Operation: write\n`;
-				message += `TodoList format:\n`;
-				message += `[\n`;
-				
-				incompleteTodos.forEach((todo, index) => {
-					message += `  {\n`;
-					message += `    "id": ${index + 1},\n`;
-					message += `    "title": "${todo.text.replace(/"/g, '\\"')}",\n`;
-					message += `    "description": "${(todo.section ? `Section: ${todo.section}` : 'From plan file').replace(/"/g, '\\"')}",\n`;
-					message += `    "status": "not-started"\n`;
-					message += `  }${index < incompleteTodos.length - 1 ? ',' : ''}\n`;
-				});
-				
-				message += `]\n\n`;
-				message += `After creating the todos using the tool, work through each one systematically:\n`;
-				message += `1. Mark a todo as "in-progress" when you start working on it\n`;
-				message += `2. Mark it as "completed" when finished\n`;
-				message += `3. Reference the plan file for exact implementation details\n\n`;
-			}
-			
-			message += `Plan content:\n\n${planContent}`;
+			let message = `Execute the implementation plan: **${planTitle}**\n\n`;
+			message += `📋 **Todos have been added** (${incompleteTodos.length} items) - work through them systematically.\n\n`;
+			message += `📄 **Plan file:** \`${workspaceRelativePath || planFileUri.fsPath}\`\n\n`;
+			message += `---\n\n`;
+			message += `**Plan Content:**\n\n${planContent}`;
 			
 			// Listen to todo updates to sync with execution tracker and plan file
 			this._register(this.todoListService.onDidUpdateTodos((updatedSessionId) => {
@@ -357,25 +338,7 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 				status: 'in-progress'
 			});
 
-			// Fallback: If agent doesn't create todos within 3 seconds, create them directly
-			if (incompleteTodos.length > 0) {
-				setTimeout(async () => {
-					const currentTodos = this.todoListService.getTodos(sessionId);
-					if (currentTodos.length === 0) {
-						this.logService.warn(`[PlanFilePreviewHandler] Agent did not create todos, creating them directly as fallback`);
-						const chatTodos: IChatTodo[] = incompleteTodos.map((todo, index) => ({
-							id: index + 1,
-							title: todo.text,
-							description: todo.section ? `Section: ${todo.section}` : undefined,
-							status: 'not-started' as const
-						}));
-						this.todoListService.setTodos(sessionId, chatTodos);
-						this.logService.info(`[PlanFilePreviewHandler] Created ${chatTodos.length} todos directly as fallback`);
-					}
-				}, 3000);
-			}
-
-			this.logService.info(`[PlanFilePreviewHandler] Plan execution started. Validation: ${validationResult.isValid ? 'passed' : 'failed'} (score: ${validationResult.score}/100), Todos: ${incompleteTodos.length}`);
+			this.logService.info(`[PlanFilePreviewHandler] Plan execution started. Todos: ${incompleteTodos.length}`);
 		} catch (error) {
 			this.logService.error('[PlanFilePreviewHandler] Failed to execute plan', error);
 		}

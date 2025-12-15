@@ -18,11 +18,6 @@ import {
 	IActionWidgetDropdownOptions,
 } from "../../../../../platform/actionWidget/browser/actionWidgetDropdown.js";
 import { IContextKeyService } from "../../../../../platform/contextkey/common/contextkey.js";
-import { ICommandService } from "../../../../../platform/commands/common/commands.js";
-import {
-	ChatEntitlement,
-	IChatEntitlementService,
-} from "../../../../services/chat/common/chatEntitlementService.js";
 import { IKeybindingService } from "../../../../../platform/keybinding/common/keybinding.js";
 import { DEFAULT_MODEL_PICKER_CATEGORY } from "../../common/modelPicker/modelPickerWidget.js";
 import { IActionProvider } from "../../../../../base/browser/ui/dropdown/dropdown.js";
@@ -89,35 +84,10 @@ function modelDelegateToWidgetActionsProvider(
 	};
 }
 
-function getModelPickerActionBarActionProvider(
-	commandService: ICommandService,
-	chatEntitlementService: IChatEntitlementService
-): IActionProvider {
+function getModelPickerActionBarActionProvider(): IActionProvider {
 	const actionProvider: IActionProvider = {
 		getActions: () => {
-			const additionalActions: IAction[] = [];
-
-			// Add sign-in / upgrade option if entitlement is anonymous / free
-			if (
-				chatEntitlementService.anonymous ||
-				chatEntitlementService.entitlement === ChatEntitlement.Free
-			) {
-				additionalActions.push({
-					id: "moreModels",
-					label: localize("chat.moreModels", "Add Premium Models"),
-					enabled: true,
-					tooltip: localize("chat.moreModels.tooltip", "Add premium models"),
-					class: undefined,
-					run: () => {
-						const commandId = chatEntitlementService.anonymous
-							? "workbench.action.chat.triggerSetup"
-							: "workbench.action.chat.upgradePlan";
-						commandService.executeCommand(commandId);
-					},
-				});
-			}
-
-			return additionalActions;
+			return [];
 		},
 	};
 	return actionProvider;
@@ -136,8 +106,6 @@ export class ModelPickerActionItem extends ActionWidgetDropdownActionViewItem {
 		delegate: IModelPickerDelegate,
 		@IActionWidgetService actionWidgetService: IActionWidgetService,
 		@IContextKeyService contextKeyService: IContextKeyService,
-		@ICommandService commandService: ICommandService,
-		@IChatEntitlementService chatEntitlementService: IChatEntitlementService,
 		@IKeybindingService keybindingService: IKeybindingService,
 		@ITelemetryService telemetryService: ITelemetryService
 	) {
@@ -159,10 +127,7 @@ export class ModelPickerActionItem extends ActionWidgetDropdownActionViewItem {
 				delegate,
 				telemetryService
 			),
-			actionBarActionProvider: getModelPickerActionBarActionProvider(
-				commandService,
-				chatEntitlementService
-			),
+			actionBarActionProvider: getModelPickerActionBarActionProvider(),
 		};
 
 		super(

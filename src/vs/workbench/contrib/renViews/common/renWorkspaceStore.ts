@@ -21,6 +21,7 @@ export interface IMonitorXChangelogGraphReference {
 
 export interface IMonitorXChangelogEntry {
 	readonly id: string;
+	readonly sessionId?: string;
 	readonly subject: string;
 	readonly description: string;
 	readonly timestamp: number;
@@ -30,6 +31,7 @@ export interface IMonitorXChangelogEntry {
 }
 
 export interface IMonitorXChangelogEntryInput {
+	readonly sessionId?: string;
 	readonly subject: string;
 	readonly description: string;
 	readonly files: readonly IMonitorXChangelogFileChange[];
@@ -83,5 +85,6 @@ export interface IRenWorkspaceStore {
 	addChangelogEntry(entry: IMonitorXChangelogEntryInput): Promise<IMonitorXChangelogEntry>;
 	getRecentChangelogEntries(limit?: number): Promise<IMonitorXChangelogEntry[]>;
 	getAllChangelogEntries(filter?: IMonitorXChangelogFilter): Promise<IMonitorXChangelogEntry[]>;
+	getChangelogEntriesBySessionId(sessionId: string): Promise<IMonitorXChangelogEntry[]>;
 }
 

@@ -181,6 +181,13 @@ export class ChatService extends Disposable implements IChatService {
 	private readonly _sessionFollowupCancelTokens = this._register(
 		new DisposableMap<string, CancellationTokenSource>()
 	);
+	// Map to store progress callbacks for detached sessions (sessions with running agents)
+	private readonly _detachedProgressCallbacks = new Map<
+		string,
+		(progress: IChatProgress[]) => void
+	>();
+	// Set to track which sessions are currently detached (have running agents in background)
+	private readonly _detachedSessions = new Set<string>();
 	private readonly _chatServiceTelemetry: ChatServiceTelemetry;
 	private readonly _chatSessionStore: ChatSessionStore;
 
@@ -1068,35 +1075,44 @@ export class ChatService extends Disposable implements IChatService {
 		const store = new DisposableStore();
 		const source = store.add(new CancellationTokenSource());
 		const token = source.token;
+
+		// Create progress callback that will be stored for potential reconnection
+		const progressCallback = (progress: IChatProgress[]) => {
+			if (token.isCancellationRequested) {
+				return;
+			}
+
+			if (!request) {
+				return;
+			}
+
+			gotProgress = true;
+
+			for (let i = 0; i < progress.length; i++) {
+				const isLast = i === progress.length - 1;
+				const progressItem = progress[i];
+
+				if (progressItem.kind === "markdownContent") {
+					this.trace(
+						"sendRequest",
+						`Provider returned progress for session ${model.sessionId}, ${progressItem.content.value.length} chars`
+					);
+				} else {
+					this.trace(
+						"sendRequest",
+						`Provider returned progress: ${JSON.stringify(progressItem)}`
+					);
+				}
+
+				model.acceptResponseProgress(request, progressItem, !isLast);
+			}
+			completeResponseCreated();
+		};
+
+		// Store progress callback so it can be reconnected if session is detached
+		this._detachedProgressCallbacks.set(model.sessionId, progressCallback);
+
 		const sendRequestInternal = async () => {
-			const progressCallback = (progress: IChatProgress[]) => {
-				if (token.isCancellationRequested) {
-					return;
-				}
-
-				gotProgress = true;
-
-				for (let i = 0; i < progress.length; i++) {
-					const isLast = i === progress.length - 1;
-					const progressItem = progress[i];
-
-					if (progressItem.kind === "markdownContent") {
-						this.trace(
-							"sendRequest",
-							`Provider returned progress for session ${model.sessionId}, ${progressItem.content.value.length} chars`
-						);
-					} else {
-						this.trace(
-							"sendRequest",
-							`Provider returned progress: ${JSON.stringify(progressItem)}`
-						);
-					}
-
-					model.acceptResponseProgress(request, progressItem, !isLast);
-				}
-				completeResponseCreated();
-			};
-
 			let detectedAgent: IChatAgentData | undefined;
 			let detectedCommand: IChatAgentCommand | undefined;
 
@@ -1111,6 +1127,8 @@ export class ChatService extends Disposable implements IChatService {
 						return;
 					}
 
+					model.cancelRequest(request);
+
 					requestTelemetry.complete({
 						timeToFirstProgress: undefined,
 						result: "cancelled",
@@ -1120,8 +1138,6 @@ export class ChatService extends Disposable implements IChatService {
 						detectedAgent,
 						request,
 					});
-
-					model.cancelRequest(request);
 				})
 			);
 
@@ -1278,6 +1294,17 @@ export class ChatService extends Disposable implements IChatService {
 
 					const agent = (detectedAgent ?? agentPart?.agent ?? defaultAgent)!;
 					const command = detectedCommand ?? agentSlashCommandPart?.command;
+
+					// Ensure the agent is set on the response if not already set by detection
+					// This ensures the UI displays the correct model name even when the agent
+					// comes from agentPart or defaultAgent (not just detectedAgent)
+					if (
+						request?.response &&
+						!detectedAgent &&
+						(!request.response.agent || request.response.agent.id !== agent.id)
+					) {
+						request.response.setAgent(agent, command);
+					}
 
 					await this.extensionService.activateByEvent(
 						`onChatParticipant:${agent.id}`
@@ -1439,6 +1466,8 @@ export class ChatService extends Disposable implements IChatService {
 						? "error"
 						: "success";
 
+					model.setResponse(request, rawResult);
+
 					requestTelemetry.complete({
 						timeToFirstProgress: rawResult.timings?.firstProgress,
 						totalTime: rawResult.timings?.totalElapsed,
@@ -1447,8 +1476,6 @@ export class ChatService extends Disposable implements IChatService {
 						detectedAgent,
 						request,
 					});
-
-					model.setResponse(request, rawResult);
 					completeResponseCreated();
 					this.trace(
 						"sendRequest",
@@ -1488,14 +1515,6 @@ export class ChatService extends Disposable implements IChatService {
 				this.logService.error(
 					`Error while handling chat request: ${toErrorMessage(err, true)}`
 				);
-				requestTelemetry.complete({
-					timeToFirstProgress: undefined,
-					totalTime: undefined,
-					result: "error",
-					requestType,
-					detectedAgent,
-					request,
-				});
 				if (request) {
 					const rawResult: IChatAgentResult = {
 						errorDetails: { message: err.message },
@@ -1503,6 +1522,15 @@ export class ChatService extends Disposable implements IChatService {
 					model.setResponse(request, rawResult);
 					completeResponseCreated();
 					model.completeResponse(request);
+
+					requestTelemetry.complete({
+						timeToFirstProgress: undefined,
+						totalTime: undefined,
+						result: "error",
+						requestType,
+						detectedAgent,
+						request,
+					});
 					// Only emit event for agent requests, not slash commands
 					if (agentPart || (defaultAgent && !commandPart)) {
 						const agentForNotification =
@@ -1529,6 +1557,9 @@ export class ChatService extends Disposable implements IChatService {
 		);
 		rawResponsePromise.finally(() => {
 			this._pendingRequests.deleteAndDispose(model.sessionId);
+			// Clean up progress callback when request completes
+			this._detachedProgressCallbacks.delete(model.sessionId);
+			this._detachedSessions.delete(model.sessionId);
 		});
 		this._onDidSubmitRequest.fire({ chatSessionId: model.sessionId });
 		return {
@@ -1688,12 +1719,24 @@ export class ChatService extends Disposable implements IChatService {
 
 	cancelCurrentRequestForSession(sessionId: string): void {
 		this.trace("cancelCurrentRequestForSession", `sessionId: ${sessionId}`);
+		console.warn(
+			"[ChatService] CANCEL request for session:",
+			sessionId,
+			"\nStack trace:",
+			new Error().stack
+		);
 		this._pendingRequests.get(sessionId)?.cancel();
 		this._pendingRequests.deleteAndDispose(sessionId);
 	}
 
 	async clearSession(sessionId: string): Promise<void> {
 		this.trace("clearSession", `sessionId: ${sessionId}`);
+		console.warn(
+			"[ChatService] CLEAR session:",
+			sessionId,
+			"\nStack trace:",
+			new Error().stack
+		);
 		const model = this._sessionModels.get(sessionId);
 		if (!model) {
 			throw new Error(`Unknown session: ${sessionId}`);
@@ -1723,8 +1766,18 @@ export class ChatService extends Disposable implements IChatService {
 		this.trace("detachSession", `sessionId: ${sessionId}`);
 		const model = this._sessionModels.get(sessionId);
 		if (!model) {
+			this.logService.trace(
+				`[ChatService] detachSession: Session ${sessionId} not found, already detached or doesn't exist`
+			);
 			return; // Session doesn't exist or already detached
 		}
+
+		const hasPendingRequest = this._pendingRequests.has(sessionId);
+		const requestCount = model.getRequests().length;
+		this.logService.info(
+			`[ChatService] DETACH session (keeping execution): ${sessionId}, ` +
+				`hasPendingRequest: ${hasPendingRequest}, requestCount: ${requestCount}`
+		);
 
 		// Store session for persistence (same as clearSession)
 		this.trace(`Model input type: ${model.inputType}`);
@@ -1741,15 +1794,68 @@ export class ChatService extends Disposable implements IChatService {
 			}
 		}
 
+		// Mark session as detached if it has pending requests
+		if (hasPendingRequest) {
+			this._detachedSessions.add(sessionId);
+			this.logService.info(
+				`[ChatService] Marked session ${sessionId} as detached (agent running in background)`
+			);
+		}
+
 		// Do NOT:
 		// - cancel pending requests (let them continue)
 		// - dispose model (keep it alive)
 		// - remove from _sessionModels (keep it active)
 		// - fire onDidDisposeSession (don't trigger cleanup)
+		// - remove progress callbacks (keep them active for reconnection)
 	}
 
 	hasPendingRequest(sessionId: string): boolean {
 		return this._pendingRequests.has(sessionId);
+	}
+
+	isSessionDetached(sessionId: string): boolean {
+		return this._detachedSessions.has(sessionId);
+	}
+
+	async reattachSession(sessionId: string): Promise<void> {
+		this.trace("reattachSession", `sessionId: ${sessionId}`);
+		const model = this._sessionModels.get(sessionId);
+		if (!model) {
+			this.logService.warn(
+				`[ChatService] reattachSession: Session ${sessionId} not found in _sessionModels`
+			);
+			return;
+		}
+
+		const wasDetached = this._detachedSessions.has(sessionId);
+		if (wasDetached) {
+			this._detachedSessions.delete(sessionId);
+			this.logService.info(
+				`[ChatService] Reattached session ${sessionId} (agent was running in background)`
+			);
+		}
+
+		// Progress callback should already be active and will continue to work
+		// since the model is still in _sessionModels and the callback is stored
+		// The widget will be updated by the caller to show this model
+	}
+
+	/**
+	 * Get list of session IDs that have background agents running
+	 */
+	getBackgroundAgentSessions(): string[] {
+		return Array.from(this._detachedSessions);
+	}
+
+	/**
+	 * Check if a session has a background agent running
+	 */
+	hasBackgroundAgent(sessionId: string): boolean {
+		return (
+			this._detachedSessions.has(sessionId) &&
+			this._pendingRequests.has(sessionId)
+		);
 	}
 
 	public hasSessions(): boolean {

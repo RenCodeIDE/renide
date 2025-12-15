@@ -1359,7 +1359,8 @@ export interface IChatModel extends IDisposable {
 		locationData?: IChatLocationData,
 		attachments?: IChatRequestVariableEntry[],
 		isCompleteAddedRequest?: boolean,
-		modelId?: string
+		modelId?: string,
+		replyTo?: IChatReplyMetadata
 	): IChatRequestModel;
 	acceptResponseProgress(
 		request: IChatRequestModel,

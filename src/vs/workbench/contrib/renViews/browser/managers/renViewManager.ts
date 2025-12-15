@@ -4,15 +4,16 @@ import { getWindow } from "../../../../../base/browser/dom.js";
 import { IRenView } from "../views/renView.interface.js";
 import { CodeView } from "../views/codeView.js";
 import { GraphView } from "../views/graphView.js";
+import { MonitorView } from "../views/monitorView/monitorView.js";
 import { IInstantiationService } from "../../../../../platform/instantiation/common/instantiation.js";
 import { ILogService } from "../../../../../platform/log/common/log.js";
 import { createDecorator } from "../../../../../platform/instantiation/common/instantiation.js";
 
-export type RenViewMode = "code" | "graph";
+export type RenViewMode = "code" | "graph" | "monitor";
 
 export interface GraphViewOptions {
 	targetPath?: string;
-	targetType?: 'file' | 'folder' | 'workspace';
+	targetType?: "file" | "folder" | "workspace";
 }
 
 export const IRenViewManager =
@@ -21,6 +22,7 @@ export const IRenViewManager =
 export interface IRenViewManager {
 	readonly _serviceBrand: undefined;
 	getGraphView(): GraphView | undefined;
+	getMonitorView(): MonitorView | undefined;
 	getCurrentView(): RenViewMode;
 	switchToView(mode: RenViewMode, options?: GraphViewOptions): void;
 	setContentArea(contentArea: HTMLElement): void;
@@ -78,6 +80,26 @@ export class RenViewManager extends Disposable implements IRenViewManager {
 				);
 			}
 
+			// Initialize MonitorView (uses DI)
+			try {
+				const monitorView = this._register(
+					this.instantiationService.createInstance(MonitorView)
+				);
+				this._views.set("monitor", monitorView);
+				this.logService.info(
+					"[RenViewManager] MonitorView initialized successfully"
+				);
+			} catch (error) {
+				this.logService.error(
+					"[RenViewManager] Failed to initialize MonitorView:",
+					error
+				);
+				console.error(
+					"[RenViewManager] MonitorView initialization error:",
+					error
+				);
+			}
+
 			this.logService.info(
 				`[RenViewManager] View initialization complete. Registered ${this._views.size} views`
 			);
@@ -112,7 +134,7 @@ export class RenViewManager extends Disposable implements IRenViewManager {
 			newView.show(this._contentArea);
 
 			// If switching to graph view with target options, render the target
-			if (mode === 'graph' && options?.targetPath && options?.targetType) {
+			if (mode === "graph" && options?.targetPath && options?.targetType) {
 				const graphView = this.getGraphView();
 				if (graphView) {
 					void graphView.renderTarget(options.targetPath, options.targetType);
@@ -126,8 +148,8 @@ export class RenViewManager extends Disposable implements IRenViewManager {
 				const event = new CustomEvent("ren-switch-view", {
 					detail: {
 						mode,
-						container: this._contentArea.parentElement
-					}
+						container: this._contentArea.parentElement,
+					},
 				});
 				targetWindow.document.dispatchEvent(event);
 			}
@@ -141,5 +163,10 @@ export class RenViewManager extends Disposable implements IRenViewManager {
 	public getGraphView(): GraphView | undefined {
 		const view = this._views.get("graph");
 		return view instanceof GraphView ? view : undefined;
+	}
+
+	public getMonitorView(): MonitorView | undefined {
+		const view = this._views.get("monitor");
+		return view instanceof MonitorView ? view : undefined;
 	}
 }

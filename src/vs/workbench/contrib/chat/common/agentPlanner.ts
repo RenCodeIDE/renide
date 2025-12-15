@@ -88,6 +88,7 @@ export class AgentPlanner extends Disposable implements IAgentPlanner {
 	declare readonly _serviceBrand: undefined;
 
 	private readonly plans = new Map<string, AgentPlan>();
+	private static readonly PLAN_FOLDER = '.ren/plans';
 	private static readonly PLAN_FILE = 'AGENT_PLAN.md';
 
 	constructor(
@@ -352,8 +353,16 @@ export class AgentPlanner extends Disposable implements IAgentPlanner {
 				return;
 			}
 
-			const planUri = URI.joinPath(workspaceFolders[0].uri, AgentPlanner.PLAN_FILE);
+			const planFolderUri = URI.joinPath(workspaceFolders[0].uri, AgentPlanner.PLAN_FOLDER);
+			const planUri = URI.joinPath(planFolderUri, AgentPlanner.PLAN_FILE);
 			const content = this.formatPlan(plan);
+
+			// Ensure the plan directory exists before writing
+			try {
+				await this.fileService.createFolder(planFolderUri);
+			} catch (error) {
+				this.logService.debug(`[AgentPlanner] Failed to create plan folder: ${error}`);
+			}
 
 			await this.fileService.writeFile(planUri, VSBuffer.fromString(content));
 		} catch (error) {

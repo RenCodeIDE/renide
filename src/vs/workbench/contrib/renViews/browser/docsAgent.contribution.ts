@@ -115,6 +115,12 @@ export class DocsAgentContribution
 			return;
 		}
 
+		// Ignore diff/patch previews; they are not real source files
+		if (this.shouldSkipFile(uri)) {
+			this.currentActiveFile = undefined;
+			return;
+		}
+
 		if (this.currentActiveFile?.toString() === uri.toString()) {
 			return; // Already processed
 		}
@@ -132,6 +138,10 @@ export class DocsAgentContribution
 	}
 
 	private async ensureChunkMetadataForFile(uri: URI): Promise<void> {
+		if (this.shouldSkipFile(uri)) {
+			return;
+		}
+
 		const fileUri = uri.toString();
 		const existingChunks = this.chunkIndexService.listFileChunks(uri);
 
@@ -242,6 +252,10 @@ export class DocsAgentContribution
 	}
 
 	private async ensureChunksForFile(uri: URI): Promise<void> {
+		if (this.shouldSkipFile(uri)) {
+			return;
+		}
+
 		const fileUri = uri.toString();
 		const relativePath = this.getRelativePath(uri);
 
@@ -299,6 +313,10 @@ export class DocsAgentContribution
 	}
 
 	private async handleMerkleChangeForFile(uri: URI): Promise<void> {
+		if (this.shouldSkipFile(uri)) {
+			return;
+		}
+
 		const relativePath = this.getRelativePath(uri);
 		if (!relativePath) {
 			return;
@@ -495,6 +513,11 @@ export class DocsAgentContribution
 		}
 
 		return absolutePath;
+	}
+
+	private shouldSkipFile(uri: URI): boolean {
+		const fsPath = uri.fsPath.toLowerCase();
+		return fsPath.endsWith(".diff");
 	}
 
 	override dispose(): void {

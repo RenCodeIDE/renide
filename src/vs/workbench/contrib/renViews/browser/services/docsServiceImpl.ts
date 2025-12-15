@@ -35,6 +35,8 @@ import { ITextModel } from "../../../../../editor/common/model.js";
 import { basename, extname } from "../../../../../base/common/resources.js";
 import { IWorkspaceContextService } from "../../../../../platform/workspace/common/workspace.js";
 import { computeWorkspaceHashSync } from "./workspaceHash.js";
+import { IRenWorkspaceStore } from "../../common/renWorkspaceStore.js";
+import { IMerkleTreeService } from "../../../../../platform/merkleTree/common/merkleTreeService.js";
 
 const STORAGE_KEY = "ren.docs.latest";
 const STORAGE_KEY_PREFIX_FILE = "ren.docs.file.";
@@ -84,7 +86,9 @@ export class DocsService extends Disposable implements IDocsService {
 		@ILanguageFeaturesService
 		private readonly languageFeaturesService: ILanguageFeaturesService,
 		@IWorkspaceContextService
-		private readonly workspaceContextService: IWorkspaceContextService
+		private readonly workspaceContextService: IWorkspaceContextService,
+		@IRenWorkspaceStore private readonly workspaceStore: IRenWorkspaceStore,
+		@IMerkleTreeService private readonly merkleTreeService: IMerkleTreeService
 	) {
 		super();
 		this.latest = this.storageService.get(
@@ -119,20 +123,80 @@ export class DocsService extends Disposable implements IDocsService {
 	}
 
 	/**
-	 * Compute a hash of the file content using djb2 algorithm.
-	 * This is used to compare against stored merkleHash to skip redundant doc generation.
+	 * Get relative path from URI to workspace root
 	 */
-	private computeContentHash(content: string): string {
-		// djb2 hash algorithm - same as used elsewhere for consistency
-		let hash = 5381;
-		for (let i = 0; i < content.length; i++) {
-			hash = (hash << 5) + hash + content.charCodeAt(i);
-			hash = hash & hash; // Convert to 32-bit integer
+	private getRelativePath(uri: URI): string | undefined {
+		const folders = this.workspaceContextService.getWorkspace().folders;
+		if (folders.length === 0) {
+			return undefined;
 		}
+		const workspaceRoot = folders[0].uri.fsPath;
+		const absolutePath = uri.fsPath;
+		if (absolutePath.startsWith(workspaceRoot)) {
+			return absolutePath.slice(workspaceRoot.length).replace(/^[/\\]+/, "");
+		}
+		return undefined;
+	}
 
-		// Convert to positive hex string and pad to 16 chars
-		const positiveHash = hash >>> 0;
-		return positiveHash.toString(16).padStart(16, "0");
+	/**
+	 * Get file hash from Merkle tree service.
+	 * Uses the file-level hash (aggregate of all chunks) for consistency with database storage.
+	 * Falls back to computing hash from first chunk if file hash not available.
+	 */
+	private async getFileHashFromMerkleTree(
+		uri: URI
+	): Promise<string | undefined> {
+		try {
+			const relativePath = this.getRelativePath(uri);
+			if (!relativePath) {
+				this.logService.debug(
+					`[DocsService] Cannot get relative path for ${uri.fsPath}, cannot use Merkle tree hash`
+				);
+				return undefined;
+			}
+
+			// Ensure file is tracked in Merkle tree
+			await this.merkleTreeService.ensureTracked(uri);
+
+			// Try to get file-level hash first (aggregate of all chunks)
+			let hash = await this.merkleTreeService.getPathHash(relativePath);
+			if (hash) {
+				this.logService.debug(
+					`[DocsService] Got file hash from Merkle tree for ${relativePath}: ${hash.substring(
+						0,
+						8
+					)}...`
+				);
+				return hash;
+			}
+
+			// Fallback: get chunks and use first chunk's hash
+			// This matches what's stored in database for single-chunk file docs
+			const fileChunks = await this.merkleTreeService.getFileChunks(
+				relativePath
+			);
+			if (fileChunks && fileChunks.length > 0) {
+				const chunkHash = fileChunks[0].hash;
+				this.logService.debug(
+					`[DocsService] Using first chunk hash from Merkle tree for ${relativePath}: ${chunkHash.substring(
+						0,
+						8
+					)}...`
+				);
+				return chunkHash;
+			}
+
+			this.logService.warn(
+				`[DocsService] No Merkle tree data available for ${relativePath}`
+			);
+			return undefined;
+		} catch (error) {
+			this.logService.warn(
+				`[DocsService] Failed to get hash from Merkle tree for ${uri.fsPath}:`,
+				error
+			);
+			return undefined;
+		}
 	}
 
 	/**
@@ -190,6 +254,15 @@ export class DocsService extends Disposable implements IDocsService {
 		);
 	}
 
+	private normalizeEndpoint(serverAddress: string, endpoint: string): string {
+		const normalizedAddress = serverAddress.trim().replace(/\/+$/, "");
+		// If serverAddress already ends with /api and endpoint starts with /api/, remove the duplicate /api
+		if (normalizedAddress.endsWith("/api") && endpoint.startsWith("/api/")) {
+			return `${normalizedAddress}${endpoint.substring(4)}`;
+		}
+		return `${normalizedAddress}${endpoint}`;
+	}
+
 	private async generateFileDocContent(uri: URI): Promise<string> {
 		try {
 			// Get access token
@@ -215,7 +288,7 @@ export class DocsService extends Disposable implements IDocsService {
 			// Get server address
 			const serverAddress = await this.getServerAddress();
 			const endpoint = "/api/bg-agent/generate-docs";
-			const url = `${serverAddress}${endpoint}`;
+			const url = this.normalizeEndpoint(serverAddress, endpoint);
 
 			// Prepare request payload - send entire file as single chunk
 			const fileExtension = uri.path.split(".").pop() || "";
@@ -224,10 +297,17 @@ export class DocsService extends Disposable implements IDocsService {
 			// Collect symbol/state summary to help documentation quality
 			const symbolSummary = await this.collectSymbolSummary(uri);
 
-			// Compute hash-checking metadata to avoid redundant doc generation
+			// Get hash from Merkle tree service (SHA256) to match database storage
+			// This ensures hash checking works correctly
 			const projectHash = this.getProjectHash();
-			const merkleHash = this.computeContentHash(fileContent);
+			const merkleHash = await this.getFileHashFromMerkleTree(uri);
 			const chunkId = this.getChunkIdFromUri(uri);
+
+			if (!merkleHash) {
+				this.logService.warn(
+					`[DocsService] Could not get Merkle tree hash for ${uri.fsPath}, hash checking may not work`
+				);
+			}
 
 			this.logService.debug(
 				`[DocsService] File doc metadata: chunkId=${chunkId}, projectHash=${projectHash}, merkleHash=${merkleHash}`
@@ -251,8 +331,6 @@ export class DocsService extends Disposable implements IDocsService {
 				],
 				options: {
 					documentationStyle: "markdown" as const,
-					includeExamples: false,
-					includeParameters: false,
 				},
 			};
 
@@ -857,7 +935,7 @@ export class DocsService extends Disposable implements IDocsService {
 			// Get server address
 			const serverAddress = await this.getServerAddress();
 			const endpoint = "/api/bg-agent/generate-directory-docs";
-			const url = `${serverAddress}${endpoint}`;
+			const url = this.normalizeEndpoint(serverAddress, endpoint);
 
 			// Prepare chunks for all files
 			const chunks: Array<{
@@ -886,9 +964,16 @@ export class DocsService extends Disposable implements IDocsService {
 					const language = this.detectLanguage(fileExtension);
 					const symbolSummary = await this.collectSymbolSummary(fileUri);
 
-					// Compute hash-checking metadata
-					const merkleHash = this.computeContentHash(fileContent);
+					// Get hash from Merkle tree service (SHA256) to match database storage
+					const merkleHash = await this.getFileHashFromMerkleTree(fileUri);
 					const chunkId = this.getChunkIdFromUri(fileUri);
+
+					if (!merkleHash) {
+						this.logService.warn(
+							`[DocsService] Could not get Merkle tree hash for ${fileUri.fsPath}, skipping from directory docs`
+						);
+						continue;
+					}
 
 					chunks.push({
 						text: fileContent,
@@ -924,8 +1009,6 @@ export class DocsService extends Disposable implements IDocsService {
 				chunks: chunks,
 				options: {
 					documentationStyle: "markdown" as const,
-					includeExamples: false,
-					includeParameters: false,
 					directoryMode: true,
 					includeArchitecture: true,
 					includeMermaid: true,
@@ -1094,6 +1177,23 @@ export class DocsService extends Disposable implements IDocsService {
 		this.logService.info(
 			`[DocsService] Firing onDidUpdateDirectoryDocs event for directory: ${directoryUri}`
 		);
+
+		// If this is the workspace root directory, store as project description
+		const workspace = this.workspaceContextService.getWorkspace();
+		if (workspace.folders && workspace.folders.length > 0) {
+			const rootFolder = workspace.folders[0];
+			if (
+				this.workspaceContextService.getWorkspaceFolder(uri)?.uri.toString() ===
+					rootFolder.uri.toString() ||
+				uri.toString() === rootFolder.uri.toString()
+			) {
+				// Store as project description for Monitor View
+				this.workspaceStore.setString("projectDescription", content);
+				this.logService.info(
+					`[DocsService] Stored project description from root directory docs`
+				);
+			}
+		}
 
 		this.logService.info(
 			`[DocsService] generateDocsForDirectory completed for ${uri.fsPath}`

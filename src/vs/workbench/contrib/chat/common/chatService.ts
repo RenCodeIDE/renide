@@ -1076,6 +1076,10 @@ export interface IChatService {
 	clearSession(sessionId: string): Promise<void>;
 	detachSession(sessionId: string): Promise<void>;
 	hasPendingRequest(sessionId: string): boolean;
+	isSessionDetached(sessionId: string): boolean;
+	reattachSession(sessionId: string): Promise<void>;
+	getBackgroundAgentSessions(): string[];
+	hasBackgroundAgent(sessionId: string): boolean;
 	addCompleteRequest(
 		sessionId: string,
 		message: IParsedChatRequest | string,

@@ -214,6 +214,22 @@ export class ChatViewPane extends ViewPane implements IViewWelcomeDelegate {
 		model?: IChatModel | undefined,
 		viewState?: IChatViewState
 	): Promise<void> {
+		// Check if the current model has pending requests before clearing disposables
+		const currentModel = this._widget.viewModel?.model;
+		if (currentModel) {
+			const currentSessionId = currentModel.sessionId;
+			const hasPendingRequests =
+				this.chatService.hasPendingRequest(currentSessionId);
+
+			if (hasPendingRequests) {
+				// Don't dispose the model if it has pending requests - detach it instead
+				this.logService.info(
+					`[ChatViewPane] updateModel: Current model ${currentSessionId} has pending requests, detaching instead of disposing`
+				);
+				await this.chatService.detachSession(currentSessionId);
+			}
+		}
+
 		this.modelDisposables.clear();
 
 		model =
@@ -401,9 +417,17 @@ export class ChatViewPane extends ViewPane implements IViewWelcomeDelegate {
 			const hasPendingRequests =
 				this.chatService.hasPendingRequest(currentSessionId);
 
+			// Always use detachSession if there are pending requests to preserve background execution
 			if (hasPendingRequests) {
+				this.logService.info(
+					`[ChatViewPane] loadSession: Detaching session ${currentSessionId} with pending requests`
+				);
 				await this.chatService.detachSession(currentSessionId);
 			} else {
+				// Only clear if there are no pending requests
+				this.logService.trace(
+					`[ChatViewPane] loadSession: Clearing session ${currentSessionId} (no pending requests)`
+				);
 				await this.chatService.clearSession(currentSessionId);
 			}
 		}
@@ -438,6 +462,20 @@ export class ChatViewPane extends ViewPane implements IViewWelcomeDelegate {
 					CancellationToken.None
 			  )
 			: this.chatService.getOrRestoreSession(sessionId));
+
+		// Check if the session we're loading is a previously detached session
+		if (
+			newModel &&
+			!URI.isUri(sessionId) &&
+			this.chatService.isSessionDetached(newModel.sessionId)
+		) {
+			// Reattach the session to reconnect progress callbacks
+			this.logService.info(
+				`[ChatViewPane] loadSession: Reattaching previously detached session ${newModel.sessionId}`
+			);
+			await this.chatService.reattachSession(newModel.sessionId);
+		}
+
 		await this.updateModel(newModel, viewState);
 	}
 

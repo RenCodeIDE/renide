@@ -391,12 +391,15 @@ export class ChatEditorInput
 			const hasPendingRequests = this.chatService.hasPendingRequest(
 				this.sessionId
 			);
+			console.log('[ChatEditorInput] dispose called for sessionId:', this.sessionId, 'hasPendingRequests:', hasPendingRequests);
 
 			if (hasPendingRequests) {
 				// Detach instead of clear - keeps execution running
+				console.log('[ChatEditorInput] -> calling detachSession (preserving execution)');
 				this.chatService.detachSession(this.sessionId);
 			} else {
 				// No pending requests - safe to fully clear
+				console.log('[ChatEditorInput] -> calling clearSession');
 				this.chatService.clearSession(this.sessionId);
 			}
 		}

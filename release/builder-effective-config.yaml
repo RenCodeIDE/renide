@@ -1,22 +1,23 @@
 directories:
   output: release
   buildResources: resources/darwin
-appId: com.yourco.ren
+appId: com.ren.renide
 productName: Ren
 files:
   - filter:
       - out/**/*
-      - extensions/**/*
       - resources/**/*
+      - .build/extensions/**/*
       - product.json
       - package.json
-      - '!**/node_modules/**'
       - node_modules/**/*
+      - '!**/node_modules/**/*.{md,ts,tsx,js.map}'
 asar: true
 asarUnpack:
   - '**/*.node'
   - '**/node_modules/@vscode/ripgrep/**'
   - '**/node_modules/node-pty/**'
+  - .build/extensions/**
 npmRebuild: true
 mac:
   target:
