@@ -170,6 +170,7 @@ import { convertBufferToScreenshotVariable } from "../contrib/screenshot.js";
 import { clearChatEditor } from "./chatClear.js";
 import { ISCMService } from "../../../scm/common/scm.js";
 import {
+	IChatRequestVariableEntry,
 	ISCMHistoryItemChangeRangeVariableEntry,
 	ISCMHistoryItemChangeVariableEntry,
 } from "../../common/chatVariableEntries.js";
@@ -227,6 +228,10 @@ export interface IChatViewOpenOptions {
 		start: { uri: URI; historyItemId: string };
 		end: { uri: URI; historyItemId: string };
 	}[];
+	/**
+	 * A list of generic chat request variables to attach to the chat as context.
+	 */
+	attachContext?: IChatRequestVariableEntry[];
 	/**
 	 * The mode ID or name to open the chat in.
 	 */
@@ -392,6 +397,9 @@ abstract class OpenChatGlobalAction extends Action2 {
 					chatWidget.attachmentModel.addFile(uri, range);
 				}
 			}
+		}
+		if (opts?.attachContext) {
+			chatWidget.attachmentModel.addContext(...opts.attachContext);
 		}
 		if (opts?.attachHistoryItemChanges) {
 			for (const historyItemChange of opts.attachHistoryItemChanges) {

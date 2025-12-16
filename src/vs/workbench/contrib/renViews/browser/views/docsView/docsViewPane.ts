@@ -40,6 +40,7 @@ import { TextEditorSelectionRevealType } from "../../../../../../platform/editor
 import { IWorkspaceContextService } from "../../../../../../platform/workspace/common/workspace.js";
 import { IFileDialogService } from "../../../../../../platform/dialogs/common/dialogs.js";
 import { basename } from "../../../../../../base/common/resources.js";
+import { SelectionQuestionButton } from "../../components/selectionQuestionButton.js";
 
 type DocsMode = "file" | "directory";
 
@@ -50,6 +51,8 @@ export class DocsViewPane extends ViewPane {
 	private selectedDirectory: URI | undefined;
 	private mode: DocsMode = "file";
 	private toolbarContainer: HTMLElement | undefined;
+	private selectionQuestionButton: SelectionQuestionButton | undefined;
+	private exportDropdownCloseListener: ((e: MouseEvent) => void) | undefined;
 
 	constructor(
 		options: IViewPaneOptions,
@@ -122,6 +125,7 @@ export class DocsViewPane extends ViewPane {
 	}
 
 	protected override renderBody(container: HTMLElement): void {
+		console.log("[DocsViewPane] renderBody called, container:", container);
 		super.renderBody(container);
 
 		// Ensure container is visible and sized
@@ -170,7 +174,22 @@ export class DocsViewPane extends ViewPane {
 		this.contentContainer.style.fontSize = "13px";
 		this.contentContainer.style.lineHeight = "1.6";
 		this.contentContainer.style.position = "relative";
+		this.contentContainer.style.userSelect = "text";
+		this.contentContainer.style.webkitUserSelect = "text";
+		this.contentContainer.style.cursor = "text";
 		wrapper.appendChild(this.contentContainer);
+
+		// Create the selection question button for asking about selected text
+		console.log("[DocsViewPane] About to create SelectionQuestionButton");
+		console.log("[DocsViewPane] contentContainer:", this.contentContainer);
+		console.log("[DocsViewPane] commandService:", this.commandService);
+
+		this.selectionQuestionButton = new SelectionQuestionButton(
+			this.contentContainer,
+			this.commandService
+		);
+		console.log("[DocsViewPane] SelectionQuestionButton created:", this.selectionQuestionButton);
+		this._register(this.selectionQuestionButton);
 
 		// Initialize toolbar and content
 		this.updateToolbar();
@@ -252,6 +271,132 @@ export class DocsViewPane extends ViewPane {
 			});
 			this.toolbarContainer.appendChild(selectFolderBtn);
 		}
+
+		// Add spacer to push export button to the right
+		const spacer = document.createElement("div");
+		spacer.style.flex = "1";
+		this.toolbarContainer.appendChild(spacer);
+
+		// Add Export Docs dropdown button
+		this.createExportButton(this.toolbarContainer);
+	}
+
+	private createExportButton(container: HTMLElement): void {
+		const exportWrapper = document.createElement("div");
+		exportWrapper.style.position = "relative";
+
+		// Export button
+		const exportBtn = document.createElement("button");
+		exportBtn.textContent = "Export";
+		exportBtn.title = "Export documentation";
+		exportBtn.style.padding = "4px 10px";
+		exportBtn.style.cursor = "pointer";
+		exportBtn.style.border = "1px solid var(--vscode-button-border)";
+		exportBtn.style.background = "var(--vscode-button-secondaryBackground)";
+		exportBtn.style.color = "var(--vscode-button-secondaryForeground)";
+		exportBtn.style.borderRadius = "4px";
+		exportBtn.style.fontSize = "12px";
+		exportBtn.style.display = "flex";
+		exportBtn.style.alignItems = "center";
+		exportBtn.style.gap = "4px";
+
+		// Dropdown menu
+		const dropdown = document.createElement("div");
+		dropdown.className = "ren-docs-export-dropdown";
+		dropdown.style.position = "absolute";
+		dropdown.style.top = "100%";
+		dropdown.style.right = "0";
+		dropdown.style.marginTop = "4px";
+		dropdown.style.minWidth = "160px";
+		dropdown.style.background = "var(--vscode-dropdown-background)";
+		dropdown.style.border = "1px solid var(--vscode-dropdown-border)";
+		dropdown.style.borderRadius = "4px";
+		dropdown.style.boxShadow = "0 4px 12px rgba(0, 0, 0, 0.3)";
+		dropdown.style.zIndex = "1000";
+		dropdown.style.display = "none";
+		dropdown.style.overflow = "hidden";
+
+		// Export options
+		const exportOptions = [
+			{ label: "Export as PDF", id: "pdf" },
+			{ label: "Export as Markdown", id: "markdown" },
+			{ label: "Copy Link", id: "link" },
+			{ label: "Copy to Clipboard", id: "clipboard" },
+			{ label: "Export as HTML", id: "html" },
+		];
+
+		exportOptions.forEach((option) => {
+			const item = document.createElement("button");
+			item.textContent = option.label;
+			item.style.display = "flex";
+			item.style.alignItems = "center";
+			item.style.gap = "8px";
+			item.style.width = "100%";
+			item.style.padding = "8px 12px";
+			item.style.border = "none";
+			item.style.background = "transparent";
+			item.style.color = "var(--vscode-dropdown-foreground)";
+			item.style.fontSize = "12px";
+			item.style.cursor = "pointer";
+			item.style.textAlign = "left";
+
+			item.addEventListener("mouseenter", () => {
+				item.style.background = "var(--vscode-list-hoverBackground)";
+			});
+			item.addEventListener("mouseleave", () => {
+				item.style.background = "transparent";
+			});
+
+			item.addEventListener("click", () => {
+				console.log(`[DocsViewPane] Export option clicked: ${option.id}`);
+				// TODO: Implement export functionality
+				dropdown.style.display = "none";
+			});
+
+			dropdown.appendChild(item);
+		});
+
+		// Toggle dropdown on button click
+		let isOpen = false;
+		exportBtn.addEventListener("click", (e) => {
+			e.stopPropagation();
+			isOpen = !isOpen;
+			dropdown.style.display = isOpen ? "block" : "none";
+		});
+
+		// Close dropdown when clicking outside
+		const closeDropdown = (e: MouseEvent) => {
+			if (!exportWrapper.contains(e.target as Node)) {
+				isOpen = false;
+				dropdown.style.display = "none";
+			}
+		};
+		// Avoid leaking listeners when updateToolbar() re-renders the toolbar.
+		if (this.exportDropdownCloseListener) {
+			document.removeEventListener("click", this.exportDropdownCloseListener);
+		}
+		this.exportDropdownCloseListener = closeDropdown;
+		document.addEventListener("click", closeDropdown);
+		this._register({
+			dispose: () => {
+				if (this.exportDropdownCloseListener === closeDropdown) {
+					document.removeEventListener("click", closeDropdown);
+					this.exportDropdownCloseListener = undefined;
+				}
+			}
+		});
+
+		// Hover effects for button
+		exportBtn.addEventListener("mouseenter", () => {
+			exportBtn.style.background = "var(--vscode-button-secondaryHoverBackground)";
+		});
+		exportBtn.addEventListener("mouseleave", () => {
+			exportBtn.style.background = "var(--vscode-button-secondaryBackground)";
+		});
+
+		exportWrapper.appendChild(exportBtn);
+		exportWrapper.appendChild(dropdown);
+		container.appendChild(exportWrapper);
 	}
 
 	private async updateForActiveFile(): Promise<void> {
@@ -273,6 +418,13 @@ export class DocsViewPane extends ViewPane {
 		}
 
 		this.currentFileUri = uri;
+
+		// Update selection button with current file context
+		if (this.selectionQuestionButton) {
+			const fileName = uri.fsPath.split("/").pop() || uri.fsPath;
+			this.selectionQuestionButton.updateSourceInfo(uri, fileName);
+		}
+
 		await this.renderFileDocs(uri);
 	}
 
@@ -286,6 +438,12 @@ export class DocsViewPane extends ViewPane {
 				"No directory selected. Click 'Select Folder' to choose a directory."
 			);
 			return;
+		}
+
+		// Update selection button with current directory context
+		if (this.selectionQuestionButton) {
+			const dirName = basename(this.selectedDirectory) || this.selectedDirectory.fsPath;
+			this.selectionQuestionButton.updateSourceInfo(this.selectedDirectory, `Directory: ${dirName}`);
 		}
 
 		await this.renderDirectoryDocs(this.selectedDirectory);
@@ -1170,11 +1328,8 @@ export class DocsViewPane extends ViewPane {
 	protected override layoutBody(height: number, width: number): void {
 		super.layoutBody(height, width);
 		console.log(`[DocsViewPane] layoutBody - ${width}x${height}`);
-		if (this.contentContainer?.parentElement) {
-			const wrapper = this.contentContainer.parentElement as HTMLElement;
-			wrapper.style.height = `${height}px`;
-			wrapper.style.width = `${width}px`;
-		}
+		// Don't force fixed dimensions, let CSS handle it via height: 100%
+		// This prevents issues where layoutBody is called with 0 height during initialization
 	}
 
 	override dispose(): void {

@@ -33,10 +33,15 @@
 
 .ren-docs-view__content {
 	outline: none;
+	user-select: text;
+	-webkit-user-select: text;
+	cursor: text;
 }
 
 .ren-docs-view__content-markdown {
 	padding-bottom: 20px;
+	user-select: text;
+	-webkit-user-select: text;
 }
 
 /* Toolbar styles */

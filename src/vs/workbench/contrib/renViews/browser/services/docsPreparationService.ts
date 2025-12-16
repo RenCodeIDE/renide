@@ -10,6 +10,7 @@ import {
 	relativePath,
 	dirname as resourceDirname,
 } from '../../../../../base/common/resources.js';
+import { extname, basename } from '../../../../../base/common/path.js';
 import { ILogService } from '../../../../../platform/log/common/log.js';
 import { createDecorator } from '../../../../../platform/instantiation/common/instantiation.js';
 import { registerSingleton, InstantiationType } from '../../../../../platform/instantiation/common/extensions.js';
@@ -42,6 +43,60 @@ export class DocsPreparationService
 	implements IDocsPreparationService
 {
 	declare readonly _serviceBrand: undefined;
+
+	private static readonly BINARY_EXTENSIONS = new Set<string>([
+		// Image formats
+		'.jpg',
+		'.jpeg',
+		'.png',
+		'.gif',
+		'.bmp',
+		'.webp',
+		'.svg',
+		'.ico',
+		'.tiff',
+		'.tif',
+		// Media files
+		'.mp4',
+		'.mp3',
+		'.avi',
+		'.mov',
+		'.wav',
+		'.ogg',
+		'.flac',
+		// Archives
+		'.zip',
+		'.tar',
+		'.gz',
+		'.rar',
+		'.7z',
+		'.bz2',
+		// Executables
+		'.exe',
+		'.dll',
+		'.so',
+		'.dylib',
+		'.bin',
+		// Documents
+		'.pdf',
+		'.doc',
+		'.docx',
+		'.xls',
+		'.xlsx',
+		'.ppt',
+		'.pptx',
+		// Fonts
+		'.woff',
+		'.woff2',
+		'.ttf',
+		'.otf',
+		'.eot',
+	]);
+
+	private static readonly BINARY_FILENAMES = new Set<string>([
+		'.ds_store',
+		'thumbs.db',
+	]);
 
 	private lastProcessedRootHash: string | undefined;
 	private processingQueue: Promise<void> = Promise.resolve();
@@ -120,6 +175,10 @@ export class DocsPreparationService
 
 	private async processNode(node: MerkleTreeNode, workspaceRoot: URI): Promise<void> {
 		if (node.type === 'file') {
+			// Skip virtual URIs from JSON Schema registry (e.g., /lm/tool/*, /schemas-associations.json, etc.)
+			if (this.isVirtualPath(node.path)) {
+				return;
+			}
 			const fileUri = this.toWorkspaceUri(node.path, workspaceRoot);
 			await this.processFileNode(node, fileUri);
 		}
@@ -131,9 +190,53 @@ export class DocsPreparationService
 		}
 	}
 
+	/**
+	 * Check if a path is a virtual schema path from the JSON Schema registry.
+	 * These paths (e.g., /lm/tool/*, /schemas-associations.json) are not real files.
+	 */
+	private isVirtualPath(path: string): boolean {
+		const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+		// Virtual schema paths from JSON Schema registry
+		const virtualPatterns = [
+			'/lm/',           // Language model tool schemas
+			'/settings/',     // Virtual settings paths
+			'/schemas-associations.json',
+			'/toolsets',
+			'/keybindings',
+			'/inlineCompletionProviderIdArgs',
+			'/vscode-extensions',
+			'/launch',
+		];
+		return virtualPatterns.some(pattern => normalizedPath.startsWith(pattern));
+	}
+
+	private isBinaryFile(uri: URI): boolean {
+		const path = uri.path.toLowerCase();
+		const extension = extname(path).toLowerCase();
+		const filename = basename(path).toLowerCase();
+
+		// Check if the filename itself is a known binary file (e.g., .DS_Store)
+		if (DocsPreparationService.BINARY_FILENAMES.has(filename)) {
+			return true;
+		}
+
+		// Check if the extension indicates a binary file
+		if (extension && DocsPreparationService.BINARY_EXTENSIONS.has(extension)) {
+			return true;
+		}
+
+		return false;
+	}
+
 	private async processFileNode(node: MerkleTreeNode, fileUri: URI): Promise<void> {
 		try {
 			this.onWillProcessFileEmitter.fire(fileUri);
+
+			// Skip binary files early to avoid processing errors
+			if (this.isBinaryFile(fileUri)) {
+				this.logService.debug(`[DocsPrep] Skipping binary file: ${node.path}`);
+				return;
+			}
 
 			const relativePath = node.path;
 			const fileChunks = node.chunks ?? (await this.merkleTreeService.getFileChunks(relativePath)) ?? [];

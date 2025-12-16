@@ -328,6 +328,14 @@ export class GraphView extends Disposable implements IRenView {
 				case 'REN_GRAPH_ERROR':
 					this.logService.error('[GraphView] webview error', data?.payload ?? '');
 					break;
+				case 'REN_NODE_CLICK': {
+					const payload = data?.payload;
+					if (payload?.path) {
+						this.logService.info('[GraphView] node clicked, opening file', payload.path);
+						void this.openFileFromNode(payload.path);
+					}
+					break;
+				}
 				default:
 					this.logService.debug(`[GraphView] webview message: ${type}`, data?.payload ?? '');
 			}
@@ -1778,6 +1786,39 @@ export class GraphView extends Disposable implements IRenView {
 		} catch (error) {
 			this.logService.error('[GraphView] failed to open editor', resource.toString(true), error);
 		}
+	}
+
+	/**
+	 * Open a file from a graph node click.
+	 * Resolves the path relative to the workspace and opens in a side group.
+	 */
+	private async openFileFromNode(nodePath: string): Promise<void> {
+		const workspaceRoot = this.context.getDefaultWorkspaceRoot();
+		if (!workspaceRoot) {
+			this.logService.warn('[GraphView] No workspace root, cannot open file', nodePath);
+			return;
+		}
+
+		let resource: URI;
+
+		// Check if it's a URI string (file:// protocol)
+		if (nodePath.includes('://')) {
+			try {
+				resource = URI.parse(nodePath);
+			} catch (error) {
+				this.logService.error('[GraphView] Failed to parse URI', nodePath, error);
+				return;
+			}
+		} else if (nodePath.startsWith('/') || nodePath.includes(':\\')) {
+			// Absolute file path
+			resource = URI.file(nodePath);
+		} else {
+			// Relative path - join with workspace root
+			resource = this.context.extUri.joinPath(workspaceRoot, nodePath);
+		}
+
+		this.logService.info('[GraphView] Opening file from node click', resource.toString(true));
+		await this.openResourceInSideGroup(resource);
 	}
 
 	private resolvePreferredEditorGroup(resource: URI): GroupIdentifier | typeof SIDE_GROUP {

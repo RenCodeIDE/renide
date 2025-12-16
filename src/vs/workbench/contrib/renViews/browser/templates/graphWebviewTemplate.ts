@@ -50,13 +50,14 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			max-width: 280px;
 			padding: 10px 12px;
 			border-radius: 8px;
-			background: var(--vscode-editorWidget-background, rgba(32, 32, 32, 0.8));
+			background: var(--vscode-editorWidget-background, rgba(32, 32, 32, 0.9));
 			border: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.08));
-			box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+			box-shadow: 0 4px 12px rgba(0,0,0,0.3);
 			font-size: 12px;
 			color: var(--vscode-editorWidget-foreground, #ffffff);
 			display: none;
-			z-index: 5;
+			z-index: 100;
+			pointer-events: auto;
 		}
 
 		#legend.visible {
@@ -160,6 +161,34 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 
 		#legend .legend-warning {
 			color: var(--vscode-charts-orange, #ffb74d);
+		}
+
+		#legend .legend-folders {
+			margin-top: 4px;
+			display: flex;
+			flex-direction: column;
+			gap: 4px;
+		}
+
+		#legend .legend-folder-item {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			font-size: 11px;
+		}
+
+		#legend .legend-folder-item .legend-swatch {
+			flex-shrink: 0;
+		}
+
+		#legend .legend-folder-name {
+			color: rgba(255, 255, 255, 0.9);
+			text-transform: capitalize;
+		}
+
+		#legend .legend-folder-count {
+			color: rgba(255, 255, 255, 0.5);
+			font-size: 10px;
 		}
 
 			#toolbar button {
@@ -412,6 +441,40 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			cursor: pointer;
 			user-select: none;
 		}
+
+		#sizingControl .filter-section {
+			margin-top: 12px;
+			padding-top: 10px;
+			border-top: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.1));
+		}
+
+		#sizingControl .filter-option {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			cursor: pointer;
+			padding: 4px 0;
+		}
+
+		#sizingControl .filter-option input[type="checkbox"] {
+			margin: 0;
+			accent-color: var(--vscode-charts-foreground, #4FC3F7);
+			cursor: pointer;
+		}
+
+		#sizingControl .filter-option span {
+			cursor: pointer;
+			user-select: none;
+		}
+
+		#sizingControl .hint-text {
+			margin-top: 12px;
+			padding-top: 8px;
+			border-top: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.06));
+			font-size: 10px;
+			color: rgba(255,255,255,0.5);
+			font-style: italic;
+		}
 		</style>
 	</head>
 	<body>
@@ -422,7 +485,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			<button class="modal-close" aria-label="Close">×</button>
 			<div class="modal-content" id="heatmapInfoContent"></div>
 		</div>
-		<div id="sizingControl" aria-label="Node sizing control">
+		<div id="sizingControl" aria-label="Node sizing and filter controls">
 			<h3>Node Size</h3>
 			<div class="sizing-options">
 				<label class="sizing-option">
@@ -434,6 +497,14 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					<span>By Imports</span>
 				</label>
 			</div>
+				<div class="filter-section">
+				<h3>Filter</h3>
+				<label class="filter-option">
+					<input type="checkbox" id="hideLibraries">
+					<span>Hide Libraries</span>
+				</label>
+			</div>
+			<div class="hint-text">Hover edges to see imports</div>
 		</div>
 		<div id="toolbar" aria-label="Graph controls">
 			<button id="selectFile" title="Select a target to visualize">Select Target...</button>
@@ -498,6 +569,8 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 	let heatmapMode = false;
 	let heatmapSelection = null;
 	let sizingMode = 'exports';
+	let hideLibraries = false;
+	const hideLibrariesCheckbox = document.getElementById('hideLibraries');
 		const send = (type, payload) => {
 			try {
 				vscode.postMessage({ type, payload });
@@ -523,8 +596,175 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			};
 			const DEFAULT_CATEGORY_STYLE = { color: '#4FC3F7' };
 
+			// Hierarchical folder-based color palette - assigns colors based on folder depth and path
+			const HIERARCHICAL_COLORS = {
+				// Root level colors (depth 0)
+				root: [
+					'#4FC3F7',  // Light blue
+					'#81C784',  // Green
+					'#FFB74D',  // Orange
+					'#BA68C8',  // Purple
+					'#4DB6AC',  // Teal
+					'#F06292',  // Pink
+				],
+				// Level 1 colors (depth 1)
+				level1: [
+					'#64B5F6',  // Blue
+					'#AED581',  // Light green
+					'#FF8A65',  // Coral
+					'#9575CD',  // Deep purple
+					'#4DD0E1',  // Cyan
+					'#DCE775',  // Lime
+					'#FFD54F',  // Amber
+					'#A1887F',  // Brown
+				],
+				// Level 2+ colors (depth 2 and deeper)
+				deep: [
+					'#90A4AE',  // Grey
+					'#F48FB1',  // Light pink
+					'#CE93D8',  // Light purple
+					'#B39DDB',  // Medium purple
+					'#9FA8DA',  // Light blue-grey
+					'#90CAF9',  // Light blue
+					'#81C784',  // Light green
+					'#A5D6A7',  // Very light green
+					'#C8E6C9',  // Pale green
+					'#DCEDC8',  // Very pale green
+					'#F1F8E9',  // Almost white green
+					'#FFF3E0',  // Pale orange
+					'#FFE0B2',  // Light orange
+					'#FFCC80',  // Medium orange
+					'#FFB74D',  // Orange
+				]
+			};
+
+			// Configuration for hierarchical coloring
+			const COLOR_CONFIG = {
+				maxDepth: 3,  // Maximum depth to consider for coloring (0 = root, 1 = level 1, etc.)
+				usePathHash: true,  // Use path-based hashing for consistent colors within same folder path
+			};
+
+			const folderColorCache = new Map();
+
+			// Reset folder color cache for consistent colors on each graph load
+			const resetFolderColorCache = () => {
+				folderColorCache.clear();
+			};
+
+			// Simple hash function for consistent color assignment based on path
+			const hashString = (str) => {
+				let hash = 0;
+				for (let i = 0; i < str.length; i++) {
+					const char = str.charCodeAt(i);
+					hash = ((hash << 5) - hash) + char;
+					hash = hash & hash; // Convert to 32-bit integer
+				}
+				return Math.abs(hash);
+			};
+
+			const getHierarchicalFolderColor = (path, depth) => {
+				if (!path || typeof path !== 'string') {
+					return HIERARCHICAL_COLORS.root[0];
+				}
+
+				// Clamp depth to configured maximum
+				const clampedDepth = Math.min(depth, COLOR_CONFIG.maxDepth);
+
+				// Get appropriate color palette for this depth
+				let colorPalette;
+				if (clampedDepth === 0) {
+					colorPalette = HIERARCHICAL_COLORS.root;
+				} else if (clampedDepth === 1) {
+					colorPalette = HIERARCHICAL_COLORS.level1;
+				} else {
+					colorPalette = HIERARCHICAL_COLORS.deep;
+				}
+
+				// Use path-based hashing for consistent colors within same folder path
+				if (COLOR_CONFIG.usePathHash) {
+					const hash = hashString(path.toLowerCase());
+					const colorIndex = hash % colorPalette.length;
+					return colorPalette[colorIndex];
+				} else {
+					// Use sequential assignment (less consistent but more predictable)
+					if (folderColorCache.has(path)) {
+						return folderColorCache.get(path);
+					}
+					const colorIndex = folderColorCache.size % colorPalette.length;
+					const color = colorPalette[colorIndex];
+					folderColorCache.set(path, color);
+					return color;
+				}
+			};
+
+			const getFolderColor = (path) => {
+				if (!path || typeof path !== 'string') {
+					return HIERARCHICAL_COLORS.root[0];
+				}
+
+				// Handle file:// URIs - strip protocol and decode URL encoding
+				let cleanPath = path;
+				if (cleanPath.startsWith('file://')) {
+					cleanPath = cleanPath.slice(7); // Remove 'file://'
+				}
+				try {
+					cleanPath = decodeURIComponent(cleanPath);
+				} catch (e) {
+					// If decoding fails, use the path as-is
+				}
+
+				// Extract meaningful folder hierarchy from path
+				const segments = cleanPath.replace(/^[\\/\\\\]+/, '').split(/[\\/\\\\]/);
+
+				// Build folder path hierarchy, skipping common container folders
+				const meaningfulSegments = [];
+				let foundProjectRoot = false;
+
+				for (let i = 0; i < segments.length; i++) {
+					const seg = segments[i].toLowerCase();
+
+					// Skip empty segments and common system containers
+					if (!seg || seg === 'users' || seg === 'home' || seg === 'documents' ||
+					    seg === 'dev work' || seg === 'web dev' || seg === 'devwork' ||
+					    seg === 'projects' || seg === 'work' || seg === 'code') {
+						continue;
+					}
+
+					// Skip segments that look like filenames (contain .)
+					if (seg.includes('.')) {
+						break; // Stop at filename
+					}
+
+					// Handle common project root folders - treat them as starting point
+					if (!foundProjectRoot && (seg === 'src' || seg === 'app' || seg === 'lib' ||
+					    seg === 'frontend' || seg === 'backend' || seg === 'common' ||
+					    seg === 'packages' || seg === 'components' || seg === 'pages' ||
+					    seg === 'routes' || seg === 'modules' || seg === 'features')) {
+						foundProjectRoot = true;
+						meaningfulSegments.length = 0; // Reset - start from project root
+						continue;
+					}
+
+					// Add meaningful folder segments
+					if (foundProjectRoot || meaningfulSegments.length === 0) {
+						meaningfulSegments.push(seg);
+					}
+				}
+
+				// If no meaningful segments found, use root color
+				if (meaningfulSegments.length === 0) {
+					return HIERARCHICAL_COLORS.root[0];
+				}
+
+				// Build hierarchical folder path for coloring
+				const folderPath = meaningfulSegments.join('/');
+				const depth = meaningfulSegments.length - 1; // Depth is 0-based
+
+				return getHierarchicalFolderColor(folderPath, depth);
+			};
+
 			// Canonical layer order used for layout and edge routing
-			const LAYER_ORDER: Record<string, number> = {
+			const LAYER_ORDER = {
 				// Frontend
 				pages: 0,
 				layouts: 1,
@@ -655,10 +895,216 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			updateSelectModeButton();
 		}
 
+	// Render hierarchical folder color legend for file/folder/workspace modes
+	const renderFolderLegend = payload => {
+			if (!legendEl) {
+				return;
+			}
+			const folderModes = ['file', 'folder', 'workspace'];
+			if (!payload || !folderModes.includes(payload.mode)) {
+				return false;
+			}
+
+			// Build hierarchical folder structure from payload nodes
+			const folderHierarchy = new Map(); // depth -> Map<path, count>
+			const extractFolderHierarchy = (path) => {
+				if (!path || typeof path !== 'string') return null;
+				let cleanPath = path;
+				if (cleanPath.startsWith('file://')) {
+					cleanPath = cleanPath.slice(7);
+				}
+				try { cleanPath = decodeURIComponent(cleanPath); } catch (e) {}
+				const segments = cleanPath.replace(/^[\\/\\\\]+/, '').split(/[\\/\\\\]/);
+
+				// Build meaningful folder path, skipping common containers
+				const meaningfulSegments = [];
+				let foundProjectRoot = false;
+
+				for (let i = 0; i < segments.length; i++) {
+					const seg = segments[i].toLowerCase();
+
+					// Skip empty segments and common system containers
+					if (!seg || seg === 'users' || seg === 'home' || seg === 'documents' ||
+					    seg === 'dev work' || seg === 'web dev' || seg === 'devwork' ||
+					    seg === 'projects' || seg === 'work' || seg === 'code') {
+						continue;
+					}
+
+					// Stop at filename
+					if (seg.includes('.')) {
+						break;
+					}
+
+					// Handle common project root folders
+					if (!foundProjectRoot && (seg === 'src' || seg === 'app' || seg === 'lib' ||
+					    seg === 'frontend' || seg === 'backend' || seg === 'common' ||
+					    seg === 'packages' || seg === 'components' || seg === 'pages' ||
+					    seg === 'routes' || seg === 'modules' || seg === 'features')) {
+						foundProjectRoot = true;
+						meaningfulSegments.length = 0; // Reset to project root
+						continue;
+					}
+
+					// Add meaningful folder segments
+					if (foundProjectRoot || meaningfulSegments.length === 0) {
+						meaningfulSegments.push(seg);
+					}
+				}
+
+				if (meaningfulSegments.length === 0) {
+					// Root-level file (e.g. src/App.tsx) - treat as depth 0
+					return {
+						path: '(root)',
+						depth: 0,
+						displayPath: 'Root Files'
+					};
+				}
+
+				return {
+					path: meaningfulSegments.join('/'),
+					depth: meaningfulSegments.length - 1,
+					displayPath: meaningfulSegments.join(' / ')
+				};
+			};
+
+			(payload.nodes || []).forEach(node => {
+				if (!node.path || node.kind === 'external') return;
+				const hierarchy = extractFolderHierarchy(node.path);
+				if (!hierarchy) return;
+
+				if (!folderHierarchy.has(hierarchy.depth)) {
+					folderHierarchy.set(hierarchy.depth, new Map());
+				}
+				const depthMap = folderHierarchy.get(hierarchy.depth);
+				depthMap.set(hierarchy.path, (depthMap.get(hierarchy.path) || 0) + 1);
+			});
+
+			// ALWAYS show the legend for file/folder/workspace modes, even if hierarchy is simple
+			legendEl.innerHTML = '';
+			legendEl.classList.add('visible');
+			legendEl.style.display = 'block'; // Force display
+
+			const heading = document.createElement('h3');
+			heading.textContent = 'Folder Legend';
+			legendEl.appendChild(heading);
+
+			// Add color hint explaining the hierarchical color system
+			const hint = document.createElement('div');
+			hint.className = 'legend-color-hint';
+			hint.style.fontSize = '10px';
+			hint.style.color = 'rgba(255, 255, 255, 0.6)';
+			hint.style.marginBottom = '8px';
+			hint.style.lineHeight = '1.4';
+			hint.innerHTML = 'Colors indicate folder depth:<br>' +
+				'<span style="display:inline-block;width:8px;height:8px;background:#4FC3F7;border-radius:2px;margin-right:4px;"></span> Root Files<br>' +
+				'<span style="display:inline-block;width:8px;height:8px;background:#81C784;border-radius:2px;margin-right:4px;"></span> Subfolders (Level 1)<br>' +
+				'<span style="display:inline-block;width:8px;height:8px;background:#FFB74D;border-radius:2px;margin-right:4px;"></span> Deep Nested (Level 2+)';
+			legendEl.appendChild(hint);
+
+			// If no hierarchy detected, show a default "Root Only" message
+			if (folderHierarchy.size === 0) {
+				const item = document.createElement('div');
+				item.className = 'legend-folder-item';
+				item.style.fontStyle = 'italic';
+				item.style.color = 'rgba(255,255,255,0.5)';
+				item.textContent = 'All files are in the root scope';
+				legendEl.appendChild(item);
+				return true;
+			}
+
+			const folderSection = document.createElement('div');
+			folderSection.className = 'legend-section legend-folders';
+
+			// Sort depths and process each level
+			const sortedDepths = Array.from(folderHierarchy.keys()).sort((a, b) => a - b);
+
+			sortedDepths.forEach(depth => {
+				const depthMap = folderHierarchy.get(depth);
+				const depthLabel = depth === 0 ? 'Root Level' : 'Level ' + depth;
+				const depthHeading = document.createElement('h4');
+				depthHeading.textContent = depthLabel;
+				depthHeading.style.marginTop = depth > 0 ? '12px' : '0';
+				depthHeading.style.marginBottom = '6px';
+				depthHeading.style.fontSize = '11px';
+				depthHeading.style.fontWeight = '600';
+				depthHeading.style.textTransform = 'uppercase';
+				depthHeading.style.letterSpacing = '0.02em';
+				folderSection.appendChild(depthHeading);
+
+				// Sort folders by count descending, limit to top 8 per level
+				const sortedFolders = Array.from(depthMap.entries())
+					.sort((a, b) => b[1] - a[1])
+					.slice(0, 8);
+
+				sortedFolders.forEach(([folderPath, count]) => {
+					// Handle root special case
+					const isRoot = folderPath === '(root)';
+					const displayPath = isRoot ? 'Root Files' : folderPath.split('/').pop();
+					const color = isRoot ? HIERARCHICAL_COLORS.root[0] : getHierarchicalFolderColor(folderPath, depth);
+					
+					const item = document.createElement('div');
+					item.className = 'legend-folder-item';
+
+					const swatch = document.createElement('span');
+					swatch.className = 'legend-swatch';
+					swatch.style.backgroundColor = color;
+
+					const name = document.createElement('span');
+					name.className = 'legend-folder-name';
+					name.textContent = displayPath;
+					if (!isRoot) name.title = folderPath; // Full path on hover
+
+					const countSpan = document.createElement('span');
+					countSpan.className = 'legend-folder-count';
+					countSpan.textContent = '(' + count + ')';
+
+					item.appendChild(swatch);
+					item.appendChild(name);
+					item.appendChild(countSpan);
+					folderSection.appendChild(item);
+				});
+			});
+
+			legendEl.appendChild(folderSection);
+
+			// Show external count if any
+			const externalCount = (payload.nodes || []).filter(n => n.kind === 'external').length;
+			if (externalCount > 0) {
+				const extItem = document.createElement('div');
+				extItem.className = 'legend-folder-item';
+				extItem.style.marginTop = '12px';
+
+				const swatch = document.createElement('span');
+				swatch.className = 'legend-swatch';
+				swatch.style.backgroundColor = '#AB47BC';
+
+				const name = document.createElement('span');
+				name.className = 'legend-folder-name';
+				name.textContent = 'external';
+
+				const countSpan = document.createElement('span');
+				countSpan.className = 'legend-folder-count';
+				countSpan.textContent = '(' + externalCount + ')';
+
+				extItem.appendChild(swatch);
+				extItem.appendChild(name);
+				extItem.appendChild(countSpan);
+				folderSection.appendChild(extItem);
+			}
+
+			return true;
+		};
+
 	const renderLegend = payload => {
 			if (!legendEl) {
 				return;
 			}
+			
+			// Try folder legend first for file/folder/workspace modes
+			if (renderFolderLegend(payload)) {
+				return;
+			}
+
 			legendEl.innerHTML = '';
 			categoryState.clear();
 			const archModes = ['architecture', 'dataFlow', 'frontendArch', 'backendArch', 'fullstackArch', 'smartArch'];
@@ -1146,7 +1592,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					container: document.getElementById('cy'),
 					style: [
 						{ selector: 'node', style: {
-							'background-color': '#4FC3F7',
+							'background-color': 'data(folderColor)',
 							'border-width': 2,
 							'border-color': '#0B1A2B',
 							'label': 'data(displayLabel)',
@@ -1419,15 +1865,31 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 							'target-arrow-color': '#E0E0E0',
 							'target-arrow-shape': 'triangle',
 							'arrow-scale': 1.2,
-							'label': 'data(label)',
-							'font-size': 11,
+							'label': '',
+							'font-size': 12,
 							'color': '#ffffff',
 							'text-wrap': 'wrap',
-							'text-max-width': 140,
-							'text-background-color': 'rgba(0, 0, 0, 0.65)',
+							'text-max-width': 180,
+							'text-background-color': 'rgba(0, 0, 0, 0.85)',
 							'text-background-opacity': 1,
-							'text-background-padding': '2px',
+							'text-background-padding': '4px',
 							'text-background-shape': 'roundrectangle'
+						}},
+						// Show label on edge hover - larger, more readable
+						{ selector: 'edge.hovered', style: {
+							'label': 'data(label)',
+							'font-size': 14,
+							'font-weight': 600,
+							'width': 3,
+							'line-color': '#4FC3F7',
+							'target-arrow-color': '#4FC3F7',
+							'text-background-color': 'rgba(30, 30, 35, 0.95)',
+							'text-background-padding': '6px',
+							'text-border-color': '#4FC3F7',
+							'text-border-width': 1,
+							'text-border-opacity': 0.8,
+							'text-max-width': 250,
+							'z-index': 999
 						}},
 						// Edges that cross layers are slightly stronger
 						{ selector: 'edge.edge-cross-layer', style: {
@@ -1718,6 +2180,9 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 						return label;
 					};
 
+					// Reset folder color cache for consistent colors
+					resetFolderColorCache();
+
 					const nodePayloads = payload.nodes || [];
 					console.log('[GraphWebview] Processing graph:', { mode: payload.mode, nodeCount: nodePayloads.length, edgeCount: (payload.edges || []).length });
 
@@ -1818,7 +2283,8 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 									tags: node.tags ?? [],
 									metadata: node.metadata ?? {},
 									description: node.description ?? '',
-									evidence: node.evidence ?? []
+									evidence: node.evidence ?? [],
+									folderColor: node.kind !== 'external' ? getFolderColor(node.path) : '#AB47BC'
 								},
 								classes: finalClasses
 							};
@@ -2255,6 +2721,43 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				});
 			});
 
+			// Hide Libraries filter
+			const applyLibraryFilter = () => {
+				if (!cy) return;
+				cy.batch(() => {
+					cy.nodes().forEach(node => {
+						const kind = node.data('kind');
+						if (kind === 'external') {
+							node.style('display', hideLibraries ? 'none' : 'element');
+						}
+					});
+					// Hide edges connected to hidden nodes
+					cy.edges().forEach(edge => {
+						const sourceVisible = edge.source().style('display') !== 'none';
+						const targetVisible = edge.target().style('display') !== 'none';
+						edge.style('display', sourceVisible && targetVisible ? 'element' : 'none');
+					});
+				});
+			};
+
+			if (hideLibrariesCheckbox) {
+				hideLibrariesCheckbox.addEventListener('change', (e) => {
+					hideLibraries = e.target.checked;
+					applyLibraryFilter();
+				});
+			}
+
+			// Edge hover handlers - show labels on hover
+			const setupEdgeHoverHandlers = () => {
+				if (!cy) return;
+				cy.on('mouseover', 'edge', (evt) => {
+					evt.target.addClass('hovered');
+				});
+				cy.on('mouseout', 'edge', (evt) => {
+					evt.target.removeClass('hovered');
+				});
+			};
+
 			document.getElementById('selectFile').addEventListener('click', () => send('REN_SELECT_FILE'));
 			document.getElementById('zoomIn').addEventListener('click', () => applyZoom(1.2));
 			document.getElementById('zoomOut').addEventListener('click', () => applyZoom(1 / 1.2));
@@ -2266,12 +2769,91 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				cy.resize();
 			});
 
+			// Extract folder hierarchy helper (duplicated for testing)
+			const extractFolderHierarchy = (path) => {
+				if (!path || typeof path !== 'string') return null;
+				let cleanPath = path;
+				if (cleanPath.startsWith('file://')) {
+					cleanPath = cleanPath.slice(7);
+				}
+				try { cleanPath = decodeURIComponent(cleanPath); } catch (e) {}
+				const segments = cleanPath.replace(/^[\\/\\\\]+/, '').split(/[\\/\\\\]/);
+
+				// Build meaningful folder path, skipping common containers
+				const meaningfulSegments = [];
+				let foundProjectRoot = false;
+
+				for (let i = 0; i < segments.length; i++) {
+					const seg = segments[i].toLowerCase();
+
+					// Skip empty segments and common system containers
+					if (!seg || seg === 'users' || seg === 'home' || seg === 'documents' ||
+					    seg === 'dev work' || seg === 'web dev' || seg === 'devwork' ||
+					    seg === 'projects' || seg === 'work' || seg === 'code') {
+						continue;
+					}
+
+					// Stop at filename
+					if (seg.includes('.')) {
+						break;
+					}
+
+					// Handle common project root folders
+					if (!foundProjectRoot && (seg === 'src' || seg === 'app' || seg === 'lib' ||
+					    seg === 'frontend' || seg === 'backend' || seg === 'common' ||
+					    seg === 'packages' || seg === 'components' || seg === 'pages' ||
+					    seg === 'routes' || seg === 'modules' || seg === 'features')) {
+						foundProjectRoot = true;
+						meaningfulSegments.length = 0; // Reset to project root
+						continue;
+					}
+
+					// Add meaningful folder segments
+					if (foundProjectRoot || meaningfulSegments.length === 0) {
+						meaningfulSegments.push(seg);
+					}
+				}
+
+				return meaningfulSegments.length > 0 ? {
+					path: meaningfulSegments.join('/'),
+					depth: meaningfulSegments.length - 1,
+					displayPath: meaningfulSegments.join(' / ')
+				} : null;
+			};
+
+			// Debug function to test hierarchical color assignment
+			const testHierarchicalColors = () => {
+				console.log('Testing hierarchical color assignment:');
+				const testPaths = [
+					'/Users/project/file.txt',           // Root level
+					'/Users/project/src/file.txt',       // Root level (src is skipped)
+					'/Users/project/src/components/file.txt',  // Level 1
+					'/Users/project/src/pages/file.txt',       // Level 1 (different from components)
+					'/Users/project/src/components/ui/file.txt', // Level 2
+					'/Users/project/src/pages/auth/file.txt',    // Level 2
+					'/Users/project/src/components/ui/button/file.txt', // Level 3 (deep)
+					'/Users/project/packages/utils/file.txt',    // Level 1 (packages)
+					'/Users/project/packages/utils/helpers/file.txt', // Level 2
+					'/Users/project/app/routes/file.txt',        // Level 1 (app)
+				];
+
+				testPaths.forEach(path => {
+					const color = getFolderColor(path);
+					const hierarchy = extractFolderHierarchy(path);
+					const hierarchyStr = hierarchy ? 'Level ' + hierarchy.depth + ': ' + hierarchy.path : 'Root';
+					console.log(path + ' -> ' + hierarchyStr + ': ' + color);
+				});
+			};
+
 			const init = () => {
 				if (typeof window.cytoscape !== 'function') {
 					setTimeout(init, 50);
 					return;
 				}
 				ensureCy();
+				setupEdgeHoverHandlers();
+				// Uncomment to test color assignment in browser console:
+				// testHierarchicalColors();
 				send('REN_GRAPH_READY');
 			};
 
