@@ -44,6 +44,12 @@ const messaging = createPosterForVsCode(vscode, settings);
 window.cspAlerter.setPoster(messaging);
 window.styleLoadingMonitor.setPoster(messaging);
 
+function escapeHtml(text: string): string {
+	const div = document.createElement('div');
+	div.textContent = text;
+	return div.innerHTML;
+}
+
 
 function doAfterImagesLoaded(cb: () => void) {
 	const imgElements = document.getElementsByTagName('img');
@@ -228,7 +234,10 @@ window.addEventListener('message', async event => {
 				const progressText = document.getElementById('plan-progress-text');
 				const progressBar = document.getElementById('plan-progress-bar');
 				const todoStats = document.getElementById('plan-todo-stats');
-				
+				const todosContainer = document.getElementById('plan-todos-container');
+				const todosTitle = document.getElementById('plan-todos-title');
+				const todosList = document.getElementById('plan-todos-list');
+
 				if (progressText) {
 					progressText.textContent = `${data.progress}%`;
 				}
@@ -238,7 +247,40 @@ window.addEventListener('message', async event => {
 				if (todoStats) {
 					todoStats.textContent = `${data.completedTodos}/${data.totalTodos} todos`;
 				}
-				
+
+				// Update todos list if provided
+				if (data.todos && Array.isArray(data.todos) && todosList) {
+					const pendingTodos = data.todos.filter(t => t.status === 'pending' || t.status === 'in-progress');
+					const completedTodos = data.todos.filter(t => t.status === 'completed');
+
+					// Update title
+					if (todosTitle) {
+						const remaining = pendingTodos.length;
+						todosTitle.textContent = `Todos (${remaining} remaining, ${completedTodos.length} completed):`;
+					}
+
+					// Show/hide container
+					if (todosContainer) {
+						todosContainer.style.display = data.todos.length > 0 ? 'block' : 'none';
+					}
+
+					// Update todos list
+					todosList.innerHTML = data.todos.map((todo: { id: string; text: string; status: string }) => {
+						const icon = todo.status === 'completed' ? '✓' : todo.status === 'in-progress' ? '⟳' : '☐';
+						const iconColor = todo.status === 'completed' ? 'var(--vscode-testing-iconPassed)' : todo.status === 'in-progress' ? 'var(--vscode-testing-iconQueued)' : 'var(--vscode-descriptionForeground)';
+						const textColor = todo.status === 'completed' ? 'var(--vscode-descriptionForeground)' : 'var(--vscode-foreground)';
+						const textStyle = todo.status === 'completed' ? 'text-decoration: line-through; opacity: 0.7;' : '';
+
+						return `
+							<div class="plan-todo-item" data-todo-id="${escapeHtml(todo.id)}" style="padding: 6px 0; display: flex; align-items: start; gap: 8px; border-bottom: 1px solid var(--vscode-panel-border);">
+								<span class="plan-todo-icon" style="color: ${iconColor}; min-width: 16px;">${icon}</span>
+								<span class="plan-todo-text" style="flex: 1; color: ${textColor}; ${textStyle}">${escapeHtml(todo.text)}</span>
+								<span class="plan-todo-status" style="font-size: 10px; color: var(--vscode-descriptionForeground); text-transform: uppercase;">${todo.status}</span>
+							</div>
+						`;
+					}).join('');
+				}
+
 				// Update execution status if provided
 				if (data.status) {
 					const button = document.getElementById('start-execution-btn');

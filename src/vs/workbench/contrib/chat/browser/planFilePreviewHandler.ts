@@ -22,9 +22,8 @@ import { ServicesAccessor } from '../../../../platform/instantiation/common/inst
 import { localize } from '../../../../nls.js';
 import { PlanValidator } from '../common/planValidator.js';
 import { parsePlanMetadata } from '../common/tools/planTemplates.js';
-import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
+import { INotificationService } from '../../../../platform/notification/common/notification.js';
 import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
-import { Action } from '../../../../base/common/actions.js';
 import { IChatTodoListService, IChatTodo } from '../common/chatTodoListService.js';
 import { IPlanExecutionTracker } from '../common/planExecutionTracker.js';
 
@@ -129,51 +128,21 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 
 			// Validate plan before execution
 			const validationResult = await this.planValidator.validatePlan(planContent, planFileUri);
-			
+
 			// Extract todos from plan (enhanced extraction)
 			const todos = this.extractTodosFromPlan(planContent);
 			const planMetadata = parsePlanMetadata(planContent);
-			
+
 			this.logService.debug(`[PlanFilePreviewHandler] Extracted ${todos.length} todos from plan`);
 
-			// Show execution preview with validation results
-			const previewMessage = this.buildExecutionPreview(planMetadata, validationResult, todos);
-			const severity = validationResult.isValid ? Severity.Info : Severity.Warning;
-			
-			// Get widget first for use in notification action
+			// Get widget first
 			let widget = await showChatView(this.viewsService, this.layoutService);
 			if (!widget) {
 				widget = this.chatWidgetService.lastFocusedWidget;
 			}
-			
-			// Create actions for notification
-			const executeAction = new Action('execute-plan', localize('executePlan', 'Execute Plan'), undefined, true, async () => {
-				await this.executePlanInternal(planFileUri, planContent, planMetadata, validationResult, todos, widget);
-			});
-			
-			const cancelAction = new Action('cancel-execution', localize('cancel', 'Cancel'), undefined, true, () => {
-				this.logService.info('[PlanFilePreviewHandler] Plan execution cancelled by user');
-			});
-			
-			// Show preview notification
-			const handle = this.notificationService.notify({
-				severity,
-				message: previewMessage,
-				actions: {
-					primary: [executeAction],
-					secondary: [cancelAction]
-				},
-				sticky: !validationResult.isValid
-			});
 
-			// Auto-close after 5 seconds if valid, or wait for user action if invalid
-			if (validationResult.isValid) {
-				setTimeout(async () => {
-					handle.close();
-					// Auto-execute if valid
-					await this.executePlanInternal(planFileUri, planContent, planMetadata, validationResult, todos, widget);
-				}, 5000);
-			}
+			// Execute directly - no banner, regardless of validation errors or warnings
+			await this.executePlanInternal(planFileUri, planContent, planMetadata, validationResult, todos, widget);
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			this.notificationService.error(localize('planExecution.error', 'Failed to start plan execution: {0}', errorMessage));
@@ -182,33 +151,27 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 	}
 
 	/**
-	 * Build execution preview message
+	 * Update preview with real-time progress
 	 */
-	private buildExecutionPreview(
-		planMetadata: ReturnType<typeof parsePlanMetadata>,
-		validationResult: Awaited<ReturnType<PlanValidator['validatePlan']>>,
-		todos: Array<{ id: string; text: string; completed: boolean; section?: string; lineNumber?: number }>
-	): string {
-		const parts: string[] = [];
-		
-		if (planMetadata?.title) {
-			parts.push(`Plan: ${planMetadata.title}`);
-		}
-		
-		parts.push(`Quality Score: ${validationResult.score}/100`);
-		
-		if (todos.length > 0) {
-			const incompleteTodos = todos.filter(t => !t.completed).length;
-			parts.push(`${incompleteTodos} of ${todos.length} todos remaining`);
-		}
-		
-		if (!validationResult.isValid) {
-			parts.push(`⚠️ ${validationResult.errors.length} error(s) found`);
-		} else if (validationResult.warnings.length > 0) {
-			parts.push(`ℹ️ ${validationResult.warnings.length} warning(s)`);
-		}
-		
-		return parts.join(' • ');
+	private updatePreviewProgress(
+		planFileUri: URI,
+		progress: number,
+		completedTodos: number,
+		totalTodos: number,
+		status: 'not-started' | 'starting' | 'in-progress' | 'completed' | 'failed',
+		todos?: Array<{ id: string; text: string; status: string }>
+	): void {
+		// Send update to markdown preview via command
+		this.commandService.executeCommand('markdown.updatePlanProgress',
+			planFileUri.toString(),
+			progress,
+			completedTodos,
+			totalTodos,
+			status,
+			todos
+		).catch(error => {
+			this.logService.debug(`[PlanFilePreviewHandler] Failed to update preview progress: ${error}`);
+		});
 	}
 
 	/**
@@ -242,7 +205,7 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 			// Switch to Agent mode if needed (preserve conversation)
 			const agentMode = ChatMode.Agent;
 			const currentMode = widget.input.currentModeKind;
-			
+
 			if (currentMode !== agentMode.kind) {
 				const editingSession = widget.viewModel?.model.editingSession;
 				const requestCount = widget.viewModel?.model.getRequests().length ?? 0;
@@ -270,7 +233,7 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 						primaryButton: localize('yes', 'Yes'),
 						cancelButton: localize('no', 'No')
 					});
-					
+
 					if (confirmed.confirmed) {
 						await this.commandService.executeCommand('workbench.action.chat.newChat');
 					} else {
@@ -282,10 +245,10 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 
 			// Get session ID
 			const sessionId = widget.viewModel?.model.sessionId || 'default';
-			
+
 			// Extract incomplete todos and directly add them to the session
 			const incompleteTodos = todos.filter(t => !t.completed);
-			
+
 			// Directly create the todos in the todo service (don't ask agent to do it)
 			if (incompleteTodos.length > 0) {
 				const chatTodos: IChatTodo[] = incompleteTodos.map((todo, index) => ({
@@ -297,27 +260,38 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 				this.todoListService.setTodos(sessionId, chatTodos);
 				this.logService.info(`[PlanFilePreviewHandler] Created ${chatTodos.length} todos directly`);
 			}
-			
+
 			// Start execution tracking
 			this.executionTracker.startExecution(planFileUri.toString(), sessionId, incompleteTodos.length);
-			
+
 			// Prepare a simple, focused message with plan as context
 			const workspaceRelativePath = this.getWorkspaceRelativePath(planFileUri);
 			const planTitle = planMetadata?.title || workspaceRelativePath || planFileUri.fsPath;
-			
+
 			let message = `Execute the implementation plan: **${planTitle}**\n\n`;
 			message += `📋 **Todos have been added** (${incompleteTodos.length} items) - work through them systematically.\n\n`;
 			message += `📄 **Plan file:** \`${workspaceRelativePath || planFileUri.fsPath}\`\n\n`;
 			message += `---\n\n`;
 			message += `**Plan Content:**\n\n${planContent}`;
-			
+
 			// Listen to todo updates to sync with execution tracker and plan file
 			this._register(this.todoListService.onDidUpdateTodos((updatedSessionId) => {
 				if (updatedSessionId === sessionId) {
 					const currentTodos = this.todoListService.getTodos(updatedSessionId);
 					const completedCount = currentTodos.filter(t => t.status === 'completed').length;
+					const totalCount = currentTodos.length;
+					const progress = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+
 					this.executionTracker.updateProgress(planFileUri.toString(), completedCount);
-					
+
+					// Update preview with real-time progress
+					const todosForPreview = currentTodos.map(t => ({
+						id: String(t.id),
+						text: t.title + (t.description ? `: ${t.description}` : ''),
+						status: t.status === 'not-started' ? 'pending' : t.status
+					}));
+					this.updatePreviewProgress(planFileUri, progress, completedCount, totalCount, 'in-progress', todosForPreview);
+
 					// Sync plan file with todo completion
 					this.syncPlanFileWithTodos(planFileUri, planContent, todos, currentTodos).catch(error => {
 						this.logService.warn(`[PlanFilePreviewHandler] Failed to sync plan file: ${error}`);
@@ -338,6 +312,14 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 				status: 'in-progress'
 			});
 
+			// Send initial progress update to preview
+			const initialTodosForPreview = incompleteTodos.map(t => ({
+				id: t.id,
+				text: t.text,
+				status: 'pending' as const
+			}));
+			this.updatePreviewProgress(planFileUri, 0, 0, incompleteTodos.length, 'starting', initialTodosForPreview);
+
 			this.logService.info(`[PlanFilePreviewHandler] Plan execution started. Todos: ${incompleteTodos.length}`);
 		} catch (error) {
 			this.logService.error('[PlanFilePreviewHandler] Failed to execute plan', error);
@@ -349,25 +331,25 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 	 */
 	private extractTodosFromPlan(planContent: string): Array<{ id: string; text: string; completed: boolean; section?: string; lineNumber?: number }> {
 		const todos: Array<{ id: string; text: string; completed: boolean; section?: string; lineNumber?: number }> = [];
-		
+
 		// Enhanced regex patterns to match various markdown todo formats
 		const todoPatterns = [
 			/^\s*[-*]\s*\[([\sx])\]\s*(.+)$/gim,  // Standard: - [ ] or - [x]
 			/^\s*\d+\.\s*\[([\sx])\]\s*(.+)$/gim, // Numbered: 1. [ ] or 1. [x]
 		];
-		
+
 		const lines = planContent.split('\n');
 		let currentSection: string | undefined;
-		
+
 		for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
 			const line = lines[lineIndex];
-			
+
 			// Track current section
 			const sectionMatch = line.match(/^##\s+(.+)$/);
 			if (sectionMatch) {
 				currentSection = sectionMatch[1].trim();
 			}
-			
+
 			// Try each pattern
 			for (const pattern of todoPatterns) {
 				pattern.lastIndex = 0; // Reset regex
@@ -385,7 +367,7 @@ export class PlanFilePreviewHandler extends Disposable implements IWorkbenchCont
 				}
 			}
 		}
-		
+
 		return todos;
 	}
 
@@ -471,9 +453,9 @@ class StartPlanExecutionAction extends Action2 {
 	async run(accessor: ServicesAccessor, uri?: string): Promise<void> {
 		const logService = accessor.get(ILogService);
 		const notificationService = accessor.get(INotificationService);
-		
+
 		logService.info(`[StartPlanExecutionAction] Command called with URI: ${uri}`);
-		
+
 		if (!uri) {
 			logService.error('[StartPlanExecutionAction] No URI provided');
 			notificationService.error(localize('planExecution.noUri', 'Plan execution failed: No plan file URI provided'));

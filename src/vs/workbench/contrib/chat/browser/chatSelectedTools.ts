@@ -137,7 +137,8 @@ export class ChatSelectedTools extends Disposable {
 		}
 		if (!currentMap && currentMode.kind === ChatModeKind.Plan) {
 			// Explicitly enable plan tools for Plan mode
-			const planTools = ['plan.writeFile', 'plan.visualize'];
+			// Tools: createPlanFile, writePlan (plan.writeFile), graphControl (for visualizing changes)
+			const planTools = ['plan.createFile', 'plan.writeFile', 'vscode_graphControl'];
 			currentMap = ToolEnablementStates.fromMap(this._toolsService.toToolAndToolSetEnablementMap(planTools));
 		}
 		if (!currentMap) {
@@ -146,13 +147,13 @@ export class ChatSelectedTools extends Disposable {
 		for (const tool of this._allTools.read(r)) {
 			if (tool.canBeReferencedInPrompt) {
 				let enabled = currentMap.tools.get(tool.id) !== false; // if unknown, it's enabled
-				
+
 				// In Plan mode, explicitly disable the generic createFile tool
 				// Use createPlanFile instead for creating plan files
 				if (currentMode.kind === ChatModeKind.Plan && tool.id === 'create_file') {
 					enabled = false;
 				}
-				
+
 				map.set(tool, enabled);
 			}
 		}

@@ -2167,9 +2167,9 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 								}
 							}
 							return concise;
-						}
+					}
 
-						// Standard label handling for other modes
+					// Standard label handling for other modes
 					let label = node.label;
 					if (mode === 'architecture' && typeof node.confidence === 'number' && !Number.isNaN(node.confidence)) {
 						label += ' · ' + Math.round(node.confidence * 100) + '%';
@@ -2177,8 +2177,8 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					if (mode === 'dataFlow' && node.metadata?.isRoot) {
 						label += ' (root)';
 					}
-						return label;
-					};
+					return label;
+				};
 
 					// Reset folder color cache for consistent colors
 					resetFolderColorCache();

@@ -670,7 +670,7 @@ export class ArchitectureService extends Disposable implements IArchitectureServ
 					Authorization: `Bearer ${accessToken}`,
 					Accept: "application/json",
 				},
-				timeout: 90000, // 90 second timeout (allows for 3 batches × 25s + buffer)
+				// No timeout - let batches complete as long as needed
 			},
 			CancellationToken.None
 		);

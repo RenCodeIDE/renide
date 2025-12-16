@@ -469,6 +469,7 @@ export interface IManagedMarkdownPreview {
 	dispose(): void;
 	refresh(): void;
 	updateConfiguration(): void;
+	postMessage(msg: ToWebviewMessage.Type): void;
 
 	matchesResource(
 		otherResource: vscode.Uri,
@@ -574,6 +575,10 @@ export class StaticMarkdownPreview extends Disposable implements IManagedMarkdow
 		if (this._previewConfigurations.hasConfigurationChanged(this._preview.resource)) {
 			this.refresh();
 		}
+	}
+
+	public postMessage(msg: ToWebviewMessage.Type) {
+		this._preview.postMessage(msg);
 	}
 
 	public get resource() {
@@ -737,6 +742,10 @@ export class DynamicMarkdownPreview extends Disposable implements IManagedMarkdo
 		if (this._previewConfigurations.hasConfigurationChanged(this._preview.resource)) {
 			this.refresh();
 		}
+	}
+
+	public postMessage(msg: ToWebviewMessage.Type) {
+		this._preview.postMessage(msg);
 	}
 
 	public update(newResource: vscode.Uri, scrollLocation?: StartingScrollLocation) {

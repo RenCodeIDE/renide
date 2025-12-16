@@ -19,6 +19,7 @@ import { ShowPreviewSecuritySelectorCommand } from './showPreviewSecuritySelecto
 import { ShowSourceCommand } from './showSource';
 import { ToggleLockCommand } from './toggleLock';
 import { OpenImageCommand } from './openImage';
+import { UpdatePlanProgressCommand } from './updatePlanProgress';
 
 export function registerMarkdownCommands(
 	commandManager: CommandManager,
@@ -42,6 +43,7 @@ export function registerMarkdownCommands(
 	commandManager.register(new ReloadPlugins(previewManager, engine));
 	commandManager.register(new InsertLinkFromWorkspace());
 	commandManager.register(new InsertImageFromWorkspace());
+	commandManager.register(new UpdatePlanProgressCommand(previewManager));
 
 	return commandManager;
 }

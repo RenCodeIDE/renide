@@ -24,7 +24,7 @@
     "compile": "node ./node_modules/gulp/bin/gulp.js compile",
     "compile-check-ts-native": "tsgo --project ./src/tsconfig.json --noEmit --skipLibCheck",
     "watch": "npm-run-all -lp watch-client watch-extensions",
-    "watch-macos": "bun run gulp watch-client",
+    "watch-macos": "bun run gulp watch-client-bun",
     "watchd": "deemon npm run watch",
     "watch-webd": "deemon npm run watch-web",
     "kill-watchd": "deemon --kill npm run watch",

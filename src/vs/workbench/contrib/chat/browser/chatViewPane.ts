@@ -201,6 +201,16 @@ export class ChatViewPane extends ViewPane implements IViewWelcomeDelegate {
 			);
 	}
 
+	protected override renderHeaderTitle(container: HTMLElement, title: string): void {
+		// Override to hide agent name - always render empty title
+		super.renderHeaderTitle(container, "");
+	}
+
+	protected override updateTitle(title: string): void {
+		// Override to hide agent name - always update to empty title
+		super.updateTitle("");
+	}
+
 	override getActionsContext(): IChatViewTitleActionContext | undefined {
 		return this.widget?.viewModel
 			? {

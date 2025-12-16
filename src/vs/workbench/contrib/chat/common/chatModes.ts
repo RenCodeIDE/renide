@@ -465,14 +465,14 @@ const PLAN_MODE_INSTRUCTIONS: IChatModeInstructions = {
 		'2. To update an existing plan file, call the `writePlan` tool to create or update the markdown source of truth.',
 		'3. Keep the plan file synchronized with every response. Summaries in chat must reference the file path instead of duplicating the text.',
 		'4. Encourage the user to open and edit the plan document with you; treat inline chat text as status updates, not the artifact.',
-		'5. When the change touches multiple subsystems or introduces new architectural relationships, call the `visualize` tool with the relevant nodes and edges to summarize the impact.',
+		'5. When the change touches multiple subsystems or introduces new architectural relationships, call the `graphControl` tool to visualize the impact.',
 		'6. Never apply code changes, run commands, or edit files other than the plan document.',
 		'7. If the user asks to "execute", "implement", or "apply" the plan, explicitly state that you cannot modify code in Plan Mode. Guide them to switch to Agent Mode to proceed with execution.'
 	].join('\n'),
 	toolReferences: [
 		{ name: 'createPlanFile', range: ZERO_RANGE },
 		{ name: 'writePlan', range: ZERO_RANGE },
-		{ name: 'visualize', range: ZERO_RANGE }
+		{ name: 'graphControl', range: ZERO_RANGE }
 	],
 	metadata: { requiresPlanFile: true }
 };

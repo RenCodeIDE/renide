@@ -16,6 +16,7 @@ import { IInstantiationService } from '../../../../../platform/instantiation/com
 import { ILogService } from '../../../../../platform/log/common/log.js';
 import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
 import { CountTokensCallback, IPreparedToolInvocation, IToolData, IToolImpl, IToolInvocation, IToolInvocationPreparationContext, IToolResult, ToolDataSource, ToolProgress } from '../languageModelToolsService.js';
+import { IPlanTodoSyncService } from '../planTodoSyncService.js';
 
 const DEFAULT_PLAN_FILE_NAME = 'plan.plan.md';
 const PLAN_ROOT_DIRECTORY = '.ren/plans';
@@ -67,6 +68,7 @@ export class PlanFileTool extends Disposable implements IToolImpl {
 		@ILogService private readonly logService: ILogService,
 		@IEditorService private readonly editorService: IEditorService,
 		@IInstantiationService _instaService: IInstantiationService,
+		@IPlanTodoSyncService private readonly planTodoSyncService: IPlanTodoSyncService,
 	) {
 		super();
 	}
@@ -121,6 +123,17 @@ export class PlanFileTool extends Disposable implements IToolImpl {
 			} catch (error) {
 				this.logService.warn(`[PlanFileTool] Failed to open plan file: ${error}`);
 				// Continue even if opening fails
+			}
+
+			// Sync plan todos with the chat todo widget
+			const sessionId = invocation.context?.sessionId;
+			if (sessionId) {
+				try {
+					this.planTodoSyncService.registerPlanFile(uri, sessionId);
+					this.logService.debug(`[PlanFileTool] Synced plan todos for session: ${sessionId}`);
+				} catch (syncError) {
+					this.logService.warn(`[PlanFileTool] Failed to sync plan todos: ${syncError}`);
+				}
 			}
 
 			const workspaceRelative = this.getWorkspaceRelativePath(uri);

@@ -89,6 +89,7 @@ export namespace ToWebviewMessage {
 		readonly completedTodos: number;
 		readonly totalTodos: number;
 		readonly status?: 'not-started' | 'starting' | 'in-progress' | 'completed' | 'failed';
+		readonly todos?: Array<{ id: string; text: string; status: string }>;
 	}
 
 	export type Type =

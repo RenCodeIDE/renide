@@ -5,6 +5,7 @@
 		"lib": [
 			"ES2024"
 		],
+		"ignoreDeprecations": "6.0",
 		"module": "commonjs",
 		"strict": true,
 		"exactOptionalPropertyTypes": false,

@@ -120,7 +120,7 @@ export class MdDocumentRenderer {
 		nonce?: string,
 	): Promise<MarkdownContentProviderOutput> {
 		const rendered = await this._engine.render(markdownDocument, resourceProvider);
-		
+
 		// Inject enhanced plan preview for .plan.md files
 		let planFileHeader = '';
 		let planProgressScript = '';
@@ -129,17 +129,19 @@ export class MdDocumentRenderer {
 			const scriptNonce = nonce || getNonce();
 			const planContent = markdownDocument.getText();
 			const planStats = this.parsePlanStats(planContent);
-			
+
 			// Extract todos for display
 			const todos = this.extractTodosForDisplay(planContent);
 			const incompleteTodos = todos.filter(t => !t.completed);
-			
+
+			const commandHref = `command:workbench.action.chat.startPlanExecution?${encodeURIComponent(sourceUri)}`;
+
 			planFileHeader = `
 				<div class="plan-execution-header" style="background: var(--vscode-editor-background); padding: 12px; border-bottom: 1px solid var(--vscode-panel-border); margin-bottom: 16px; border-radius: 6px; border: 1px solid var(--vscode-panel-border);">
 					<div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 12px;">
-						<button id="start-execution-btn" style="background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500;">
+						<a id="start-execution-btn" href="${commandHref}" style="display: inline-block; background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500; text-decoration: none;">
 							▶ Start Execution
-						</button>
+						</a>
 						<div id="execution-status-badge" style="padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); display: none;">
 							<span id="execution-status-text">Not Started</span>
 						</div>
@@ -156,52 +158,70 @@ export class MdDocumentRenderer {
 							<span id="plan-todo-stats">${planStats.completedTodos}/${planStats.totalTodos} todos</span>
 						</div>
 					</div>
-					${incompleteTodos.length > 0 ? `
-					<div style="border-top: 1px solid var(--vscode-panel-border); padding-top: 12px; margin-top: 8px;">
-						<div style="font-size: 12px; font-weight: 600; margin-bottom: 8px; color: var(--vscode-foreground);">Todos (${incompleteTodos.length} remaining):</div>
-						<div style="max-height: 150px; overflow-y: auto; font-size: 12px;">
-							${incompleteTodos.map(todo => `
-								<div style="padding: 4px 0; display: flex; align-items: start; gap: 8px;">
-									<span style="color: var(--vscode-descriptionForeground);">☐</span>
-									<span style="flex: 1; color: var(--vscode-foreground);">${this.escapeHtml(todo.text)}</span>
+					<div id="plan-todos-container" style="border-top: 1px solid var(--vscode-panel-border); padding-top: 12px; margin-top: 8px; ${incompleteTodos.length === 0 ? 'display: none;' : ''}">
+						<div style="font-size: 12px; font-weight: 600; margin-bottom: 8px; color: var(--vscode-foreground);">
+							<span id="plan-todos-title">Todos (${incompleteTodos.length} remaining):</span>
+						</div>
+						<div id="plan-todos-list" style="max-height: 200px; overflow-y: auto; font-size: 12px;">
+							${incompleteTodos.map((todo, index) => {
+								const todoId = `todo-${index}-${todo.text.substring(0, 20).replace(/\s+/g, '-')}`;
+								return `
+								<div class="plan-todo-item" data-todo-id="${escapeAttribute(todoId)}" style="padding: 6px 0; display: flex; align-items: start; gap: 8px; border-bottom: 1px solid var(--vscode-panel-border);">
+									<span class="plan-todo-icon" style="color: var(--vscode-descriptionForeground); min-width: 16px;">☐</span>
+									<span class="plan-todo-text" style="flex: 1; color: var(--vscode-foreground);">${this.escapeHtml(todo.text)}</span>
+									<span class="plan-todo-status" style="font-size: 10px; color: var(--vscode-descriptionForeground); text-transform: uppercase;">pending</span>
 								</div>
-							`).join('')}
+							`;
+							}).join('')}
 						</div>
 					</div>
-					` : ''}
 				</div>
 			`;
-			
+
 			planProgressScript = `
 				<script nonce="${scriptNonce}">
 					(function() {
-						const button = document.getElementById('start-execution-btn');
-						if (button) {
-							button.addEventListener('click', () => {
-								console.log('[Plan Execution] Button clicked for:', '${sourceUri}');
-								// Use existing API if available (exposed from preview-src/index.ts)
-								const vscode = (window as any).vscodeApi;
-								if (!vscode) {
-									console.error('[Plan Execution] VS Code API not available');
-									alert('VS Code API not available. Please refresh the preview.');
-									return;
-								}
-								
-								try {
-									const message = {
-										type: 'startExecution',
-										source: '${sourceUri}'
-									};
-									console.log('[Plan Execution] Sending message:', message);
-									vscode.postMessage(message);
-									console.log('[Plan Execution] Message sent successfully');
-								} catch (error) {
-									console.error('[Plan Execution] Failed to send message:', error);
-									alert('Failed to send execution request: ' + (error instanceof Error ? error.message : String(error)));
-								}
-							});
+						function attachExecutionHandler() {
+							const button = document.getElementById('start-execution-btn');
+							if (button) {
+								button.addEventListener('click', () => {
+									console.log('[Plan Execution] Button clicked for:', '${sourceUri}');
+									// Use existing API if available (exposed from preview-src/index.ts)
+									const vscode = window.vscodeApi;
+									if (!vscode) {
+										console.error('[Plan Execution] VS Code API not available');
+										alert('VS Code API not available. Please refresh the preview.');
+										return;
+									}
+
+									try {
+										const message = {
+											type: 'startExecution',
+											source: '${sourceUri}'
+										};
+										console.log('[Plan Execution] Sending message:', message);
+										vscode.postMessage(message);
+										console.log('[Plan Execution] Message sent successfully');
+									} catch (error) {
+										console.error('[Plan Execution] Failed to send message:', error);
+										alert('Failed to send execution request: ' + (error instanceof Error ? error.message : String(error)));
+									}
+								});
+								return true;
+							}
+							return false;
 						}
-						
+
+						// Try to attach handler immediately
+						if (!attachExecutionHandler()) {
+							// If button not found, wait a bit and retry (handles timing issues)
+							setTimeout(() => {
+								if (!attachExecutionHandler()) {
+									console.warn('[Plan Execution] Button not found after retry. The execute plan button may not be available.');
+								}
+							}, 100);
+						}
+
 						// Enhance todos with interactive checkboxes
 						const todoRegex = /<li[^>]*>\\s*<input[^>]*type=["']checkbox["'][^>]*>/gi;
 						const listItems = document.querySelectorAll('li');
@@ -216,7 +236,7 @@ export class MdDocumentRenderer {
 								}
 							}
 						});
-						
+
 						// Add section progress indicators
 						const sections = document.querySelectorAll('h2');
 						sections.forEach(section => {
@@ -228,7 +248,7 @@ export class MdDocumentRenderer {
 									const completed = Array.from(todos).filter(t => t.style.textDecoration === 'line-through').length;
 									const total = todos.length;
 									const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
-									
+
 									const progressBadge = document.createElement('span');
 									progressBadge.style.cssText = 'margin-left: 8px; font-size: 11px; color: var(--vscode-descriptionForeground);';
 									progressBadge.textContent = \`[\${completed}/\${total}]\`;
@@ -236,7 +256,7 @@ export class MdDocumentRenderer {
 								}
 							}
 						});
-						
+
 						// Listen for progress updates
 						window.addEventListener('message', (event) => {
 							const data = event.data;
@@ -247,11 +267,11 @@ export class MdDocumentRenderer {
 								const statusBadge = document.getElementById('execution-status-badge');
 								const statusText = document.getElementById('execution-status-text');
 								const button = document.getElementById('start-execution-btn');
-								
+
 								if (progressText) progressText.textContent = data.progress + '%';
 								if (progressBar) progressBar.style.width = data.progress + '%';
 								if (todoStats) todoStats.textContent = data.completedTodos + '/' + data.totalTodos + ' todos';
-								
+
 								if (data.status && statusBadge && statusText) {
 									const statusLabels = {
 										'not-started': 'Not Started',
@@ -262,7 +282,7 @@ export class MdDocumentRenderer {
 									};
 									statusText.textContent = statusLabels[data.status] || 'Unknown';
 									statusBadge.style.display = 'block';
-									
+
 									if (button) {
 										const buttonLabels = {
 											'not-started': '▶ Start Execution',
@@ -283,14 +303,14 @@ export class MdDocumentRenderer {
 				</script>
 			`;
 		}
-		
+
 		const html = `${planFileHeader}<div class="markdown-body" dir="auto">${rendered.html}<div class="code-line" data-line="${markdownDocument.lineCount}"></div></div>${planProgressScript}`;
 		return {
 			html,
 			containingImages: rendered.containingImages
 		};
 	}
-	
+
 	/**
 	 * Parse plan statistics from markdown content
 	 */
@@ -299,7 +319,7 @@ export class MdDocumentRenderer {
 		const totalTodos = todos.length;
 		const completedTodos = todos.filter(t => t.completed).length;
 		const progress = totalTodos > 0 ? Math.round((completedTodos / totalTodos) * 100) : 0;
-		
+
 		return { totalTodos, completedTodos, progress };
 	}
 
@@ -312,7 +332,7 @@ export class MdDocumentRenderer {
 			/^\s*[-*]\s*\[([\sx])\]\s*(.+)$/gim,  // Standard: - [ ] or - [x]
 			/^\s*\d+\.\s*\[([\sx])\]\s*(.+)$/gim, // Numbered: 1. [ ] or 1. [x]
 		];
-		
+
 		for (const pattern of todoPatterns) {
 			pattern.lastIndex = 0;
 			let match;
@@ -323,7 +343,7 @@ export class MdDocumentRenderer {
 				});
 			}
 		}
-		
+
 		return todos;
 	}
 

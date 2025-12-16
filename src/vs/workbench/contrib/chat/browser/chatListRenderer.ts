@@ -1008,10 +1008,11 @@ export class ChatListItemRenderer
 			this.renderAvatar(element, templateData);
 		}
 
-		templateData.username.textContent = element.username;
+		// Hide agent name - always set to empty string
+		templateData.username.textContent = "";
 		templateData.username.classList.toggle(
 			"hidden",
-			element.username === COPILOT_USERNAME
+			true // Always hide the username element
 		);
 		templateData.avatarContainer.classList.toggle(
 			"hidden",

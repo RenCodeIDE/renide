@@ -16,6 +16,7 @@ import { IMerkleTreeService } from '../../../../../platform/merkleTree/common/me
 import { ILogService } from '../../../../../platform/log/common/log.js';
 import { ICommandService } from '../../../../../platform/commands/common/commands.js';
 import { CountTokensCallback, IPreparedToolInvocation, IToolData, IToolImpl, IToolInvocation, IToolInvocationPreparationContext, IToolResult, ToolDataSource, ToolProgress } from '../languageModelToolsService.js';
+import { IPlanTodoSyncService } from '../planTodoSyncService.js';
 
 const DEFAULT_PLAN_FILE_NAME = 'plan.plan.md';
 const PLAN_ROOT_DIRECTORY = '.ren/plans';
@@ -67,6 +68,7 @@ export class CreatePlanFileTool implements IToolImpl {
 		@IMerkleTreeService private readonly merkleTreeService: IMerkleTreeService,
 		@ILogService private readonly logService: ILogService,
 		@ICommandService private readonly commandService: ICommandService,
+		@IPlanTodoSyncService private readonly planTodoSyncService: IPlanTodoSyncService,
 	) { }
 
 	async prepareToolInvocation(context: IToolInvocationPreparationContext, _token: CancellationToken): Promise<IPreparedToolInvocation | undefined> {
@@ -139,7 +141,7 @@ export class CreatePlanFileTool implements IToolImpl {
 					}
 				});
 				this.logService.debug(`[CreatePlanFileTool] Opened and activated plan file: ${uri.toString()}`);
-				
+
 				// Open in markdown preview mode
 				try {
 					await this.commandService.executeCommand('markdown.showPreview', uri);
@@ -151,6 +153,17 @@ export class CreatePlanFileTool implements IToolImpl {
 			} catch (error) {
 				this.logService.warn(`[CreatePlanFileTool] Failed to open plan file: ${error}`);
 				// Continue even if opening fails
+			}
+
+			// Sync plan todos with the chat todo widget
+			const sessionId = invocation.context?.sessionId;
+			if (sessionId) {
+				try {
+					this.planTodoSyncService.registerPlanFile(uri, sessionId);
+					this.logService.debug(`[CreatePlanFileTool] Synced plan todos for session: ${sessionId}`);
+				} catch (syncError) {
+					this.logService.warn(`[CreatePlanFileTool] Failed to sync plan todos: ${syncError}`);
+				}
 			}
 
 			const workspaceRelative = this.getWorkspaceRelativePath(uri);
