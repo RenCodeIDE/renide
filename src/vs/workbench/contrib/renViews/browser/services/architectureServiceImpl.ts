@@ -734,8 +734,23 @@ export class ArchitectureService extends Disposable implements IArchitectureServ
 			}
 		}
 
-		// Build edges
+		// Build a set of valid node IDs for edge validation
+		const validNodeIds = new Set(nodes.map(n => n.id));
+
+		// Build edges with validation - filter out edges that reference non-existent nodes
+		let skippedEdges = 0;
 		for (const edgeData of response.edges) {
+			const sourceExists = validNodeIds.has(edgeData.source);
+			const targetExists = validNodeIds.has(edgeData.target);
+
+			if (!sourceExists || !targetExists) {
+				this.logService.warn(
+					`[ArchitectureService] Skipping edge with invalid reference: ${edgeData.source} (exists: ${sourceExists}) -> ${edgeData.target} (exists: ${targetExists})`
+				);
+				skippedEdges++;
+				continue;
+			}
+
 			const edge: ArchitectureEdge = {
 				id: `${edgeData.source}->${edgeData.target}`,
 				source: edgeData.source,
@@ -744,6 +759,12 @@ export class ArchitectureService extends Disposable implements IArchitectureServ
 				label: edgeData.label,
 			};
 			edges.push(edge);
+		}
+
+		if (skippedEdges > 0) {
+			this.logService.info(
+				`[ArchitectureService] Filtered out ${skippedEdges} edges with invalid node references`
+			);
 		}
 
 		return {

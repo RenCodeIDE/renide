@@ -2381,8 +2381,23 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					console.log('[GraphWebview] Prepared', nodes.length, 'nodes and', edges.length, 'edges for rendering');
 
 					try {
-						// Build a set of valid node IDs for edge validation
+						// Build a set of valid node IDs for edge and parent validation
 						const validNodeIds = new Set(nodes.map(n => n.data.id));
+
+						// Validate parent references in nodes - remove invalid parent refs to prevent Cytoscape errors
+						let invalidParentCount = 0;
+						const validNodes = nodes.map(n => {
+							if (n.data.parent && !validNodeIds.has(n.data.parent)) {
+								console.warn('[GraphWebview] Node has invalid parent, removing parent ref:', n.data.id, '->', n.data.parent);
+								invalidParentCount++;
+								return { ...n, data: { ...n.data, parent: undefined } };
+							}
+							return n;
+						});
+
+						if (invalidParentCount > 0) {
+							console.log('[GraphWebview] Fixed', invalidParentCount, 'nodes with invalid parent references');
+						}
 
 						// Filter out edges that reference non-existent nodes
 						const validEdges = edges.filter(e => {
@@ -2400,8 +2415,8 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 							console.log('[GraphWebview] Filtered out', skippedEdges, 'edges with missing nodes');
 						}
 
-						console.log('[GraphWebview] Adding', nodes.length, 'nodes and', validEdges.length, 'valid edges to Cytoscape');
-						const addedElements = cy.add([...nodes, ...validEdges]);
+						console.log('[GraphWebview] Adding', validNodes.length, 'nodes and', validEdges.length, 'valid edges to Cytoscape');
+						const addedElements = cy.add([...validNodes, ...validEdges]);
 						console.log('[GraphWebview] Added elements:', addedElements.length, 'total (nodes:', cy.nodes().length, ', edges:', cy.edges().length, ')');
 
 						// Verify nodes have proper data and canvas container
