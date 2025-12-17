@@ -274,8 +274,9 @@ export class GraphView extends Disposable implements IRenView {
 
 		const mediaRoot = FileAccess.asFileUri('vs/workbench/contrib/renViews/browser/media/');
 		const libUri = asWebviewUri(joinPath(mediaRoot, 'cytoscape.min.js')).toString(true);
+		const elkUri = asWebviewUri(joinPath(mediaRoot, 'elk.bundled.js')).toString(true);
 		const nonce = generateUuid();
-		const html = buildGraphWebviewHTML(libUri, nonce);
+		const html = buildGraphWebviewHTML(libUri, elkUri, nonce);
 		this._webview.setHtml(html);
 		this._graphReady = false;
 

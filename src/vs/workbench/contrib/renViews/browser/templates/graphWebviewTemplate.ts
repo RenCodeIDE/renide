@@ -1,10 +1,11 @@
 /**
  * HTML template for the graph visualization webview panel.
  * @param libSrc - The URI to the Cytoscape.js library script
+ * @param elkSrc - The URI to the ELK layout library script
  * @param nonce - Content Security Policy nonce for inline scripts
  * @returns Complete HTML document string for the webview
  */
-export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
+export function buildGraphWebviewHTML(libSrc: string, elkSrc: string, nonce: string): string {
 	return `<!DOCTYPE html>
 	<html lang="en">
 	<head>
@@ -544,6 +545,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 		</div>
 		<div id="status" class="status" aria-live="polite"></div>
 		<script src="${libSrc}"></script>
+		<script src="${elkSrc}"></script>
 		<script nonce="${nonce}">
 		(function(){
 			const vscode = acquireVsCodeApi();
@@ -1860,7 +1862,9 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 						}},
 						{ selector: 'edge', style: {
 							'width': 2,
-							'curve-style': 'bezier',
+							'curve-style': 'taxi',
+							'taxi-direction': 'downward',
+							'taxi-turn': '50%',
 							'line-color': '#E0E0E0',
 							'target-arrow-color': '#E0E0E0',
 							'target-arrow-shape': 'triangle',
@@ -1987,6 +1991,32 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				{ selector: 'edge.dimmed', style: {
 					'opacity': 0.1,
 					'text-opacity': 0.1
+				}},
+				// Hover highlight styles
+				{ selector: 'node.hover-highlight', style: {
+					'border-color': '#4FC3F7',
+					'border-width': 4,
+					'opacity': 1,
+					'z-index': 100
+				}},
+				{ selector: 'node.hover-source', style: {
+					'border-color': '#FFD54F',
+					'border-width': 4,
+					'opacity': 1,
+					'z-index': 99
+				}},
+				{ selector: 'edge.hover-highlight', style: {
+					'line-color': '#4FC3F7',
+					'target-arrow-color': '#4FC3F7',
+					'width': 3,
+					'opacity': 1,
+					'z-index': 100
+				}},
+				{ selector: 'node.hover-dimmed', style: {
+					'opacity': 0.2
+				}},
+				{ selector: 'edge.hover-dimmed', style: {
+					'opacity': 0.1
 				}}
 				,
 				{ selector: 'node.heatmap-cell', style: {
@@ -2504,10 +2534,22 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 						const rootIds = nodes.filter(n => n.classes === 'root').map(n => n.data.id);
 						const isArchMode = ['frontendArch', 'backendArch', 'fullstackArch', 'smartArch'].includes(payload.mode);
 
-						// For architecture modes, use custom layered horizontal box layout
+						// For architecture modes, use ELK layered layout with edge routing
 						if (isArchMode) {
 							try {
-								console.log('[GraphWebview] Starting layered architecture layout');
+								console.log('[GraphWebview] Starting ELK layered architecture layout');
+
+								// Check if ELK is available
+								if (typeof ELK === 'undefined') {
+									throw new Error('ELK layout library not loaded');
+								}
+
+								const elk = new ELK();
+
+								// Convert Cytoscape graph to ELK format
+								const elkNodes = [];
+								const elkEdges = [];
+								const nodeIdMap = new Map();
 
 								// Get parent (layer container) nodes and child nodes
 								const parentNodes = cy.nodes(':parent');
@@ -2519,18 +2561,6 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 									childNodes: childNodes.length,
 									orphanNodes: orphanNodes.length
 								});
-
-								// Layout configuration
-								const config = {
-									layerHeight: 180,           // Height of each layer container
-									layerPadding: 40,           // Padding inside layer containers
-									layerGap: 60,               // Gap between layer containers
-									nodeWidth: 100,             // Width of child nodes
-									nodeHeight: 50,             // Height of child nodes
-									nodeGap: 20,                // Gap between nodes in a layer
-									startX: 100,                // Starting X position
-									startY: 100,                // Starting Y position
-								};
 
 								// Group children by parent
 								const childrenByParent = new Map();
@@ -2544,78 +2574,151 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 									}
 								});
 
-								// Sort parent nodes by their order (from metadata)
+								// Sort parent nodes by their order
 								const sortedParents = parentNodes.toArray().sort((a, b) => {
 									const orderA = a.data('order') || a.data('metadata')?.order || 0;
 									const orderB = b.data('order') || b.data('metadata')?.order || 0;
 									return orderA - orderB;
 								});
 
-								console.log('[GraphWebview] Sorted parents:', sortedParents.map(p => ({
-									id: p.id(),
-									order: p.data('order') || p.data('metadata')?.order || 0,
-									childCount: childrenByParent.get(p.id())?.length || 0
-								})));
-
-								// Position each layer and its children
-								let currentY = config.startY;
-
+								// Build ELK graph with compound nodes (layers as containers)
 								sortedParents.forEach((parent, layerIndex) => {
 									const children = childrenByParent.get(parent.id()) || [];
-									const childCount = children.length;
-
-									// Calculate layer width based on children
-									const layerWidth = Math.max(
-										400, // Minimum width
-										childCount * (config.nodeWidth + config.nodeGap) + config.layerPadding * 2
-									);
-
-									// Position children in a horizontal row inside the layer
-									let childX = config.startX + config.layerPadding;
-									const childY = currentY + config.layerHeight / 2;
-
-									children.forEach((child, childIndex) => {
-										child.position({
-											x: childX + config.nodeWidth / 2,
-											y: childY
-										});
-										childX += config.nodeWidth + config.nodeGap;
+									const elkChildren = children.map(child => {
+										const elkChild = {
+											id: child.id(),
+											width: 120,
+											height: 50,
+											labels: [{ text: child.data('label') || child.id() }]
+										};
+										nodeIdMap.set(child.id(), elkChild);
+										return elkChild;
 									});
 
-									// Parent position is center of its children (Cytoscape auto-sizes parent)
-									// We just need to ensure children are positioned correctly
-
-									console.log('[GraphWebview] Layer "' + parent.id() + '" positioned at y=' + currentY + ' with ' + childCount + ' children');
-
-									// Move to next layer
-									currentY += config.layerHeight + config.layerGap;
+									elkNodes.push({
+										id: parent.id(),
+										labels: [{ text: parent.data('label') || parent.id() }],
+										children: elkChildren,
+										layoutOptions: {
+											'elk.padding': '[top=40,left=20,bottom=20,right=20]'
+										}
+									});
+									nodeIdMap.set(parent.id(), elkNodes[elkNodes.length - 1]);
 								});
 
-								// Position any orphan nodes (nodes without a parent)
-								if (orphanNodes.length > 0) {
-									console.log('[GraphWebview] Positioning ' + orphanNodes.length + ' orphan nodes');
-									let orphanX = config.startX;
-									orphanNodes.forEach(node => {
-										node.position({
-											x: orphanX + config.nodeWidth / 2,
-											y: currentY + config.nodeHeight / 2
-										});
-										orphanX += config.nodeWidth + config.nodeGap;
+								// Add orphan nodes
+								orphanNodes.forEach(node => {
+									const elkNode = {
+										id: node.id(),
+										width: 120,
+										height: 50,
+										labels: [{ text: node.data('label') || node.id() }]
+									};
+									elkNodes.push(elkNode);
+									nodeIdMap.set(node.id(), elkNode);
+								});
+
+								// Build ELK edges
+								cy.edges().forEach(edge => {
+									elkEdges.push({
+										id: edge.id(),
+										sources: [edge.source().id()],
+										targets: [edge.target().id()]
 									});
-								}
+								});
 
-								// Apply preset layout (positions already set)
-								cy.layout({ name: 'preset' }).run();
+								const elkGraph = {
+									id: 'root',
+									layoutOptions: {
+										'elk.algorithm': 'layered',
+										'elk.direction': 'DOWN',
+										'elk.layered.spacing.nodeNodeBetweenLayers': '80',
+										'elk.layered.spacing.edgeNodeBetweenLayers': '40',
+										'elk.spacing.nodeNode': '40',
+										'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
+										'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+										'elk.edgeRouting': 'ORTHOGONAL',
+										'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
+										'elk.hierarchyHandling': 'INCLUDE_CHILDREN'
+									},
+									children: elkNodes,
+									edges: elkEdges
+								};
 
-								// Fit the graph with padding
-								cy.resize();
-								cy.fit(cy.elements(), 80);
+								console.log('[GraphWebview] Running ELK layout with', elkNodes.length, 'top-level nodes and', elkEdges.length, 'edges');
 
-								console.log('[GraphWebview] Layered layout complete');
+								// Run ELK layout
+								elk.layout(elkGraph).then(layoutedGraph => {
+									console.log('[GraphWebview] ELK layout complete, applying positions');
+
+									// Apply positions from ELK to Cytoscape
+									const applyPositions = (elkNode, offsetX = 0, offsetY = 0) => {
+										const cyNode = cy.getElementById(elkNode.id);
+										if (cyNode.length > 0 && elkNode.x !== undefined && elkNode.y !== undefined) {
+											// ELK gives us top-left, Cytoscape wants center
+											const centerX = offsetX + elkNode.x + (elkNode.width || 0) / 2;
+											const centerY = offsetY + elkNode.y + (elkNode.height || 0) / 2;
+											cyNode.position({ x: centerX, y: centerY });
+										}
+
+										// Recursively apply to children
+										if (elkNode.children) {
+											const childOffsetX = offsetX + (elkNode.x || 0);
+											const childOffsetY = offsetY + (elkNode.y || 0);
+											elkNode.children.forEach(child => {
+												applyPositions(child, childOffsetX, childOffsetY);
+											});
+										}
+									};
+
+									// Apply positions for all top-level nodes
+									if (layoutedGraph.children) {
+										layoutedGraph.children.forEach(child => {
+											applyPositions(child);
+										});
+									}
+
+									// Apply preset layout to finalize positions
+									cy.layout({ name: 'preset' }).run();
+
+									// Fit the graph with padding
+									cy.resize();
+									cy.fit(cy.elements(), 80);
+
+									console.log('[GraphWebview] ELK layered layout complete');
 									send('REN_GRAPH_APPLIED', { nodes: nodes.length, edges: edges.length });
 
+								}).catch(elkError => {
+									console.error('[GraphWebview] ELK layout error:', elkError);
+									// Fallback to cose layout
+									fallbackToCose();
+								});
+
+								// Define fallback function
+								function fallbackToCose() {
+									const layout = cy.layout({
+										name: 'cose',
+										padding: 80,
+										animate: false,
+										fit: true,
+										nodeRepulsion: 400000,
+										nodeOverlap: 10,
+										idealEdgeLength: 80,
+										nestingFactor: 1.2,
+										gravity: 0.4,
+										randomize: true,
+										componentSpacing: 80,
+										numIter: 1000
+									});
+									layout.one('layoutstop', () => {
+										cy.fit(undefined, 60);
+										send('REN_GRAPH_APPLIED', { nodes: nodes.length, edges: edges.length });
+									});
+									layout.run();
+								}
+
 							} catch (layoutError) {
-								console.error('[GraphWebview] Layered layout error:', layoutError);
+								console.error('[GraphWebview] ELK layout error:', layoutError);
 								// Fallback to cose layout
 								const layout = cy.layout({
 									name: 'cose',
@@ -2792,6 +2895,64 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				});
 			};
 
+			// Node hover handlers - highlight connected nodes and edges
+			let hoverTimeout = null;
+			const setupNodeHoverHandlers = () => {
+				if (!cy) return;
+
+				cy.on('mouseover', 'node', (evt) => {
+					// Don't apply hover highlighting if selection mode is active
+					if (selectionMode || highlightedNodeId) return;
+
+					// Skip parent/layer nodes
+					const node = evt.target;
+					if (node.isParent()) return;
+
+					// Clear any pending timeout
+					if (hoverTimeout) {
+						clearTimeout(hoverTimeout);
+						hoverTimeout = null;
+					}
+
+					// Small delay to avoid flickering on fast mouse movements
+					hoverTimeout = setTimeout(() => {
+						cy.batch(() => {
+							// Get the neighborhood (connected nodes and edges)
+							const neighborhood = node.closedNeighborhood();
+							const connectedEdges = neighborhood.edges();
+							const connectedNodes = neighborhood.nodes();
+
+							// Dim all elements first
+							cy.elements().addClass('hover-dimmed');
+
+							// Highlight the neighborhood
+							neighborhood.removeClass('hover-dimmed');
+
+							// Add specific highlight classes
+							node.addClass('hover-source');
+							connectedNodes.not(node).addClass('hover-highlight');
+							connectedEdges.addClass('hover-highlight');
+						});
+					}, 100);
+				});
+
+				cy.on('mouseout', 'node', (evt) => {
+					// Don't clear if selection mode is active
+					if (selectionMode || highlightedNodeId) return;
+
+					// Clear any pending timeout
+					if (hoverTimeout) {
+						clearTimeout(hoverTimeout);
+						hoverTimeout = null;
+					}
+
+					// Clear hover highlights
+					cy.batch(() => {
+						cy.elements().removeClass('hover-dimmed hover-highlight hover-source');
+					});
+				});
+			};
+
 			document.getElementById('selectFile').addEventListener('click', () => send('REN_SELECT_FILE'));
 			document.getElementById('zoomIn').addEventListener('click', () => applyZoom(1.2));
 			document.getElementById('zoomOut').addEventListener('click', () => applyZoom(1 / 1.2));
@@ -2886,6 +3047,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 				}
 				ensureCy();
 				setupEdgeHoverHandlers();
+				setupNodeHoverHandlers();
 				// Uncomment to test color assignment in browser console:
 				// testHierarchicalColors();
 				send('REN_GRAPH_READY');
