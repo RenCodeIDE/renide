@@ -36,13 +36,12 @@ import { buildGraphWebviewHTML } from '../../templates/graphWebviewTemplate.js';
 import { GraphWorkspaceContext } from './graphContext.js';
 import { GraphDataBuilder } from './graphDataBuilder.js';
 import { GraphPickers } from './graphPickers.js';
-import { GitHeatmapCommitSummary, GitHeatmapGranularity, GitHeatmapPayload, GraphEdgePayload, GraphEdgeKind, GraphMode, GraphNodeKind, GraphNodePayload, GraphStatusLevel, GraphWebviewPayload, FunctionDefinition, getPayloadNodes, getPayloadEdges } from './graphTypes.js';
+import { GitHeatmapCommitSummary, GitHeatmapGranularity, GitHeatmapPayload, GraphEdgePayload, GraphMode, GraphNodePayload, GraphStatusLevel, GraphWebviewPayload, FunctionDefinition, getPayloadNodes, getPayloadEdges } from './graphTypes.js';
 import { isExcludedPath } from './graphConstants.js';
 import { ViewButtons } from '../../components/viewButtons.js';
 import { IGitHeatmapService } from '../../../../../../platform/gitHeatmap/common/gitHeatmapService.js';
 import { ContextAwareArchBuilder } from './contextAwareArchBuilder.js';
 import { CancellationTokenSource } from '../../../../../../base/common/cancellation.js';
-import { IArchitectureService, ArchitectureAnalysis } from '../../services/architectureService.js';
 
 export class GraphView extends Disposable implements IRenView {
 	private _mainContainer: HTMLElement | null = null;
@@ -102,8 +101,7 @@ export class GraphView extends Disposable implements IRenView {
 		@IRequestService private readonly requestService: IRequestService,
 		@IConfigurationService private readonly configurationService: IConfigurationService,
 		@ICommandService private readonly commandService: ICommandService,
-		@ILanguageFeaturesService private readonly languageFeaturesService: ILanguageFeaturesService,
-		@IArchitectureService private readonly architectureService: IArchitectureService
+		@ILanguageFeaturesService private readonly languageFeaturesService: ILanguageFeaturesService
 	) {
 		super();
 		this.context = new GraphWorkspaceContext(workspaceService, uriIdentityService);
@@ -328,14 +326,6 @@ export class GraphView extends Disposable implements IRenView {
 				case 'REN_GRAPH_ERROR':
 					this.logService.error('[GraphView] webview error', data?.payload ?? '');
 					break;
-				case 'REN_NODE_CLICK': {
-					const payload = data?.payload;
-					if (payload?.path) {
-						this.logService.info('[GraphView] node clicked, opening file', payload.path);
-						void this.openFileFromNode(payload.path);
-					}
-					break;
-				}
 				default:
 					this.logService.debug(`[GraphView] webview message: ${type}`, data?.payload ?? '');
 			}
@@ -949,208 +939,21 @@ export class GraphView extends Disposable implements IRenView {
 	}
 
 	/**
-	 * Render context-aware architecture graph using IArchitectureService (background agent)
-	 * Falls back to ContextAwareArchBuilder if architecture service has no cached data
+	 * Render context-aware architecture graph using ContextAwareArchBuilder
 	 */
 	private async renderContextAwareArch(requestId: number, mode: 'auto' | 'frontend' | 'backend' | 'fullstack'): Promise<void> {
 		const modeLabel = mode === 'auto' ? 'Smart' : mode.charAt(0).toUpperCase() + mode.slice(1);
 		await this.sendStatus(`Analyzing ${modeLabel.toLowerCase()} architecture…`, 'loading');
-
-		const progressListeners = new DisposableStore();
-
-		try {
-			// Try to use the background architecture service first
-			let analysis: ArchitectureAnalysis | undefined;
-
-			// Subscribe to progress updates from architecture service
-			progressListeners.add(this.architectureService.onAnalysisProgress(progress => {
-				if (typeof progress.message === 'string' && progress.message.trim().length) {
-					void this.sendStatus(`${progress.message} (${progress.progress}%)`, 'loading');
-				}
-			}));
-
-			// Check if we have a cached analysis or if one is being computed
-			analysis = this.architectureService.getArchitectureAnalysis();
-
-			if (!analysis) {
-				// Trigger analysis if not available
-				this.logService.info('[GraphView] No cached architecture analysis, triggering background analysis');
-				await this.sendStatus('Starting architecture analysis...', 'loading');
-
-				try {
-					analysis = await this.architectureService.analyzeWorkspace(mode);
-				} catch (serviceError) {
-					this.logService.warn('[GraphView] Architecture service failed, falling back to ContextAwareArchBuilder:', serviceError);
-					// Fall back to legacy builder
-					return this.renderContextAwareArchLegacy(requestId, mode);
-				}
-			}
-
-			if (requestId !== this._renderRequestId) {
-				return;
-			}
-
-			if (!analysis) {
-				// Still no analysis, fall back to legacy
-				return this.renderContextAwareArchLegacy(requestId, mode);
-			}
-
-			// Convert ArchitectureAnalysis to GraphWebviewPayload
-			const graphPayload = this.convertArchitectureAnalysisToPayload(analysis);
-
-			this.storeGraphPayload(graphPayload);
-			this.logService.info('[GraphView] Sending architecture graph to webview', {
-				mode: graphPayload.mode,
-				nodeCount: graphPayload.nodes?.length || 0,
-				edgeCount: graphPayload.edges?.length || 0,
-				codebaseType: analysis.codebaseType,
-				aiGenerated: analysis.aiGenerated
-			});
-			await this._webview?.postMessage({ type: 'REN_GRAPH_DATA', payload: graphPayload });
-
-			const nodeCount = analysis.nodes.length;
-			if (nodeCount === 0) {
-				await this.sendStatus('No architecture components detected. Try a different mode.', 'warning', 6000);
-			} else {
-				const confidenceStr = analysis.aiGenerated ? '(AI-enhanced)' : '(static analysis)';
-				await this.sendStatus(
-					`${modeLabel} architecture: ${nodeCount} components (${analysis.codebaseType}) ${confidenceStr}`,
-					'success',
-					5000
-				);
-			}
-		} catch (error) {
-			this.logService.error('[GraphView] failed to build context-aware architecture', error);
-			if (requestId === this._renderRequestId) {
-				await this.sendStatus(`Failed to analyze ${modeLabel.toLowerCase()} architecture. Check logs for details.`, 'error');
-			}
-		} finally {
-			progressListeners.dispose();
-		}
-	}
-
-	/**
-	 * Convert ArchitectureAnalysis to GraphWebviewPayload with layer containers
-	 */
-	private convertArchitectureAnalysisToPayload(analysis: ArchitectureAnalysis): GraphWebviewPayload {
-		// Build edge index for computing fanIn/fanOut
-		const fanInCount = new Map<string, number>();
-		const fanOutCount = new Map<string, number>();
-		for (const edge of analysis.edges) {
-			fanOutCount.set(edge.source, (fanOutCount.get(edge.source) || 0) + 1);
-			fanInCount.set(edge.target, (fanInCount.get(edge.target) || 0) + 1);
-		}
-
-		// Helper function to map ArchNodeType to GraphNodeKind
-		const mapNodeKind = (nodeType: string): GraphNodeKind => {
-			if (nodeType === 'external' || nodeType === 'package') {
-				return 'external';
-			}
-			return 'relative';
-		};
-
-		// Create layer container nodes (parent nodes for compound layout)
-		const layerNodes: GraphNodePayload[] = analysis.layers.map(layer => ({
-			id: `layer-${layer.id}`,
-			label: layer.label,
-			path: '',
-			kind: 'relative' as GraphNodeKind,
-			weight: layer.nodeCount,
-			fanIn: 0,
-			fanOut: 0,
-			openable: false,
-			category: layer.id,
-			metadata: {
-				isGroup: true,
-				layer: layer.id,
-				order: layer.order,
-				bgColor: layer.color,
-				borderColor: layer.borderColor
-			}
-		}));
-
-		// Create node payloads with parent references
-		const componentNodes: GraphNodePayload[] = analysis.nodes.map(n => {
-			const fanIn = fanInCount.get(n.id) || 0;
-			const fanOut = fanOutCount.get(n.id) || 0;
-			const weight = Math.max(fanIn, fanOut, 1);
-
-			// Determine if node is openable
-			let openable = false;
-			if (n.filePath) {
-				try {
-					const nodeUri = URI.file(n.filePath);
-					openable = this.context.isWithinWorkspace(nodeUri);
-				} catch {
-					openable = false;
-				}
-			}
-
-			return {
-				id: n.id,
-				label: n.label,
-				path: n.filePath,
-				kind: mapNodeKind(n.type),
-				weight: weight,
-				fanIn: fanIn,
-				fanOut: fanOut,
-				openable: openable,
-				description: n.description,
-				category: n.layerId,
-				metadata: {
-					type: n.type,
-					layer: n.layerId,
-					conciseLabel: n.conciseLabel,
-					imports: n.metadata.imports,
-					exports: n.metadata.exports,
-					isGroup: false
-				},
-				// Parent reference for compound node layout
-				parent: `layer-${n.layerId}`
-			} as GraphNodePayload & { parent?: string };
-		});
-
-		// Create edge payloads
-		const edgePayloads: GraphEdgePayload[] = analysis.edges.map(e => ({
-			id: e.id,
-			source: e.source,
-			target: e.target,
-			label: e.label || e.type || '',
-			specifier: e.label || e.type || '',
-			kind: 'relative' as GraphEdgeKind,
-			metadata: {
-				type: e.type,
-				animated: e.animated
-			}
-		}));
-
-		return {
-			mode: this._mode,
-			nodes: [...layerNodes, ...componentNodes],
-			edges: edgePayloads,
-			summary: analysis.summary,
-			metadata: {
-				codebaseType: analysis.codebaseType,
-				primaryFramework: analysis.primaryFramework,
-				aiGenerated: analysis.aiGenerated,
-				generatedAt: analysis.generatedAt
-			}
-		};
-	}
-
-	/**
-	 * Legacy render method using ContextAwareArchBuilder (fallback)
-	 */
-	private async renderContextAwareArchLegacy(requestId: number, mode: 'auto' | 'frontend' | 'backend' | 'fullstack'): Promise<void> {
-		const modeLabel = mode === 'auto' ? 'Smart' : mode.charAt(0).toUpperCase() + mode.slice(1);
-		await this.sendStatus(`Analyzing ${modeLabel.toLowerCase()} architecture (legacy)…`, 'loading');
 
 		const cts = new CancellationTokenSource();
 		const progressListeners = new DisposableStore();
 
 		try {
 			// Lazily create the context-aware builder
+			// Using createInstance which will auto-inject services with decorators
 			if (!this._contextAwareBuilder) {
+				// ContextAwareArchBuilder expects services to be DI-injected
+				// We need to pass context and architectureAnalyzer after the injected services
 				this._contextAwareBuilder = new ContextAwareArchBuilder(
 					this.logService,
 					this.fileService,
@@ -1189,93 +992,24 @@ export class GraphView extends Disposable implements IRenView {
 			const nodes = getPayloadNodes(result.data);
 			const edges = getPayloadEdges(result.data);
 
-			// Build edge index for computing fanIn/fanOut
-			const fanInCount = new Map<string, number>();
-			const fanOutCount = new Map<string, number>();
-			for (const edge of edges) {
-				fanOutCount.set(edge.source, (fanOutCount.get(edge.source) || 0) + 1);
-				fanInCount.set(edge.target, (fanInCount.get(edge.target) || 0) + 1);
-			}
-
-			// Create a map of node IDs to their file paths for edge mapping
-			const nodePathMap = new Map<string, string>();
-			for (const node of nodes) {
-				if (node.filePath) {
-					nodePathMap.set(node.id, node.filePath);
-				}
-			}
-
-			// Helper function to map ArchNodeType to GraphNodeKind
-			const mapNodeKind = (nodeType: string, isGroup: boolean | undefined): GraphNodeKind => {
-				if (isGroup) {
-					return 'relative';
-				}
-				if (nodeType === 'external' || nodeType === 'package') {
-					return 'external';
-				}
-				return 'relative';
-			};
-
 			// Create a GraphWebviewPayload from the context-aware result
 			const graphPayload: GraphWebviewPayload = {
 				mode: this._mode,
-				nodes: nodes.map(n => {
-					const fanIn = fanInCount.get(n.id) || 0;
-					const fanOut = fanOutCount.get(n.id) || 0;
-					const weight = Math.max(fanIn, fanOut, 1);
-
-					let openable = false;
-					if (n.filePath) {
-						try {
-							const nodeUri = URI.file(n.filePath);
-							openable = this.context.isWithinWorkspace(nodeUri);
-						} catch {
-							openable = false;
-						}
-					}
-
-					const nodePayload: GraphNodePayload & { parent?: string; layer?: string; isGroup?: boolean } = {
-						id: n.id,
-						label: n.label,
-						path: n.filePath || '',
-						kind: mapNodeKind(n.type, n.isGroup),
-						weight: weight,
-						fanIn: fanIn,
-						fanOut: fanOut,
-						openable: openable,
-						description: n.description,
-						category: n.layer,
-						metadata: {
-							...n.metadata,
-							type: n.type,
-							layer: n.layer,
-							isGroup: n.isGroup
-						},
-						parent: n.parent,
-						layer: n.layer,
-						isGroup: n.isGroup
-					};
-					return nodePayload;
-				}),
-				edges: edges.map(e => {
-					const sourcePath = nodePathMap.get(e.source);
-					const targetPath = nodePathMap.get(e.target);
-
-					return {
-						id: e.id,
-						source: e.source,
-						target: e.target,
-						label: e.label || e.type || '',
-						specifier: e.label || e.type || '',
-						kind: 'relative' as GraphEdgeKind,
-						sourcePath: sourcePath,
-						targetPath: targetPath,
-						metadata: {
-							type: e.type,
-							animated: e.animated
-						}
-					} as GraphEdgePayload;
-				}),
+				nodes: nodes.map(n => ({
+					id: n.id,
+					label: n.label,
+					path: n.filePath,
+					kind: n.type, // ArchNode uses 'type' not 'nodeType'
+					layer: n.layer,
+					parent: n.parent, // For compound nodes
+					isGroup: n.isGroup // Mark group/container nodes
+				} as unknown as GraphNodePayload)),
+				edges: edges.map(e => ({
+					id: e.id,
+					source: e.source,
+					target: e.target,
+					label: e.label
+				} as unknown as GraphEdgePayload)),
 				summary: result.data.summary,
 				metadata: {
 					codebaseType: result.codebaseType,
@@ -1287,15 +1021,10 @@ export class GraphView extends Disposable implements IRenView {
 			};
 
 			this.storeGraphPayload(graphPayload);
-			this.logService.info('[GraphView] Sending legacy graph data to webview', {
-				mode: graphPayload.mode,
-				nodeCount: graphPayload.nodes?.length || 0,
-				edgeCount: graphPayload.edges?.length || 0
-			});
 			await this._webview?.postMessage({ type: 'REN_GRAPH_DATA', payload: graphPayload });
 
 			const nodeCount = nodes.length;
-			this.logService.info('[GraphView] legacy context-aware arch result', {
+			this.logService.info('[GraphView] context-aware arch result', {
 				mode,
 				codebaseType: result.codebaseType,
 				nodes: nodeCount,
@@ -1312,7 +1041,7 @@ export class GraphView extends Disposable implements IRenView {
 				);
 			}
 		} catch (error) {
-			this.logService.error('[GraphView] failed to build legacy context-aware architecture', error);
+			this.logService.error('[GraphView] failed to build context-aware architecture', error);
 			if (requestId === this._renderRequestId) {
 				await this.sendStatus(`Failed to analyze ${modeLabel.toLowerCase()} architecture. Check logs for details.`, 'error');
 			}
@@ -1786,39 +1515,6 @@ export class GraphView extends Disposable implements IRenView {
 		} catch (error) {
 			this.logService.error('[GraphView] failed to open editor', resource.toString(true), error);
 		}
-	}
-
-	/**
-	 * Open a file from a graph node click.
-	 * Resolves the path relative to the workspace and opens in a side group.
-	 */
-	private async openFileFromNode(nodePath: string): Promise<void> {
-		const workspaceRoot = this.context.getDefaultWorkspaceRoot();
-		if (!workspaceRoot) {
-			this.logService.warn('[GraphView] No workspace root, cannot open file', nodePath);
-			return;
-		}
-
-		let resource: URI;
-
-		// Check if it's a URI string (file:// protocol)
-		if (nodePath.includes('://')) {
-			try {
-				resource = URI.parse(nodePath);
-			} catch (error) {
-				this.logService.error('[GraphView] Failed to parse URI', nodePath, error);
-				return;
-			}
-		} else if (nodePath.startsWith('/') || nodePath.includes(':\\')) {
-			// Absolute file path
-			resource = URI.file(nodePath);
-		} else {
-			// Relative path - join with workspace root
-			resource = this.context.extUri.joinPath(workspaceRoot, nodePath);
-		}
-
-		this.logService.info('[GraphView] Opening file from node click', resource.toString(true));
-		await this.openResourceInSideGroup(resource);
 	}
 
 	private resolvePreferredEditorGroup(resource: URI): GroupIdentifier | typeof SIDE_GROUP {

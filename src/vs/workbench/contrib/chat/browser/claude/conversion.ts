@@ -17,3 +17,4 @@ export function reduceMessageParts(message: IChatMessage): string {
 }
 
 
+
