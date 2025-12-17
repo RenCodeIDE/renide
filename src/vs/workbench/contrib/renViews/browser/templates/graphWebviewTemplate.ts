@@ -1041,7 +1041,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					const isRoot = folderPath === '(root)';
 					const displayPath = isRoot ? 'Root Files' : folderPath.split('/').pop();
 					const color = isRoot ? HIERARCHICAL_COLORS.root[0] : getHierarchicalFolderColor(folderPath, depth);
-					
+
 					const item = document.createElement('div');
 					item.className = 'legend-folder-item';
 
@@ -1099,7 +1099,7 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 			if (!legendEl) {
 				return;
 			}
-			
+
 			// Try folder legend first for file/folder/workspace modes
 			if (renderFolderLegend(payload)) {
 				return;
@@ -2381,8 +2381,27 @@ export function buildGraphWebviewHTML(libSrc: string, nonce: string): string {
 					console.log('[GraphWebview] Prepared', nodes.length, 'nodes and', edges.length, 'edges for rendering');
 
 					try {
-						console.log('[GraphWebview] Adding', nodes.length, 'nodes and', edges.length, 'edges to Cytoscape');
-						const addedElements = cy.add([...nodes, ...edges]);
+						// Build a set of valid node IDs for edge validation
+						const validNodeIds = new Set(nodes.map(n => n.data.id));
+
+						// Filter out edges that reference non-existent nodes
+						const validEdges = edges.filter(e => {
+							const sourceExists = validNodeIds.has(e.data.source);
+							const targetExists = validNodeIds.has(e.data.target);
+							if (!sourceExists || !targetExists) {
+								console.warn('[GraphWebview] Skipping invalid edge: source=' + e.data.source + ' (exists:' + sourceExists + '), target=' + e.data.target + ' (exists:' + targetExists + ')');
+								return false;
+							}
+							return true;
+						});
+
+						const skippedEdges = edges.length - validEdges.length;
+						if (skippedEdges > 0) {
+							console.log('[GraphWebview] Filtered out', skippedEdges, 'edges with missing nodes');
+						}
+
+						console.log('[GraphWebview] Adding', nodes.length, 'nodes and', validEdges.length, 'valid edges to Cytoscape');
+						const addedElements = cy.add([...nodes, ...validEdges]);
 						console.log('[GraphWebview] Added elements:', addedElements.length, 'total (nodes:', cy.nodes().length, ', edges:', cy.edges().length, ')');
 
 						// Verify nodes have proper data and canvas container

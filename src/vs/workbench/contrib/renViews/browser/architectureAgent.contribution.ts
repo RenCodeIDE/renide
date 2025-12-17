@@ -238,3 +238,4 @@ workbenchRegistry.registerWorkbenchContribution(
 	LifecyclePhase.Restored
 );
 
+

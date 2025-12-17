@@ -16,3 +16,4 @@ export function reduceMessageParts(message: IChatMessage): string {
 	return segments.join('\n');
 }
 
+

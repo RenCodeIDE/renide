@@ -328,3 +328,4 @@ export interface IArchitectureService {
 	getEdgesForNode(nodeId: string): { incoming: ArchitectureEdge[]; outgoing: ArchitectureEdge[] };
 }
 
+
